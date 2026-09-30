@@ -62,6 +62,9 @@ pub const STAKER_YIELD_BPS: u64 = p::STAKER_YIELD_BPS;
 pub const BACKER_YIELD_BPS: u64 = p::BACKER_YIELD_BPS;
 #[constant]
 pub const DEPLOY_BPS: u64 = p::DEPLOY_BPS;
+/// Clients read it from the IDL to show yield owed (`pool_core::yields::owed`).
+#[constant]
+pub const YIELD_INDEX_PRECISION: u128 = p::YIELD_INDEX_PRECISION;
 
 // PDA seeds.
 #[constant]
@@ -96,3 +99,26 @@ pub const CLUSTER_LOCALNET: u8 = 0;
 pub const CLUSTER_DEVNET: u8 = 1;
 #[constant]
 pub const CLUSTER_MAINNET: u8 = 2;
+
+// Marinade facts clients need (re-exported from `pool_core::marinade`, never retyped): the leg's
+// PDA seeds, the `State` offsets of the two token accounts it reads, and the fee inputs the site
+// shows before a payout that needs an instant unstake.
+use pool_core::marinade as m;
+#[constant]
+pub const MARINADE_SEED_LIQ_POOL_SOL_LEG: &[u8] = m::SEED_LIQ_POOL_SOL_LEG;
+#[constant]
+pub const MARINADE_SEED_LIQ_POOL_MSOL_LEG_AUTHORITY: &[u8] = m::SEED_LIQ_POOL_MSOL_LEG_AUTHORITY;
+#[constant]
+pub const MARINADE_SEED_RESERVE: &[u8] = m::SEED_RESERVE;
+#[constant]
+pub const MARINADE_SEED_MSOL_MINT_AUTHORITY: &[u8] = m::SEED_MSOL_MINT_AUTHORITY;
+#[constant]
+pub const MARINADE_STATE_TREASURY_MSOL: u64 = m::STATE_TREASURY_MSOL as u64;
+#[constant]
+pub const MARINADE_STATE_LIQ_POOL_MSOL_LEG: u64 = m::STATE_LIQ_POOL_MSOL_LEG as u64;
+#[constant]
+pub const MARINADE_STATE_LP_LIQUIDITY_TARGET: u64 = m::STATE_LP_LIQUIDITY_TARGET as u64;
+#[constant]
+pub const MARINADE_STATE_LP_MAX_FEE_BPS: u64 = m::STATE_LP_MAX_FEE_BPS as u64;
+#[constant]
+pub const MARINADE_STATE_LP_MIN_FEE_BPS: u64 = m::STATE_LP_MIN_FEE_BPS as u64;

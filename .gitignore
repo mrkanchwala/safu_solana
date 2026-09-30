@@ -8,3 +8,5 @@ node_modules/
 *-keypair.json
 keys/
 .localnet/
+dist/
+*.tsbuildinfo
