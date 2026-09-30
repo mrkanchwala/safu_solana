@@ -46,7 +46,10 @@ fn slot_numbers_are_stable_and_unused_slots_are_refused() {
         assert_eq!(key.index(), i);
         assert_eq!(SettingKey::from_index(i as u8), Ok(*key));
     }
-    assert_eq!(SettingKey::from_index(SETTING_COUNT as u8), Err(CoreError::UnknownSetting));
+    assert_eq!(
+        SettingKey::from_index(SETTING_COUNT as u8),
+        Err(CoreError::UnknownSetting)
+    );
     assert_eq!(SettingKey::from_index(255), Err(CoreError::UnknownSetting));
     const { assert!(SETTING_COUNT < SETTING_SLOTS) };
 }
@@ -56,9 +59,17 @@ fn a_value_outside_the_hard_range_is_refused() {
     let s = defaults();
     for key in SettingKey::ALL {
         let (min, max) = key.bounds();
-        assert_eq!(s.check_value(key, min - 1), Err(CoreError::SettingOutOfBounds), "{key:?}");
+        assert_eq!(
+            s.check_value(key, min - 1),
+            Err(CoreError::SettingOutOfBounds),
+            "{key:?}"
+        );
         if max < i64::MAX {
-            assert_eq!(s.check_value(key, max + 1), Err(CoreError::SettingOutOfBounds), "{key:?}");
+            assert_eq!(
+                s.check_value(key, max + 1),
+                Err(CoreError::SettingOutOfBounds),
+                "{key:?}"
+            );
         }
     }
 }
@@ -67,22 +78,55 @@ fn a_value_outside_the_hard_range_is_refused() {
 fn settings_keep_their_order() {
     let mut s = defaults();
     // Min stake never above max stake.
-    assert_eq!(s.check_value(SettingKey::MinStakeBps, MAX_STAKE_BPS as i64 + 1), Err(CoreError::SettingOrderInvalid));
-    assert_eq!(s.check_value(SettingKey::MaxStakeBps, MIN_STAKE_BPS as i64 - 1), Err(CoreError::SettingOrderInvalid));
+    assert_eq!(
+        s.check_value(SettingKey::MinStakeBps, MAX_STAKE_BPS as i64 + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::MaxStakeBps, MIN_STAKE_BPS as i64 - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
     // Bands: low >= mid >= high, for both rate families.
     s.values[SettingKey::AdmitLowBps.index()] = 2_000;
-    assert_eq!(s.check_value(SettingKey::AdmitMidBps, 2_001), Err(CoreError::SettingOrderInvalid));
-    assert_eq!(s.check_value(SettingKey::AdmitMidBps, ADMIT_HIGH_BPS as i64 - 1), Err(CoreError::SettingOrderInvalid));
-    assert_eq!(s.check_value(SettingKey::AdmitHighBps, ADMIT_MID_BPS as i64 + 1), Err(CoreError::SettingOrderInvalid));
-    assert_eq!(s.check_value(SettingKey::PayoutLowBps, PAYOUT_MID_BPS as i64 - 1), Err(CoreError::SettingOrderInvalid));
-    assert_eq!(s.check_value(SettingKey::PayoutHighBps, PAYOUT_MID_BPS as i64 + 1), Err(CoreError::SettingOrderInvalid));
+    assert_eq!(
+        s.check_value(SettingKey::AdmitMidBps, 2_001),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::AdmitMidBps, ADMIT_HIGH_BPS as i64 - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::AdmitHighBps, ADMIT_MID_BPS as i64 + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::PayoutLowBps, PAYOUT_MID_BPS as i64 - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::PayoutHighBps, PAYOUT_MID_BPS as i64 + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
     // A cap so small the min stake rounds to zero.
-    assert_eq!(s.check_value(SettingKey::PoolCap, 999), Err(CoreError::SettingOrderInvalid));
+    assert_eq!(
+        s.check_value(SettingKey::PoolCap, 999),
+        Err(CoreError::SettingOrderInvalid)
+    );
     assert_eq!(s.check_value(SettingKey::PoolCap, 1_000), Ok(()));
     // Allowed moves.
-    assert_eq!(s.check_value(SettingKey::PoolCap, (100 * SOL) as i64), Ok(()));
-    assert_eq!(s.check_value(SettingKey::PoolCap, (10 * SOL) as i64), Ok(()));
-    assert_eq!(s.check_value(SettingKey::PauseGapSecs, PAUSE_GAP_SECS * 2), Ok(()));
+    assert_eq!(
+        s.check_value(SettingKey::PoolCap, (100 * SOL) as i64),
+        Ok(())
+    );
+    assert_eq!(
+        s.check_value(SettingKey::PoolCap, (10 * SOL) as i64),
+        Ok(())
+    );
+    assert_eq!(
+        s.check_value(SettingKey::PauseGapSecs, PAUSE_GAP_SECS * 2),
+        Ok(())
+    );
 }
 
 #[test]
@@ -97,8 +141,18 @@ fn live_settings_drive_the_rules() {
     s.values[SettingKey::MinStakeBps.index()] = 20;
     s.values[SettingKey::PoolCap.index()] = (100 * SOL) as i64;
     assert_eq!(stake::bounds(&s), Ok((SOL / 5, SOL)));
-    assert_eq!(stake::check_new_stake(SOL / 10, 0, &s), Err(CoreError::StakeOutOfRange));
-    assert_eq!(s.admit_rates(), Rates { low: ADMIT_LOW_BPS, mid: ADMIT_MID_BPS, high: ADMIT_HIGH_BPS });
+    assert_eq!(
+        stake::check_new_stake(SOL / 10, 0, &s),
+        Err(CoreError::StakeOutOfRange)
+    );
+    assert_eq!(
+        s.admit_rates(),
+        Rates {
+            low: ADMIT_LOW_BPS,
+            mid: ADMIT_MID_BPS,
+            high: ADMIT_HIGH_BPS
+        }
+    );
 }
 
 // ------------------------------------------------------------------ partial withdrawal
@@ -109,10 +163,22 @@ fn a_stake_can_be_taken_out_in_full_or_in_part() {
     let (min, _) = stake::bounds(&s).unwrap();
     let stake_amt = SOL / 2;
     assert_eq!(stake::check_withdraw(stake_amt, stake_amt, &s), Ok(0));
-    assert_eq!(stake::check_withdraw(stake_amt - min, stake_amt, &s), Ok(min));
-    assert_eq!(stake::check_withdraw(stake_amt - min + 1, stake_amt, &s), Err(CoreError::StakeBelowMinimum));
-    assert_eq!(stake::check_withdraw(stake_amt + 1, stake_amt, &s), Err(CoreError::AmountExceedsStake));
-    assert_eq!(stake::check_withdraw(0, stake_amt, &s), Err(CoreError::InvalidParameter));
+    assert_eq!(
+        stake::check_withdraw(stake_amt - min, stake_amt, &s),
+        Ok(min)
+    );
+    assert_eq!(
+        stake::check_withdraw(stake_amt - min + 1, stake_amt, &s),
+        Err(CoreError::StakeBelowMinimum)
+    );
+    assert_eq!(
+        stake::check_withdraw(stake_amt + 1, stake_amt, &s),
+        Err(CoreError::AmountExceedsStake)
+    );
+    assert_eq!(
+        stake::check_withdraw(0, stake_amt, &s),
+        Err(CoreError::InvalidParameter)
+    );
 }
 
 #[test]
@@ -121,7 +187,10 @@ fn a_stake_below_a_raised_min_can_still_leave_in_full() {
     s.values[SettingKey::MinStakeBps.index()] = 100; // min = max = 0.5 SOL
     let small = SOL / 10;
     assert_eq!(stake::check_withdraw(small, small, &s), Ok(0));
-    assert_eq!(stake::check_withdraw(small / 2, small, &s), Err(CoreError::StakeBelowMinimum));
+    assert_eq!(
+        stake::check_withdraw(small / 2, small, &s),
+        Err(CoreError::StakeBelowMinimum)
+    );
 }
 
 // ------------------------------------------------------------------ one capital rule
@@ -130,7 +199,10 @@ fn a_stake_below_a_raised_min_can_still_leave_in_full() {
 fn money_leaves_only_if_open_claims_still_fit() {
     // 100 capacity, 90 needed by claims: 10 is free.
     assert_eq!(check_capital_free(90, 100, 10), Ok(()));
-    assert_eq!(check_capital_free(90, 100, 11), Err(CoreError::CapitalNotFree));
+    assert_eq!(
+        check_capital_free(90, 100, 11),
+        Err(CoreError::CapitalNotFree)
+    );
     assert_eq!(check_capital_free(0, 100, 100), Ok(()));
 }
 

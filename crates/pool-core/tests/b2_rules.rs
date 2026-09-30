@@ -7,8 +7,16 @@ use pool_core::CoreError;
 use proptest::prelude::*;
 
 /// The default daily rates (a new pool's settings).
-const ADMIT: Rates = Rates { low: ADMIT_LOW_BPS, mid: ADMIT_MID_BPS, high: ADMIT_HIGH_BPS };
-const PAYOUT: Rates = Rates { low: PAYOUT_LOW_BPS, mid: PAYOUT_MID_BPS, high: PAYOUT_HIGH_BPS };
+const ADMIT: Rates = Rates {
+    low: ADMIT_LOW_BPS,
+    mid: ADMIT_MID_BPS,
+    high: ADMIT_HIGH_BPS,
+};
+const PAYOUT: Rates = Rates {
+    low: PAYOUT_LOW_BPS,
+    mid: PAYOUT_MID_BPS,
+    high: PAYOUT_HIGH_BPS,
+};
 
 const SOL: u64 = 1_000_000_000;
 const NOW: i64 = 1_800_000_000;
@@ -25,26 +33,60 @@ fn tier_ceilings_are_15_10_5_times_the_stake() {
 
 #[test]
 fn entitlement_checks() {
-    assert_eq!(check_entitlement(0, SOL, TIER_A), Err(CoreError::EntitlementNotPositive));
+    assert_eq!(
+        check_entitlement(0, SOL, TIER_A),
+        Err(CoreError::EntitlementNotPositive)
+    );
     assert_eq!(check_entitlement(5 * SOL, SOL, TIER_C), Ok(()));
-    assert_eq!(check_entitlement(5 * SOL + 1, SOL, TIER_C), Err(CoreError::EntitlementExceedsTierCap));
+    assert_eq!(
+        check_entitlement(5 * SOL + 1, SOL, TIER_C),
+        Err(CoreError::EntitlementExceedsTierCap)
+    );
 }
 
 #[test]
 fn hack_time_window() {
     let staked = NOW - 10;
-    assert_eq!(check_hack_time(NOW + 1, staked, NOW, NOW), Err(CoreError::HackTimestampInFuture));
-    assert_eq!(check_hack_time(staked - 1, staked, NOW, NOW), Err(CoreError::HackPredatesStake));
-    assert_eq!(check_hack_time(staked, staked, staked + CLAIM_WINDOW_SECS, staked + CLAIM_WINDOW_SECS), Ok(()));
-    assert_eq!(check_hack_time(staked, staked, staked + CLAIM_WINDOW_SECS + 1, staked + CLAIM_WINDOW_SECS + 1), Err(CoreError::ClaimWindowExpired));
+    assert_eq!(
+        check_hack_time(NOW + 1, staked, NOW, NOW),
+        Err(CoreError::HackTimestampInFuture)
+    );
+    assert_eq!(
+        check_hack_time(staked - 1, staked, NOW, NOW),
+        Err(CoreError::HackPredatesStake)
+    );
+    assert_eq!(
+        check_hack_time(
+            staked,
+            staked,
+            staked + CLAIM_WINDOW_SECS,
+            staked + CLAIM_WINDOW_SECS
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_hack_time(
+            staked,
+            staked,
+            staked + CLAIM_WINDOW_SECS + 1,
+            staked + CLAIM_WINDOW_SECS + 1
+        ),
+        Err(CoreError::ClaimWindowExpired)
+    );
 }
 
 #[test]
 fn approval_deadline_window() {
-    assert_eq!(check_deadline(NOW - 1, NOW), Err(CoreError::SignatureExpired));
+    assert_eq!(
+        check_deadline(NOW - 1, NOW),
+        Err(CoreError::SignatureExpired)
+    );
     assert_eq!(check_deadline(NOW, NOW), Ok(()));
     assert_eq!(check_deadline(NOW + MAX_APPROVAL_WINDOW_SECS, NOW), Ok(()));
-    assert_eq!(check_deadline(NOW + MAX_APPROVAL_WINDOW_SECS + 1, NOW), Err(CoreError::SignatureDeadlineTooFar));
+    assert_eq!(
+        check_deadline(NOW + MAX_APPROVAL_WINDOW_SECS + 1, NOW),
+        Err(CoreError::SignatureDeadlineTooFar)
+    );
 }
 
 #[test]

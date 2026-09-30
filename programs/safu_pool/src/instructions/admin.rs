@@ -66,16 +66,28 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
     );
     require!(args.cluster <= CLUSTER_MAINNET, PoolError::InvalidCluster);
     // Default settings at this cap; a cap too small for a non-zero min stake is refused.
-    let settings = Settings::defaults(args.pool_cap).map_err(|_| error!(PoolError::InvalidPoolCap))?;
+    let settings =
+        Settings::defaults(args.pool_cap).map_err(|_| error!(PoolError::InvalidPoolCap))?;
 
-    let state = marinade::read_state(&ctx.accounts.marinade_state, &ctx.accounts.marinade_program.key())?;
-    require_keys_eq!(state.msol_mint, ctx.accounts.msol_mint.key(), PoolError::WrongMarinadeAccount);
+    let state = marinade::read_state(
+        &ctx.accounts.marinade_state,
+        &ctx.accounts.marinade_program.key(),
+    )?;
+    require_keys_eq!(
+        state.msol_mint,
+        ctx.accounts.msol_mint.key(),
+        PoolError::WrongMarinadeAccount
+    );
 
     // The vault must exist and stay rent-exempt: fund its floor once, here.
     let floor = vault::rent_floor()?;
     let top_up = floor.saturating_sub(ctx.accounts.vault.lamports());
     if top_up > 0 {
-        vault::receive(&ctx.accounts.admin.to_account_info(), &ctx.accounts.vault.to_account_info(), top_up)?;
+        vault::receive(
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            top_up,
+        )?;
     }
 
     let pool = &mut ctx.accounts.pool;
@@ -119,7 +131,11 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
         day_outflow: 0,
         reserved: [0; 256],
     });
-    emit!(PoolInitialized { admin, pool_cap: args.pool_cap, cluster: args.cluster });
+    emit!(PoolInitialized {
+        admin,
+        pool_cap: args.pool_cap,
+        cluster: args.cluster
+    });
     Ok(())
 }
 
@@ -139,15 +155,25 @@ pub fn pause(ctx: Context<AdminOnly>) -> Result<()> {
     require!(!pool.is_paused(now), PoolError::Paused);
     let s = pool.settings();
     require!(
-        settings::pause_gap_passed(now, pool.pause_started_at, pool.paused_until, s.get(SettingKey::PauseGapSecs)),
+        settings::pause_gap_passed(
+            now,
+            pool.pause_started_at,
+            pool.paused_until,
+            s.get(SettingKey::PauseGapSecs)
+        ),
         PoolError::PauseGapNotPassed
     );
     // The last pause is over: fold it into the running total before starting a new one.
     if pool.pause_started_at != 0 {
         let last = pool.paused_until.saturating_sub(pool.pause_started_at);
-        pool.paused_before = pool.paused_before.checked_add(last).ok_or(PoolError::MathOverflow)?;
+        pool.paused_before = pool
+            .paused_before
+            .checked_add(last)
+            .ok_or(PoolError::MathOverflow)?;
     }
-    let until = now.checked_add(s.get(SettingKey::PauseMaxSecs)).ok_or(PoolError::MathOverflow)?;
+    let until = now
+        .checked_add(s.get(SettingKey::PauseMaxSecs))
+        .ok_or(PoolError::MathOverflow)?;
     pool.pause_started_at = now;
     pool.paused_until = until;
     emit!(PausedUntil { until });

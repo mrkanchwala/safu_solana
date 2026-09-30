@@ -40,7 +40,11 @@ pub fn propose_setting(ctx: Context<AdminOnly>, key: u8, value: i64) -> Result<(
     let k = SettingKey::from_index(key).core()?;
     let pool = &mut ctx.accounts.pool;
     pool.settings().check_value(k, value).core()?;
-    pool.pending_settings[k.index()] = PendingSetting { value, eta: 0, state: PENDING_PROPOSED };
+    pool.pending_settings[k.index()] = PendingSetting {
+        value,
+        eta: 0,
+        state: PENDING_PROPOSED,
+    };
     emit!(SettingProposed { key, value });
     Ok(())
 }
@@ -48,10 +52,15 @@ pub fn propose_setting(ctx: Context<AdminOnly>, key: u8, value: i64) -> Result<(
 /// Step 2 (co-signer): approves the exact proposed value and starts the timelock.
 pub fn approve_setting(ctx: Context<ApproveSetting>, key: u8, value: i64) -> Result<()> {
     let k = SettingKey::from_index(key).core()?;
-    let eta = now()?.checked_add(SETTINGS_TIMELOCK_SECS).ok_or(PoolError::MathOverflow)?;
+    let eta = now()?
+        .checked_add(SETTINGS_TIMELOCK_SECS)
+        .ok_or(PoolError::MathOverflow)?;
     let pending = &mut ctx.accounts.pool.pending_settings[k.index()];
     require!(pending.state != PENDING_NONE, PoolError::NoPendingSetting);
-    require!(pending.state == PENDING_PROPOSED, PoolError::SettingAlreadyApproved);
+    require!(
+        pending.state == PENDING_PROPOSED,
+        PoolError::SettingAlreadyApproved
+    );
     require!(pending.value == value, PoolError::SettingValueMismatch);
     pending.state = PENDING_APPROVED;
     pending.eta = eta;
@@ -67,12 +76,19 @@ pub fn execute_setting(ctx: Context<ExecuteSetting>, key: u8) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     let pending = pool.pending_settings[k.index()];
     require!(pending.state != PENDING_NONE, PoolError::NoPendingSetting);
-    require!(pending.state == PENDING_APPROVED && now >= pending.eta, PoolError::SettingNotReady);
+    require!(
+        pending.state == PENDING_APPROVED && now >= pending.eta,
+        PoolError::SettingNotReady
+    );
     pool.settings().check_value(k, pending.value).core()?;
     let old_value = pool.settings[k.index()];
     pool.settings[k.index()] = pending.value;
     pool.pending_settings[k.index()] = PendingSetting::default();
-    emit!(SettingExecuted { key, old_value, new_value: pending.value });
+    emit!(SettingExecuted {
+        key,
+        old_value,
+        new_value: pending.value
+    });
     Ok(())
 }
 
@@ -81,8 +97,14 @@ pub fn cancel_setting(ctx: Context<CancelSetting>, key: u8) -> Result<()> {
     let k = SettingKey::from_index(key).core()?;
     let by = ctx.accounts.signer.key();
     let pool = &mut ctx.accounts.pool;
-    require!(by == pool.admin || by == pool.co_signer, PoolError::NotAdminOrCoSigner);
-    require!(pool.pending_settings[k.index()].state != PENDING_NONE, PoolError::NoPendingSetting);
+    require!(
+        by == pool.admin || by == pool.co_signer,
+        PoolError::NotAdminOrCoSigner
+    );
+    require!(
+        pool.pending_settings[k.index()].state != PENDING_NONE,
+        PoolError::NoPendingSetting
+    );
     pool.pending_settings[k.index()] = PendingSetting::default();
     emit!(SettingCancelled { key, by });
     Ok(())

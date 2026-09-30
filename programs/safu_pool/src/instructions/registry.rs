@@ -38,7 +38,11 @@ pub struct RegisterWallet<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn register_wallet(ctx: Context<RegisterWallet>, staker: Pubkey, wallet_hash: [u8; 32]) -> Result<()> {
+pub fn register_wallet(
+    ctx: Context<RegisterWallet>,
+    staker: Pubkey,
+    wallet_hash: [u8; 32],
+) -> Result<()> {
     let covered = &mut ctx.accounts.covered_wallet;
     if covered.staker != Pubkey::default() {
         require_keys_neq!(covered.staker, staker, PoolError::AlreadyRegistered);
@@ -50,7 +54,10 @@ pub fn register_wallet(ctx: Context<RegisterWallet>, staker: Pubkey, wallet_hash
         wallets.staker = staker;
         wallets.bump = ctx.bumps.staker_wallets;
     }
-    require!(wallets.count < MAX_COVERED_WALLETS, PoolError::StakerLimitReached);
+    require!(
+        wallets.count < MAX_COVERED_WALLETS,
+        PoolError::StakerLimitReached
+    );
     let slot = wallets.count as usize;
     wallets.wallet_hashes[slot] = wallet_hash;
     wallets.count += 1;
@@ -60,6 +67,9 @@ pub fn register_wallet(ctx: Context<RegisterWallet>, staker: Pubkey, wallet_hash
         registered_at: now()?,
         bump: ctx.bumps.covered_wallet,
     });
-    emit!(WalletRegistered { staker, wallet_hash });
+    emit!(WalletRegistered {
+        staker,
+        wallet_hash
+    });
     Ok(())
 }

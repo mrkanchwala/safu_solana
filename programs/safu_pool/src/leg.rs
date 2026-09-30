@@ -11,7 +11,9 @@ use pool_core::settings::SettingKey;
 use pool_core::{add, leg, liquidity, sub, yields};
 
 use crate::errors::{CoreResultExt, PoolError};
-use crate::events::{DeployBelowFloor, Deployed, DeploymentLoss, Harvested, Unstaked, YieldCredited};
+use crate::events::{
+    DeployBelowFloor, Deployed, DeploymentLoss, Harvested, Unstaked, YieldCredited,
+};
 use crate::marinade::MarinadeLeg;
 use crate::state::Pool;
 use crate::vault;
@@ -30,10 +32,14 @@ pub fn credit_yield(pool: &mut Pool, amount: u64) -> Result<()> {
         st.amount(SettingKey::BackerYieldBps),
     )
     .core()?;
-    pool.staker_yield_index =
-        pool.staker_yield_index.checked_add(c.staker_index_bump).ok_or(PoolError::MathOverflow)?;
-    pool.backer_yield_index =
-        pool.backer_yield_index.checked_add(c.backer_index_bump).ok_or(PoolError::MathOverflow)?;
+    pool.staker_yield_index = pool
+        .staker_yield_index
+        .checked_add(c.staker_index_bump)
+        .ok_or(PoolError::MathOverflow)?;
+    pool.backer_yield_index = pool
+        .backer_yield_index
+        .checked_add(c.backer_index_bump)
+        .ok_or(PoolError::MathOverflow)?;
     pool.staker_yield_reserved = add(pool.staker_yield_reserved, c.staker_share).core()?;
     pool.backer_yield_reserved = add(pool.backer_yield_reserved, c.backer_share).core()?;
     pool.protocol_yield_balance = add(pool.protocol_yield_balance, c.protocol_share).core()?;
@@ -65,7 +71,8 @@ pub fn push_idle<'info>(
     }
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     let free = vault::free_liquid(pool, vault)?;
-    let amount = liquidity::push_amount(free, pool.total_allocated, capacity, pool.deployed_book).core()?;
+    let amount =
+        liquidity::push_amount(free, pool.total_allocated, capacity, pool.deployed_book).core()?;
     if amount == 0 || amount < st.min_deposit {
         return Ok(0);
     }
@@ -80,9 +87,16 @@ pub fn push_idle<'info>(
     pool.deployed_book = add(pool.deployed_book, amount).core()?;
     let min_msol = leg::min_msol_for_deposit(amount, st.msol_price).core()?;
     if msol < min_msol {
-        emit!(DeployBelowFloor { lamports: amount, msol, min_msol });
+        emit!(DeployBelowFloor {
+            lamports: amount,
+            msol,
+            min_msol
+        });
     }
-    emit!(Deployed { lamports: amount, msol });
+    emit!(Deployed {
+        lamports: amount,
+        msol
+    });
     Ok(amount)
 }
 
@@ -107,7 +121,13 @@ pub fn harvest<'info>(
         return Ok(0);
     }
     let elapsed = now.saturating_sub(pool.last_harvest_at);
-    let msol = leg::harvest_msol(pool.deployed_msol, pool.deployed_book, st.msol_price, elapsed).core()?;
+    let msol = leg::harvest_msol(
+        pool.deployed_msol,
+        pool.deployed_book,
+        st.msol_price,
+        elapsed,
+    )
+    .core()?;
     if msol == 0 {
         return Ok(0);
     }
@@ -141,7 +161,10 @@ pub fn pull<'info>(
     if free >= amount {
         return Ok(0);
     }
-    require!(pool.deployed_msol > 0 && pool.deployed_book > 0, PoolError::InsufficientLiquidity);
+    require!(
+        pool.deployed_msol > 0 && pool.deployed_book > 0,
+        PoolError::InsufficientLiquidity
+    );
     let st = leg.state(pool)?;
     require!(!st.paused, PoolError::InsufficientLiquidity);
     let shortfall = amount - free;
@@ -158,18 +181,36 @@ pub fn pull<'info>(
     let received = sub(vault.lamports(), before).core()?;
     // The payee pays Marinade's fee, whatever it is up to Marinade's own maximum; the pool's own
     // unstakes (rebalance) are held to `MAX_REBALANCE_SLIPPAGE_BPS`.
-    let limit_bps = if payee_pays { u64::from(st.lp_max_fee_bps) } else { MAX_REBALANCE_SLIPPAGE_BPS };
-    require!(leg::fee_within_limit(expected, received, limit_bps).core()?, PoolError::UnstakeFeeTooHigh);
+    let limit_bps = if payee_pays {
+        u64::from(st.lp_max_fee_bps)
+    } else {
+        MAX_REBALANCE_SLIPPAGE_BPS
+    };
+    require!(
+        leg::fee_within_limit(expected, received, limit_bps).core()?,
+        PoolError::UnstakeFeeTooHigh
+    );
 
     pool.deployed_msol = sub(pool.deployed_msol, msol).core()?;
     pool.deployed_book = sub(pool.deployed_book, principal).core()?;
-    let r = leg::settle_redeem(expected, received, principal, if payee_pays { shortfall } else { 0 }).core()?;
+    let r = leg::settle_redeem(
+        expected,
+        received,
+        principal,
+        if payee_pays { shortfall } else { 0 },
+    )
+    .core()?;
     credit_yield(pool, r.gain)?;
     if r.loss > 0 {
         pool.total_staked = pool.total_staked.saturating_sub(r.loss);
         emit!(DeploymentLoss { loss: r.loss });
     }
-    emit!(Unstaked { msol, expected, received, payee_fee: r.payee_fee });
+    emit!(Unstaked {
+        msol,
+        expected,
+        received,
+        payee_fee: r.payee_fee
+    });
     Ok(r.payee_fee)
 }
 

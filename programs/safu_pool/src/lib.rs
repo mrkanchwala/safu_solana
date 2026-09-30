@@ -73,7 +73,10 @@ pub mod safu_pool {
     pub fn mature_backing(ctx: Context<MatureBacking>) -> Result<()> {
         instructions::backer::mature_backing(ctx)
     }
-    pub fn request_backer_withdrawal(ctx: Context<RequestBackerWithdrawal>, amount: u64) -> Result<()> {
+    pub fn request_backer_withdrawal(
+        ctx: Context<RequestBackerWithdrawal>,
+        amount: u64,
+    ) -> Result<()> {
         instructions::backer::request_backer_withdrawal(ctx, amount)
     }
     pub fn cancel_backer_withdrawal(ctx: Context<BackerOnly>) -> Result<()> {
@@ -98,7 +101,11 @@ pub mod safu_pool {
     }
 
     // Covered wallets.
-    pub fn register_wallet(ctx: Context<RegisterWallet>, staker: Pubkey, wallet_hash: [u8; 32]) -> Result<()> {
+    pub fn register_wallet(
+        ctx: Context<RegisterWallet>,
+        staker: Pubkey,
+        wallet_hash: [u8; 32],
+    ) -> Result<()> {
         instructions::registry::register_wallet(ctx, staker, wallet_hash)
     }
 
@@ -136,10 +143,20 @@ pub mod safu_pool {
     pub fn unsuspend_stake(ctx: Context<AdminStake>, staker: Pubkey) -> Result<()> {
         instructions::claim::unsuspend_stake(ctx, staker)
     }
-    pub fn revoke_approval(ctx: Context<RevokeApproval>, approval: ClaimApproval, hash: [u8; 32]) -> Result<()> {
+    pub fn revoke_approval(
+        ctx: Context<RevokeApproval>,
+        approval: ClaimApproval,
+        hash: [u8; 32],
+    ) -> Result<()> {
         instructions::claim::revoke_approval(ctx, approval, hash)
     }
-    pub fn approve_override(ctx: Context<ApproveOverride>, staker: Pubkey, tx_hash: [u8; 32], entitlement: u64, tier: u8) -> Result<()> {
+    pub fn approve_override(
+        ctx: Context<ApproveOverride>,
+        staker: Pubkey,
+        tx_hash: [u8; 32],
+        entitlement: u64,
+        tier: u8,
+    ) -> Result<()> {
         instructions::claim::approve_override(ctx, staker, tx_hash, entitlement, tier)
     }
     pub fn cancel_pending_override(ctx: Context<CancelPendingOverride>) -> Result<()> {

@@ -18,10 +18,20 @@ use pool_core::yields;
 fn check_beneficiary(pool: &Pool, pool_key: &Pubkey, beneficiary: &Pubkey) -> Result<()> {
     require_keys_neq!(*beneficiary, pool.oracle, PoolError::BeneficiaryIsOracle);
     require_keys_neq!(*beneficiary, pool.admin, PoolError::BeneficiaryIsAdmin);
-    require_keys_neq!(*beneficiary, pool.co_signer, PoolError::BeneficiaryIsCoSigner);
-    let vault = Pubkey::create_program_address(&[SEED_VAULT, pool_key.as_ref(), &[pool.vault_bump]], &crate::ID)
-        .map_err(|_| error!(PoolError::MathOverflow))?;
-    require!(*beneficiary != *pool_key && *beneficiary != vault, PoolError::BeneficiaryIsPoolAccount);
+    require_keys_neq!(
+        *beneficiary,
+        pool.co_signer,
+        PoolError::BeneficiaryIsCoSigner
+    );
+    let vault = Pubkey::create_program_address(
+        &[SEED_VAULT, pool_key.as_ref(), &[pool.vault_bump]],
+        &crate::ID,
+    )
+    .map_err(|_| error!(PoolError::MathOverflow))?;
+    require!(
+        *beneficiary != *pool_key && *beneficiary != vault,
+        PoolError::BeneficiaryIsPoolAccount
+    );
     Ok(())
 }
 
@@ -29,7 +39,10 @@ fn check_beneficiary(pool: &Pool, pool_key: &Pubkey, beneficiary: &Pubkey) -> Re
 fn require_no_claim(record: &StakeRecord) -> Result<()> {
     require!(!record.forfeited, PoolError::StakeForfeited);
     require!(record.active_claim.is_none(), PoolError::ClaimActive);
-    require!(record.reserved_claim.is_none(), PoolError::ClaimQueuedForStake);
+    require!(
+        record.reserved_claim.is_none(),
+        PoolError::ClaimQueuedForStake
+    );
     Ok(())
 }
 
@@ -40,15 +53,29 @@ fn require_no_claim(record: &StakeRecord) -> Result<()> {
 /// yield is never capital, so the capital check counts principal only.
 /// Returns `(yield_paid, remaining)`. The payment follows through `leg::pay_out`; the caller then
 /// re-checks free capital, because an unstake inside it can mark a Marinade loss off `total_staked`.
-fn settle_exit(pool: &mut Pool, record: &mut StakeRecord, amount: u64, now: i64) -> Result<(u64, u64)> {
+fn settle_exit(
+    pool: &mut Pool,
+    record: &mut StakeRecord,
+    amount: u64,
+    now: i64,
+) -> Result<(u64, u64)> {
     require_no_claim(record)?;
-    require!(now >= record.penalty_locked_until, PoolError::PenaltyLockActive);
-    let remaining = pool_core::stake::check_withdraw(amount, record.amount, &pool.settings()).core()?;
+    require!(
+        now >= record.penalty_locked_until,
+        PoolError::PenaltyLockActive
+    );
+    let remaining =
+        pool_core::stake::check_withdraw(amount, record.amount, &pool.settings()).core()?;
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, amount).core()?;
 
     // Yield is capped by the set-aside (which a Marinade loss can leave short of the records' sum).
-    let owed = yields::owed(record.amount, pool.staker_yield_index, record.yield_index_at).core()?;
+    let owed = yields::owed(
+        record.amount,
+        pool.staker_yield_index,
+        record.yield_index_at,
+    )
+    .core()?;
     let yield_paid = owed.min(pool.staker_yield_reserved);
     pool.staker_yield_reserved -= yield_paid;
     record.yield_index_at = pool.staker_yield_index;
@@ -153,7 +180,10 @@ pub fn set_beneficiary(ctx: Context<SetBeneficiary>, beneficiary: Pubkey) -> Res
     let record = &mut ctx.accounts.stake_record;
     require_no_claim(record)?;
     record.beneficiary = beneficiary;
-    emit!(BeneficiarySet { staker: record.staker, beneficiary });
+    emit!(BeneficiarySet {
+        staker: record.staker,
+        beneficiary
+    });
     Ok(())
 }
 
@@ -193,14 +223,21 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
 
     let record = &mut ctx.accounts.stake_record;
     let (yield_paid, remaining) = settle_exit(pool, record, amount, now)?;
-    emit!(Withdrawn { staker: record.staker, principal: amount, yield_paid, remaining });
+    emit!(Withdrawn {
+        staker: record.staker,
+        principal: amount,
+        yield_paid,
+        remaining
+    });
 
     let total = pool_core::add(amount, yield_paid).core()?;
     let to = ctx.accounts.beneficiary.to_account_info();
     leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, total)?;
     recheck_capital(pool)?;
     if remaining == 0 {
-        ctx.accounts.stake_record.close(ctx.accounts.staker.to_account_info())?;
+        ctx.accounts
+            .stake_record
+            .close(ctx.accounts.staker.to_account_info())?;
     }
     Ok(())
 }
@@ -238,7 +275,12 @@ pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
 
     let record = &mut ctx.accounts.stake_record;
     let (yield_paid, remaining) = settle_exit(pool, record, amount, now)?;
-    emit!(EmergencyExited { staker: record.staker, principal: amount, yield_paid, remaining });
+    emit!(EmergencyExited {
+        staker: record.staker,
+        principal: amount,
+        yield_paid,
+        remaining
+    });
 
     // No harvest while paused; the unstake a payment needs still runs.
     let total = pool_core::add(amount, yield_paid).core()?;
@@ -246,7 +288,9 @@ pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
     leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, total)?;
     recheck_capital(pool)?;
     if remaining == 0 {
-        ctx.accounts.stake_record.close(ctx.accounts.staker.to_account_info())?;
+        ctx.accounts
+            .stake_record
+            .close(ctx.accounts.staker.to_account_info())?;
     }
     Ok(())
 }
@@ -283,12 +327,21 @@ pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
     require!(!record.forfeited, PoolError::StakeForfeited);
     leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
 
-    let owed = yields::owed(record.amount, pool.staker_yield_index, record.yield_index_at).core()?;
+    let owed = yields::owed(
+        record.amount,
+        pool.staker_yield_index,
+        record.yield_index_at,
+    )
+    .core()?;
     let paid = owed.min(pool.staker_yield_reserved);
     require!(paid > 0, PoolError::NothingToClaim);
     record.yield_index_at = pool.staker_yield_index;
     pool.staker_yield_reserved -= paid;
-    emit!(YieldClaimed { owner: record.staker, amount: paid, backer: false });
+    emit!(YieldClaimed {
+        owner: record.staker,
+        amount: paid,
+        backer: false
+    });
 
     let to = ctx.accounts.beneficiary.to_account_info();
     leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, paid)?;

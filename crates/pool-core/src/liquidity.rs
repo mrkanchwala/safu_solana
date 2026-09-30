@@ -16,7 +16,12 @@ pub fn buffer(capacity: u64) -> Result<u64> {
 
 /// Idle SOL to stake now: free liquid above open claims, up to the `DEPLOY_BPS` line, and only
 /// once it is at least `AUTO_PUSH_MIN_BPS` of capacity (so small stakes don't each pay for a CPI).
-pub fn push_amount(free_liquid: u64, total_allocated: u64, capacity: u64, deployed_book: u64) -> Result<u64> {
+pub fn push_amount(
+    free_liquid: u64,
+    total_allocated: u64,
+    capacity: u64,
+    deployed_book: u64,
+) -> Result<u64> {
     let idle = free_liquid.saturating_sub(total_allocated);
     let room = apply_bps(capacity, DEPLOY_BPS)?.saturating_sub(deployed_book);
     let amount = idle.min(room);
@@ -29,7 +34,12 @@ pub fn push_amount(free_liquid: u64, total_allocated: u64, capacity: u64, deploy
 /// SOL a rebalance unstakes (multichain `ensure_liquidity`): the larger of open claims not covered
 /// by free liquid SOL, and deployment above the `DEPLOY_BPS` line (which drifts up when stakes leave).
 /// The same line `push_amount` deploys to, so the two never undo each other.
-pub fn rebalance_shortfall(free_liquid: u64, total_allocated: u64, capacity: u64, deployed_book: u64) -> Result<u64> {
+pub fn rebalance_shortfall(
+    free_liquid: u64,
+    total_allocated: u64,
+    capacity: u64,
+    deployed_book: u64,
+) -> Result<u64> {
     let claims = total_allocated.saturating_sub(free_liquid);
     let over_line = deployed_book.saturating_sub(apply_bps(capacity, DEPLOY_BPS)?);
     Ok(claims.max(over_line))

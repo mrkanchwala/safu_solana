@@ -11,15 +11,16 @@ use anchor_lang::{
 };
 use base64::Engine;
 use litesvm::LiteSVM;
-use safu_pool::constants::*;
-use safu_pool::approval::{approval_hash, encode_message, ClaimApproval};
 pub use pool_core::settings::SettingKey;
+use safu_pool::approval::{approval_hash, encode_message, ClaimApproval};
+use safu_pool::constants::*;
 // Setting defaults (a fresh pool's live values). Tests that change a setting read `Env::setting`.
 // Each test file uses a different subset.
 #[allow(unused_imports)]
 pub use pool_core::params::{
-    APPROVE_WINDOW_SECS, BACKER_MATURITY_SECS, BACKER_NOTICE_SECS, BACKER_YIELD_BPS, COLLECTION_INACTIVITY_SECS,
-    COOLDOWN_SECS, MAX_STAKE_BPS, MIN_STAKE_BPS, PAUSE_GAP_SECS, PAUSE_MAX_SECS, STAKER_YIELD_BPS, VESTING_SECS,
+    APPROVE_WINDOW_SECS, BACKER_MATURITY_SECS, BACKER_NOTICE_SECS, BACKER_YIELD_BPS,
+    COLLECTION_INACTIVITY_SECS, COOLDOWN_SECS, MAX_STAKE_BPS, MIN_STAKE_BPS, PAUSE_GAP_SECS,
+    PAUSE_MAX_SECS, STAKER_YIELD_BPS, VESTING_SECS,
 };
 use safu_pool::state::{BackerRecord, Claim, Pool, StakeRecord};
 use solana_account::Account;
@@ -34,8 +35,10 @@ pub const SOL: u64 = 1_000_000_000;
 pub const START: i64 = 1_800_000_000;
 pub const SYSTEM: Pubkey = solana_system_interface::program::ID;
 pub const TOKEN: Pubkey = spl_token_interface::ID;
-pub const ED25519: Pubkey = anchor_lang::prelude::pubkey!("Ed25519SigVerify111111111111111111111111111");
-pub const IX_SYSVAR: Pubkey = anchor_lang::prelude::pubkey!("Sysvar1nstructions1111111111111111111111111");
+pub const ED25519: Pubkey =
+    anchor_lang::prelude::pubkey!("Ed25519SigVerify111111111111111111111111111");
+pub const IX_SYSVAR: Pubkey =
+    anchor_lang::prelude::pubkey!("Sysvar1nstructions1111111111111111111111111");
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/pool.devnet.json");
@@ -49,7 +52,8 @@ pub struct Config {
 }
 
 pub fn config() -> Config {
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(CONFIG).unwrap()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(CONFIG).unwrap()).unwrap();
     let key = |s: &serde_json::Value| Pubkey::from_str(s.as_str().unwrap()).unwrap();
     Config {
         pool_cap: v["poolCapLamports"].as_u64().unwrap(),
@@ -63,9 +67,12 @@ pub fn config() -> Config {
 /// Loads a `solana account --output json` dump.
 fn load_fixture(svm: &mut LiteSVM, name: &str) -> Pubkey {
     let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(format!("{FIXTURES}/{name}.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(format!("{FIXTURES}/{name}.json")).unwrap())
+            .unwrap();
     let a = &v["account"];
-    let data = base64::engine::general_purpose::STANDARD.decode(a["data"][0].as_str().unwrap()).unwrap();
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(a["data"][0].as_str().unwrap())
+        .unwrap();
     let key = Pubkey::from_str(v["pubkey"].as_str().unwrap()).unwrap();
     svm.set_account(
         key,
@@ -105,7 +112,11 @@ pub fn set_upgrade_authority(svm: &mut LiteSVM, program_id: &Pubkey, authority: 
     let address = programdata(program_id);
     let mut account = svm.get_account(&address).expect("program data account");
     // bincode UpgradeableLoaderState::ProgramData: u32 tag (3) · u64 slot · Option<Pubkey> (1 + 32).
-    assert_eq!(&account.data[..4], &3u32.to_le_bytes(), "not a ProgramData account");
+    assert_eq!(
+        &account.data[..4],
+        &3u32.to_le_bytes(),
+        "not a ProgramData account"
+    );
     account.data[12] = 1;
     account.data[13..45].copy_from_slice(authority.as_ref());
     svm.set_account(address, account).unwrap();
@@ -127,22 +138,43 @@ impl Env {
     pub fn uninitialized() -> Env {
         let mut svm = LiteSVM::new();
         let cfg = config();
-        svm.add_program(safu_pool::ID, include_bytes!("../../../../target/deploy/safu_pool.so")).unwrap();
-        svm.add_program(cfg.marinade_program, &std::fs::read(format!("{FIXTURES}/marinade.so")).unwrap())
-            .unwrap();
+        svm.add_program(
+            safu_pool::ID,
+            include_bytes!("../../../../target/deploy/safu_pool.so"),
+        )
+        .unwrap();
+        svm.add_program(
+            cfg.marinade_program,
+            &std::fs::read(format!("{FIXTURES}/marinade.so")).unwrap(),
+        )
+        .unwrap();
         for f in MARINADE_FIXTURES {
             load_fixture(&mut svm, f);
         }
         let mut clock: Clock = svm.get_sysvar();
         clock.unix_timestamp = START;
         svm.set_sysvar(&clock);
-        let (admin, co_signer, oracle, writer, treasury) =
-            (Keypair::new(), Keypair::new(), Keypair::new(), Keypair::new(), Keypair::new());
+        let (admin, co_signer, oracle, writer, treasury) = (
+            Keypair::new(),
+            Keypair::new(),
+            Keypair::new(),
+            Keypair::new(),
+            Keypair::new(),
+        );
         for k in [&admin, &co_signer, &oracle, &writer, &treasury] {
             svm.airdrop(&k.pubkey(), 100 * SOL).unwrap();
         }
         set_upgrade_authority(&mut svm, &safu_pool::ID, &admin.pubkey());
-        Env { svm, cfg, admin, co_signer, oracle, writer, treasury, now: START }
+        Env {
+            svm,
+            cfg,
+            admin,
+            co_signer,
+            oracle,
+            writer,
+            treasury,
+            now: START,
+        }
     }
 
     /// Initialized with the devnet config.
@@ -150,7 +182,12 @@ impl Env {
         let mut env = Env::uninitialized();
         let args = env.init_args();
         let admin = env.admin.insecure_clone();
-        let ix = env.init_ix(&admin.pubkey(), args, env.cfg.marinade_state, env.cfg.msol_mint);
+        let ix = env.init_ix(
+            &admin.pubkey(),
+            args,
+            env.cfg.marinade_state,
+            env.cfg.msol_mint,
+        );
         env.ok(&[ix], &[&admin]);
         env
     }
@@ -193,7 +230,11 @@ impl Env {
     }
 
     pub fn ix(&self, accounts: impl ToAccountMetas, data: impl InstructionData) -> Instruction {
-        Instruction { program_id: safu_pool::ID, accounts: accounts.to_account_metas(None), data: data.data() }
+        Instruction {
+            program_id: safu_pool::ID,
+            accounts: accounts.to_account_metas(None),
+            data: data.data(),
+        }
     }
 
     // ---- addresses
@@ -209,7 +250,9 @@ impl Env {
     pub fn leg(&self) -> safu_pool::accounts::MarinadeLeg {
         use pool_core::marinade as m;
         let state = self.cfg.marinade_state;
-        let marinade_pda = |seed: &[u8]| Pubkey::find_program_address(&[state.as_ref(), seed], &self.cfg.marinade_program).0;
+        let marinade_pda = |seed: &[u8]| {
+            Pubkey::find_program_address(&[state.as_ref(), seed], &self.cfg.marinade_program).0
+        };
         let data = self.svm.get_account(&state).expect("marinade state").data;
         let at = |o: usize| Pubkey::try_from(&data[o..o + 32]).unwrap();
         safu_pool::accounts::MarinadeLeg {
@@ -252,7 +295,11 @@ impl Env {
 
     /// Sends and returns the compute units the transaction used.
     pub fn send_cu(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<u64, String> {
-        let msg = Message::new_with_blockhash(ixs, Some(&signers[0].pubkey()), &self.svm.latest_blockhash());
+        let msg = Message::new_with_blockhash(
+            ixs,
+            Some(&signers[0].pubkey()),
+            &self.svm.latest_blockhash(),
+        );
         let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), signers).unwrap();
         let r = self
             .svm
@@ -299,7 +346,11 @@ impl Env {
     }
 
     /// Rewrites an account's data in place (test setup only, for states another step would create).
-    pub fn edit<T: AccountDeserialize + AccountSerialize>(&mut self, a: &Pubkey, f: impl FnOnce(&mut T)) {
+    pub fn edit<T: AccountDeserialize + AccountSerialize>(
+        &mut self,
+        a: &Pubkey,
+        f: impl FnOnce(&mut T),
+    ) {
         let mut acc = self.svm.get_account(a).expect("account exists");
         let mut v = T::try_deserialize(&mut acc.data.as_slice()).unwrap();
         f(&mut v);
@@ -331,7 +382,13 @@ impl Env {
     // ---- instruction builders
 
     pub fn admin_ix(&self, data: impl InstructionData) -> Instruction {
-        self.ix(safu_pool::accounts::AdminOnly { admin: self.admin.pubkey(), pool: self.pool() }, data)
+        self.ix(
+            safu_pool::accounts::AdminOnly {
+                admin: self.admin.pubkey(),
+                pool: self.pool(),
+            },
+            data,
+        )
     }
 
     pub fn stake_ix(&self, staker: &Pubkey, amount: u64, beneficiary: Pubkey) -> Instruction {
@@ -344,7 +401,10 @@ impl Env {
                 system_program: SYSTEM,
                 leg: self.leg(),
             },
-            safu_pool::instruction::Stake { amount, beneficiary },
+            safu_pool::instruction::Stake {
+                amount,
+                beneficiary,
+            },
         )
     }
 
@@ -353,7 +413,12 @@ impl Env {
         self.withdraw_part_ix(staker, beneficiary, self.stake_amount(staker))
     }
 
-    pub fn withdraw_part_ix(&self, staker: &Pubkey, beneficiary: &Pubkey, amount: u64) -> Instruction {
+    pub fn withdraw_part_ix(
+        &self,
+        staker: &Pubkey,
+        beneficiary: &Pubkey,
+        amount: u64,
+    ) -> Instruction {
         self.ix(
             safu_pool::accounts::Withdraw {
                 staker: *staker,
@@ -389,7 +454,11 @@ impl Env {
 
     pub fn set_beneficiary_ix(&self, staker: &Pubkey, beneficiary: Pubkey) -> Instruction {
         self.ix(
-            safu_pool::accounts::SetBeneficiary { staker: *staker, pool: self.pool(), stake_record: self.stake_record(staker) },
+            safu_pool::accounts::SetBeneficiary {
+                staker: *staker,
+                pool: self.pool(),
+                stake_record: self.stake_record(staker),
+            },
             safu_pool::instruction::SetBeneficiary { beneficiary },
         )
     }
@@ -435,7 +504,11 @@ impl Env {
 
     pub fn backer_only_ix(&self, backer: &Pubkey, data: impl InstructionData) -> Instruction {
         self.ix(
-            safu_pool::accounts::BackerOnly { backer: *backer, pool: self.pool(), backer_record: self.backer_record(backer) },
+            safu_pool::accounts::BackerOnly {
+                backer: *backer,
+                pool: self.pool(),
+                backer_record: self.backer_record(backer),
+            },
             data,
         )
     }
@@ -454,7 +527,12 @@ impl Env {
         )
     }
 
-    pub fn register_ix(&self, writer: &Pubkey, staker: Pubkey, wallet_hash: [u8; 32]) -> Instruction {
+    pub fn register_ix(
+        &self,
+        writer: &Pubkey,
+        staker: Pubkey,
+        wallet_hash: [u8; 32],
+    ) -> Instruction {
         self.ix(
             safu_pool::accounts::RegisterWallet {
                 registry_writer: *writer,
@@ -463,14 +541,22 @@ impl Env {
                 covered_wallet: self.covered(&wallet_hash),
                 system_program: SYSTEM,
             },
-            safu_pool::instruction::RegisterWallet { staker, wallet_hash },
+            safu_pool::instruction::RegisterWallet {
+                staker,
+                wallet_hash,
+            },
         )
     }
 
     // ---- claims
 
     pub fn claim_addr(&self, staker: &Pubkey, tx: &[u8; 32]) -> Pubkey {
-        pda(&[SEED_CLAIM, self.pool().as_ref(), staker.as_ref(), tx.as_ref()])
+        pda(&[
+            SEED_CLAIM,
+            self.pool().as_ref(),
+            staker.as_ref(),
+            tx.as_ref(),
+        ])
     }
     pub fn override_addr(&self, claim: &Pubkey) -> Pubkey {
         pda(&[SEED_OVERRIDE, claim.as_ref()])
@@ -480,7 +566,13 @@ impl Env {
     }
 
     /// An approval signed "now", valid for the longest allowed window, hack "now" (never before a stake made this second).
-    pub fn approval(&self, staker: &Pubkey, tx: [u8; 32], entitlement: u64, tier: u8) -> ClaimApproval {
+    pub fn approval(
+        &self,
+        staker: &Pubkey,
+        tx: [u8; 32],
+        entitlement: u64,
+        tier: u8,
+    ) -> ClaimApproval {
         ClaimApproval {
             staker: *staker,
             tx_hash: tx,
@@ -496,7 +588,11 @@ impl Env {
     }
 
     pub fn revoked_addr(&self, a: &ClaimApproval) -> Pubkey {
-        pda(&[SEED_REVOKED, self.pool().as_ref(), approval_hash(&self.message(a)).as_ref()])
+        pda(&[
+            SEED_REVOKED,
+            self.pool().as_ref(),
+            approval_hash(&self.message(a)).as_ref(),
+        ])
     }
 
     pub fn submit_ix(&self, oracle: &Pubkey, a: &ClaimApproval) -> Instruction {
@@ -510,7 +606,9 @@ impl Env {
                 instructions: IX_SYSVAR,
                 system_program: SYSTEM,
             },
-            safu_pool::instruction::SubmitClaim { approval: a.clone() },
+            safu_pool::instruction::SubmitClaim {
+                approval: a.clone(),
+            },
         )
     }
 
@@ -522,7 +620,12 @@ impl Env {
         self.send(&[ed, ix], &[&oracle])
     }
 
-    pub fn transition_ix(&self, staker: &Pubkey, tx: &[u8; 32], data: impl InstructionData) -> Instruction {
+    pub fn transition_ix(
+        &self,
+        staker: &Pubkey,
+        tx: &[u8; 32],
+        data: impl InstructionData,
+    ) -> Instruction {
         self.ix(
             safu_pool::accounts::ClaimTransition {
                 pool: self.pool(),
@@ -583,9 +686,15 @@ impl Env {
             claim,
         };
         if suspend {
-            self.ix(accounts, safu_pool::instruction::SuspendStake { staker: *staker })
+            self.ix(
+                accounts,
+                safu_pool::instruction::SuspendStake { staker: *staker },
+            )
         } else {
-            self.ix(accounts, safu_pool::instruction::UnsuspendStake { staker: *staker })
+            self.ix(
+                accounts,
+                safu_pool::instruction::UnsuspendStake { staker: *staker },
+            )
         }
     }
 
@@ -597,11 +706,21 @@ impl Env {
                 revoked: pda(&[SEED_REVOKED, self.pool().as_ref(), hash.as_ref()]),
                 system_program: SYSTEM,
             },
-            safu_pool::instruction::RevokeApproval { approval: a.clone(), hash },
+            safu_pool::instruction::RevokeApproval {
+                approval: a.clone(),
+                hash,
+            },
         )
     }
 
-    pub fn override_ix(&self, signer: &Pubkey, staker: &Pubkey, tx: [u8; 32], entitlement: u64, tier: u8) -> Instruction {
+    pub fn override_ix(
+        &self,
+        signer: &Pubkey,
+        staker: &Pubkey,
+        tx: [u8; 32],
+        entitlement: u64,
+        tier: u8,
+    ) -> Instruction {
         let claim = self.claim_addr(staker, &tx);
         self.ix(
             safu_pool::accounts::ApproveOverride {
@@ -612,7 +731,12 @@ impl Env {
                 override_request: self.override_addr(&claim),
                 system_program: SYSTEM,
             },
-            safu_pool::instruction::ApproveOverride { staker: *staker, tx_hash: tx, entitlement, tier },
+            safu_pool::instruction::ApproveOverride {
+                staker: *staker,
+                tx_hash: tx,
+                entitlement,
+                tier,
+            },
         )
     }
 
@@ -686,10 +810,14 @@ impl Env {
         let behind = pool_core::leg::msol_value(supply, price).unwrap();
         let reward = pool_core::apply_bps(behind, bps).unwrap();
         let reserve = self.marinade_u64(m::STATE_AVAILABLE_RESERVE_BALANCE) + reward;
-        let new_price = pool_core::mul_div_floor(behind + reward, m::PRICE_DENOMINATOR as u64, supply).unwrap();
+        let new_price =
+            pool_core::mul_div_floor(behind + reward, m::PRICE_DENOMINATOR as u64, supply).unwrap();
         let key = self.cfg.marinade_state;
         let mut a = self.svm.get_account(&key).unwrap();
-        for (o, v) in [(m::STATE_AVAILABLE_RESERVE_BALANCE, reserve), (m::STATE_MSOL_PRICE, new_price)] {
+        for (o, v) in [
+            (m::STATE_AVAILABLE_RESERVE_BALANCE, reserve),
+            (m::STATE_MSOL_PRICE, new_price),
+        ] {
             a.data[o..o + 8].copy_from_slice(&v.to_le_bytes());
         }
         self.svm.set_account(key, a).unwrap();
@@ -703,7 +831,14 @@ impl Env {
     // ---- B3: Marinade leg and yield
 
     pub fn upkeep_ix(&self, data: impl InstructionData) -> Instruction {
-        self.ix(safu_pool::accounts::Upkeep { pool: self.pool(), vault: self.vault(), leg: self.leg() }, data)
+        self.ix(
+            safu_pool::accounts::Upkeep {
+                pool: self.pool(),
+                vault: self.vault(),
+                leg: self.leg(),
+            },
+            data,
+        )
     }
 
     pub fn claim_yield_ix(&self, staker: &Pubkey, beneficiary: &Pubkey) -> Instruction {
@@ -749,7 +884,9 @@ impl Env {
     /// The pool's mSOL, from its token account.
     pub fn pool_msol_amount(&self) -> u64 {
         let a = self.svm.get_account(&self.pool_msol()).unwrap();
-        anchor_spl::token::TokenAccount::try_deserialize(&mut &a.data[..]).unwrap().amount
+        anchor_spl::token::TokenAccount::try_deserialize(&mut &a.data[..])
+            .unwrap()
+            .amount
     }
 
     pub fn pause(&mut self) {
@@ -783,16 +920,25 @@ impl Env {
     }
     pub fn approve_setting_ix(&self, signer: &Pubkey, key: u8, value: i64) -> Instruction {
         self.ix(
-            safu_pool::accounts::ApproveSetting { co_signer: *signer, pool: self.pool() },
+            safu_pool::accounts::ApproveSetting {
+                co_signer: *signer,
+                pool: self.pool(),
+            },
             safu_pool::instruction::ApproveSetting { key, value },
         )
     }
     pub fn execute_setting_ix(&self, key: u8) -> Instruction {
-        self.ix(safu_pool::accounts::ExecuteSetting { pool: self.pool() }, safu_pool::instruction::ExecuteSetting { key })
+        self.ix(
+            safu_pool::accounts::ExecuteSetting { pool: self.pool() },
+            safu_pool::instruction::ExecuteSetting { key },
+        )
     }
     pub fn cancel_setting_ix(&self, signer: &Pubkey, key: u8) -> Instruction {
         self.ix(
-            safu_pool::accounts::CancelSetting { signer: *signer, pool: self.pool() },
+            safu_pool::accounts::CancelSetting {
+                signer: *signer,
+                pool: self.pool(),
+            },
             safu_pool::instruction::CancelSetting { key },
         )
     }
@@ -828,23 +974,39 @@ pub fn ed25519_ix(signer: &Keypair, message: &[u8], indexes: [u16; 3]) -> Instru
     let pk_off = sig_off + 64;
     let msg_off = pk_off + 32;
     let mut data = vec![1u8, 0u8];
-    for v in [sig_off, indexes[0], pk_off, indexes[1], msg_off, message.len() as u16, indexes[2]] {
+    for v in [
+        sig_off,
+        indexes[0],
+        pk_off,
+        indexes[1],
+        msg_off,
+        message.len() as u16,
+        indexes[2],
+    ] {
         data.extend_from_slice(&v.to_le_bytes());
     }
     data.extend_from_slice(signature.as_ref());
     data.extend_from_slice(signer.pubkey().as_ref());
     data.extend_from_slice(message);
-    Instruction { program_id: ED25519, accounts: vec![], data }
+    Instruction {
+        program_id: ED25519,
+        accounts: vec![],
+        data,
+    }
 }
 
 pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolError) {
     let code = anchor_lang::error::ERROR_CODE_OFFSET + error as u32;
     let err = result.expect_err("transaction should have failed");
-    assert!(err.contains(&format!("Custom({code})")), "expected Custom({code}) ({error:?}), got: {err}");
+    assert!(
+        err.contains(&format!("Custom({code})")),
+        "expected Custom({code}) ({error:?}), got: {err}"
+    );
 }
 
 /// Stake bounds for the configured pool cap at the default settings, from the same rule the program
 /// uses.
 pub fn bounds() -> (u64, u64) {
-    pool_core::stake::bounds(&pool_core::settings::Settings::defaults(config().pool_cap).unwrap()).unwrap()
+    pool_core::stake::bounds(&pool_core::settings::Settings::defaults(config().pool_cap).unwrap())
+        .unwrap()
 }

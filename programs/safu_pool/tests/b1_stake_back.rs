@@ -30,8 +30,16 @@ fn initialize_sets_roles_marinade_and_funds_the_vault() {
 fn initialize_only_by_upgrade_authority() {
     let mut env = Env::uninitialized();
     let intruder = env.funded(10 * SOL);
-    let ix = env.init_ix(&intruder.pubkey(), env.init_args(), env.cfg.marinade_state, env.cfg.msol_mint);
-    assert_err(env.send(&[ix], &[&intruder]), PoolError::NotUpgradeAuthority);
+    let ix = env.init_ix(
+        &intruder.pubkey(),
+        env.init_args(),
+        env.cfg.marinade_state,
+        env.cfg.msol_mint,
+    );
+    assert_err(
+        env.send(&[ix], &[&intruder]),
+        PoolError::NotUpgradeAuthority,
+    );
 }
 
 #[test]
@@ -45,7 +53,12 @@ fn initialize_refuses_overlapping_roles() {
             _ => args.co_signer = args.oracle,
         }
         let admin = env.admin.insecure_clone();
-        let ix = env.init_ix(&admin.pubkey(), args, env.cfg.marinade_state, env.cfg.msol_mint);
+        let ix = env.init_ix(
+            &admin.pubkey(),
+            args,
+            env.cfg.marinade_state,
+            env.cfg.msol_mint,
+        );
         assert_err(env.send(&[ix], &[&admin]), PoolError::RoleCollision);
     }
 }
@@ -56,13 +69,23 @@ fn initialize_refuses_unknown_cluster_and_tiny_cap() {
     let admin = env.admin.insecure_clone();
     let mut args = env.init_args();
     args.cluster = CLUSTER_MAINNET + 1;
-    let ix = env.init_ix(&admin.pubkey(), args, env.cfg.marinade_state, env.cfg.msol_mint);
+    let ix = env.init_ix(
+        &admin.pubkey(),
+        args,
+        env.cfg.marinade_state,
+        env.cfg.msol_mint,
+    );
     assert_err(env.send(&[ix], &[&admin]), PoolError::InvalidCluster);
 
     let mut args = env.init_args();
     // Smallest cap whose min stake rounds to zero.
     args.pool_cap = BPS_DENOMINATOR / MIN_STAKE_BPS - 1;
-    let ix = env.init_ix(&admin.pubkey(), args, env.cfg.marinade_state, env.cfg.msol_mint);
+    let ix = env.init_ix(
+        &admin.pubkey(),
+        args,
+        env.cfg.marinade_state,
+        env.cfg.msol_mint,
+    );
     assert_err(env.send(&[ix], &[&admin]), PoolError::InvalidPoolCap);
 }
 
@@ -71,7 +94,12 @@ fn initialize_refuses_a_fake_marinade_state() {
     let mut env = Env::uninitialized();
     let admin = env.admin.insecure_clone();
     // The mSOL mint is a real account but not owned by Marinade.
-    let ix = env.init_ix(&admin.pubkey(), env.init_args(), env.cfg.msol_mint, env.cfg.msol_mint);
+    let ix = env.init_ix(
+        &admin.pubkey(),
+        env.init_args(),
+        env.cfg.msol_mint,
+        env.cfg.msol_mint,
+    );
     assert_err(env.send(&[ix], &[&admin]), PoolError::WrongMarinadeAccount);
 }
 
@@ -84,7 +112,12 @@ fn initialize_refuses_a_mint_that_is_not_marinades() {
     let mut mint = env.svm.get_account(&env.cfg.msol_mint).unwrap();
     mint.data[4..36].copy_from_slice(fake.pubkey().as_ref());
     env.svm.set_account(fake.pubkey(), mint).unwrap();
-    let ix = env.init_ix(&admin.pubkey(), env.init_args(), env.cfg.marinade_state, fake.pubkey());
+    let ix = env.init_ix(
+        &admin.pubkey(),
+        env.init_args(),
+        env.cfg.marinade_state,
+        fake.pubkey(),
+    );
     assert_err(env.send(&[ix], &[&admin]), PoolError::WrongMarinadeAccount);
 }
 
@@ -94,7 +127,10 @@ fn marinade_fixture_layout_matches_pool_core() {
     let env = Env::uninitialized();
     let d = env.svm.get_account(&env.cfg.marinade_state).unwrap().data;
     assert_eq!(d[..8], pool_core::marinade::ACCOUNT_STATE);
-    assert_eq!(&d[pool_core::marinade::STATE_MSOL_MINT..][..32], env.cfg.msol_mint.as_ref());
+    assert_eq!(
+        &d[pool_core::marinade::STATE_MSOL_MINT..][..32],
+        env.cfg.msol_mint.as_ref()
+    );
     assert!(d.len() >= pool_core::marinade::STATE_MIN_LEN);
 }
 
@@ -109,7 +145,10 @@ fn pause_blocks_stake_and_expires_on_its_own() {
     let s = env.funded(SOL);
     let (min, _) = bounds();
     let ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
-    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::Paused);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::Paused,
+    );
     env.warp(PAUSE_MAX_SECS);
     env.ok(&[ix], &[&s]);
 }
@@ -118,7 +157,13 @@ fn pause_blocks_stake_and_expires_on_its_own() {
 fn only_admin_pauses_and_unpause_needs_a_pause() {
     let mut env = Env::new();
     let other = env.funded(SOL);
-    let ix = env.ix(safu_pool::accounts::AdminOnly { admin: other.pubkey(), pool: env.pool() }, safu_pool::instruction::Pause {});
+    let ix = env.ix(
+        safu_pool::accounts::AdminOnly {
+            admin: other.pubkey(),
+            pool: env.pool(),
+        },
+        safu_pool::instruction::Pause {},
+    );
     assert_err(env.send(&[ix], &[&other]), PoolError::NotAdmin);
     let admin = env.admin.insecure_clone();
     let ix = env.admin_ix(safu_pool::instruction::Unpause {});
@@ -141,13 +186,19 @@ fn stake_moves_sol_into_the_vault_and_books_it() {
     let (_, max) = bounds();
     let s = env.staker(max);
     let r = env.stake_state(&s.pubkey());
-    assert_eq!((r.amount, r.beneficiary, r.staked_at, r.forfeited), (max, s.pubkey(), START, false));
+    assert_eq!(
+        (r.amount, r.beneficiary, r.staked_at, r.forfeited),
+        (max, s.pubkey(), START, false)
+    );
     let p = env.pool_state();
     assert_eq!((p.total_staked, p.total_stakers), (max, 1));
     // `DEPLOY_BPS` of it is staked through Marinade, the rest stays liquid.
     let deployed = pool_core::liquidity::push_amount(max, 0, max, 0).unwrap();
     assert!(deployed > 0);
-    assert_eq!((p.deployed_book, env.vault_liquid()), (deployed, max - deployed));
+    assert_eq!(
+        (p.deployed_book, env.vault_liquid()),
+        (deployed, max - deployed)
+    );
     assert!(p.deployed_msol > 0);
 }
 
@@ -224,12 +275,18 @@ fn set_beneficiary_blocked_while_a_claim_is_open_or_queued() {
     let marker = Keypair::new().pubkey();
     env.edit::<StakeRecord>(&rec, |r| r.active_claim = Some(marker));
     let ix = env.set_beneficiary_ix(&s.pubkey(), new);
-    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::ClaimActive);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::ClaimActive,
+    );
     env.edit::<StakeRecord>(&rec, |r| {
         r.active_claim = None;
         r.reserved_claim = Some(marker);
     });
-    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::ClaimQueuedForStake);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::ClaimQueuedForStake,
+    );
     env.edit::<StakeRecord>(&rec, |r| r.reserved_claim = None);
     env.ok(&[ix], &[&s]);
     assert_eq!(env.stake_state(&s.pubkey()).beneficiary, new);
@@ -258,7 +315,15 @@ fn withdraw_pays_the_beneficiary_and_closes_the_record() {
     // Rent comes back to the staker (the fee is paid by the staker too).
     assert!(env.lamports(&s.pubkey()) > before + rent - SOL / 1_000);
     let p = env.pool_state();
-    assert_eq!((p.total_staked, p.total_stakers, p.deployed_msol, p.deployed_book), (0, 0, 0, 0));
+    assert_eq!(
+        (
+            p.total_staked,
+            p.total_stakers,
+            p.deployed_msol,
+            p.deployed_book
+        ),
+        (0, 0, 0, 0)
+    );
     // The address can stake again: the record is re-created.
     let ix = env.stake_ix(&s.pubkey(), max, s.pubkey());
     env.ok(&[ix], &[&s]);
@@ -302,7 +367,14 @@ fn withdraw_refused_when_forfeited_claimed_queued_or_penalty_locked() {
     ] {
         let now = env.now;
         env.edit::<StakeRecord>(&rec, |r| {
-            *r = StakeRecord { forfeited: false, forfeited_by: None, active_claim: None, reserved_claim: None, penalty_locked_until: 0, ..r.clone() };
+            *r = StakeRecord {
+                forfeited: false,
+                forfeited_by: None,
+                active_claim: None,
+                reserved_claim: None,
+                penalty_locked_until: 0,
+                ..r.clone()
+            };
             match edit {
                 0 => r.forfeited = true,
                 1 => r.active_claim = Some(marker),
@@ -351,7 +423,8 @@ fn withdraw_pays_unpaid_yield_from_the_set_aside() {
     let (_, max) = bounds();
     let s = env.staker(max);
     // One credit of 1% on the stake: index + set-aside + the SOL behind it.
-    let credit = pool_core::yields::credit(max / 100, max, 0, STAKER_YIELD_BPS, BACKER_YIELD_BPS).unwrap();
+    let credit =
+        pool_core::yields::credit(max / 100, max, 0, STAKER_YIELD_BPS, BACKER_YIELD_BPS).unwrap();
     env.edit::<Pool>(&env.pool(), |p| {
         p.staker_yield_index += credit.staker_index_bump;
         p.staker_yield_reserved += credit.staker_share;
@@ -361,7 +434,9 @@ fn withdraw_pays_unpaid_yield_from_the_set_aside() {
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
     let before = env.lamports(&s.pubkey());
     env.ok(&[ix], &[&s]);
-    assert!(env.lamports(&s.pubkey()) + Env::max_unstake_fee(max) >= before + max + credit.staker_share);
+    assert!(
+        env.lamports(&s.pubkey()) + Env::max_unstake_fee(max) >= before + max + credit.staker_share
+    );
     let p = env.pool_state();
     assert_eq!((p.staker_yield_reserved, p.deployed_msol), (0, 0));
 }
@@ -373,14 +448,20 @@ fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
     let (min, _) = bounds();
     let s = env.staker(min);
     let ix = env.emergency_exit_ix(&s.pubkey());
-    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::NotPaused);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::NotPaused,
+    );
     let admin = env.admin.insecure_clone();
     let p = env.admin_ix(safu_pool::instruction::Pause {});
     env.ok(&[p], &[&admin]);
     let rec = env.stake_record(&s.pubkey());
     let until = env.now + PENALTY_LOCK_SECS;
     env.edit::<StakeRecord>(&rec, |r| r.penalty_locked_until = until);
-    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::PenaltyLockActive);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::PenaltyLockActive,
+    );
     env.edit::<StakeRecord>(&rec, |r| r.penalty_locked_until = 0);
     let before = env.lamports(&s.pubkey());
     env.ok(&[ix], &[&s]);
@@ -399,7 +480,10 @@ fn backing_counts_only_after_maturity() {
     let p = env.pool_state();
     assert_eq!((p.total_backed, p.total_backed_pending), (0, 2 * SOL));
     let m = env.mature_ix(&b.pubkey());
-    assert_err(env.send(std::slice::from_ref(&m), &[&b]), PoolError::BackingNotMature);
+    assert_err(
+        env.send(std::slice::from_ref(&m), &[&b]),
+        PoolError::BackingNotMature,
+    );
     env.warp(BACKER_MATURITY_SECS);
     // Permissionless: anyone can mature it.
     let anyone = env.funded(SOL);
@@ -441,12 +525,27 @@ fn backer_withdrawal_request_rules() {
     let mut env = Env::new();
     let b = env.matured_backer(2 * SOL);
     let req = |env: &Env, a| env.request_backer_ix(&b.pubkey(), a);
-    assert_err(env.send(&[req(&env, 0)], &[&b]), PoolError::AmountNotPositive);
-    assert_err(env.send(&[req(&env, 2 * SOL + 1)], &[&b]), PoolError::BackerAmountExceedsBalance);
-    let cancel = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::CancelBackerWithdrawal {});
-    assert_err(env.send(std::slice::from_ref(&cancel), &[&b]), PoolError::NoBackerWithdrawal);
+    assert_err(
+        env.send(&[req(&env, 0)], &[&b]),
+        PoolError::AmountNotPositive,
+    );
+    assert_err(
+        env.send(&[req(&env, 2 * SOL + 1)], &[&b]),
+        PoolError::BackerAmountExceedsBalance,
+    );
+    let cancel = env.backer_only_ix(
+        &b.pubkey(),
+        safu_pool::instruction::CancelBackerWithdrawal {},
+    );
+    assert_err(
+        env.send(std::slice::from_ref(&cancel), &[&b]),
+        PoolError::NoBackerWithdrawal,
+    );
     env.ok(&[req(&env, SOL)], &[&b]);
-    assert_err(env.send(&[req(&env, SOL)], &[&b]), PoolError::BackerWithdrawalPending);
+    assert_err(
+        env.send(&[req(&env, SOL)], &[&b]),
+        PoolError::BackerWithdrawalPending,
+    );
     // Still counted during the notice (rule 2).
     assert_eq!(env.pool_state().total_backed, 2 * SOL);
     env.ok(&[cancel], &[&b]);
@@ -458,14 +557,23 @@ fn backer_withdrawal_waits_for_notice_and_free_capital() {
     let mut env = Env::new();
     let b = env.matured_backer(2 * SOL);
     let complete = env.complete_backer_ix(&b.pubkey());
-    assert_err(env.send(std::slice::from_ref(&complete), &[&b]), PoolError::NoBackerWithdrawal);
+    assert_err(
+        env.send(std::slice::from_ref(&complete), &[&b]),
+        PoolError::NoBackerWithdrawal,
+    );
     let req = env.request_backer_ix(&b.pubkey(), SOL);
     env.ok(&[req], &[&b]);
-    assert_err(env.send(std::slice::from_ref(&complete), &[&b]), PoolError::BackerNoticeNotPassed);
+    assert_err(
+        env.send(std::slice::from_ref(&complete), &[&b]),
+        PoolError::BackerNoticeNotPassed,
+    );
     env.warp(BACKER_NOTICE_SECS);
     // Open claims need more than what would be left (rule 3).
     env.edit::<Pool>(&env.pool(), |p| p.total_allocated = SOL + 1);
-    assert_err(env.send(std::slice::from_ref(&complete), &[&b]), PoolError::CapitalNotFree);
+    assert_err(
+        env.send(std::slice::from_ref(&complete), &[&b]),
+        PoolError::CapitalNotFree,
+    );
     env.edit::<Pool>(&env.pool(), |p| p.total_allocated = SOL);
     let before = env.lamports(&b.pubkey());
     env.ok(&[complete], &[&b]);
@@ -522,7 +630,10 @@ fn a_wallet_belongs_to_one_staker_forever() {
     let ix = env.register_ix(&writer.pubkey(), a, hash(7));
     assert_err(env.send(&[ix], &[&writer]), PoolError::AlreadyRegistered);
     let ix = env.register_ix(&writer.pubkey(), b, hash(7));
-    assert_err(env.send(&[ix], &[&writer]), PoolError::WalletTakenByOtherStaker);
+    assert_err(
+        env.send(&[ix], &[&writer]),
+        PoolError::WalletTakenByOtherStaker,
+    );
 }
 
 #[test]

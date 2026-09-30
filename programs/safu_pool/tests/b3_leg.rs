@@ -40,10 +40,26 @@ fn harvest(env: &mut Env) {
 /// Yield books moved exactly as `yields::credit` splits `amount` over `before`'s capacity.
 fn assert_credited(before: &Pool, after: &Pool) -> u64 {
     let amount = after.total_extracted_yield - before.total_extracted_yield;
-    let c = yields::credit(amount, before.total_staked, before.total_backed, STAKER_YIELD_BPS, BACKER_YIELD_BPS).unwrap();
-    assert_eq!(after.staker_yield_reserved - before.staker_yield_reserved, c.staker_share);
-    assert_eq!(after.backer_yield_reserved - before.backer_yield_reserved, c.backer_share);
-    assert_eq!(after.protocol_yield_balance - before.protocol_yield_balance, c.protocol_share);
+    let c = yields::credit(
+        amount,
+        before.total_staked,
+        before.total_backed,
+        STAKER_YIELD_BPS,
+        BACKER_YIELD_BPS,
+    )
+    .unwrap();
+    assert_eq!(
+        after.staker_yield_reserved - before.staker_yield_reserved,
+        c.staker_share
+    );
+    assert_eq!(
+        after.backer_yield_reserved - before.backer_yield_reserved,
+        c.backer_share
+    );
+    assert_eq!(
+        after.protocol_yield_balance - before.protocol_yield_balance,
+        c.protocol_share
+    );
     amount
 }
 
@@ -54,7 +70,10 @@ fn stakes_deploy_to_the_line_and_small_amounts_wait() {
     let (mut env, _, _) = funded_pool();
     let p = env.pool_state();
     let capacity = p.total_staked + p.total_backed;
-    assert_eq!(p.deployed_book, liquidity::push_amount(capacity, 0, capacity, 0).unwrap());
+    assert_eq!(
+        p.deployed_book,
+        liquidity::push_amount(capacity, 0, capacity, 0).unwrap()
+    );
     assert_eq!(env.pool_msol_amount(), p.deployed_msol);
     assert_eq!(env.vault_liquid(), capacity - p.deployed_book);
     assert_eq!(p.last_harvest_at, env.now);
@@ -73,7 +92,10 @@ fn backing_deploys_only_once_it_counts() {
     let anyone = env.funded(SOL);
     env.ok(&[ix], &[&anyone]);
     let p = env.pool_state();
-    assert_eq!(p.deployed_book, liquidity::push_amount(BACKING, 0, BACKING, 0).unwrap());
+    assert_eq!(
+        p.deployed_book,
+        liquidity::push_amount(BACKING, 0, BACKING, 0).unwrap()
+    );
 }
 
 // ------------------------------------------------------------------ payouts through Marinade
@@ -96,7 +118,10 @@ fn devnet_liquidity_the_payee_pays_marinades_fee_the_pool_does_not() {
     env.ok(&[ix], &[&s]);
     let got = env.lamports(&s.pubkey()) - before;
     let slack = apply_bps(deployed, 1).unwrap() + SOL / 1_000;
-    assert!(got + fee <= max + rent + slack && got + fee + slack >= max + rent, "got {got}, fee {fee}");
+    assert!(
+        got + fee <= max + rent + slack && got + fee + slack >= max + rent,
+        "got {got}, fee {fee}"
+    );
 
     // Rebalance: the pool would pay, so the 5% limit holds and it is refused.
     let b = env.matured_backer(BACKING);
@@ -125,9 +150,15 @@ fn withdraw_unstakes_and_the_payee_pays_marinade_fee() {
     // Principal less Marinade's fee on the unstaked part (rent back, tx fee paid: within 1 bp).
     let got = env.lamports(&s.pubkey()) - before;
     let slack = apply_bps(deployed, 1).unwrap();
-    assert!(got + fee <= max + rent + slack && got + fee + slack + SOL / 1_000 >= max + rent, "got {got}");
+    assert!(
+        got + fee <= max + rent + slack && got + fee + slack + SOL / 1_000 >= max + rent,
+        "got {got}"
+    );
     let p = env.pool_state();
-    assert_eq!((p.deployed_msol, p.deployed_book, p.total_staked), (0, 0, 0));
+    assert_eq!(
+        (p.deployed_msol, p.deployed_book, p.total_staked),
+        (0, 0, 0)
+    );
 }
 
 #[test]
@@ -153,7 +184,10 @@ fn payout_unstake_never_touches_set_aside_yield() {
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     env.ok(&[ix], &[&s]);
     let p = env.pool_state();
-    assert!(p.deployed_book < env.pool_state().deployed_book + 1 && env.vault_liquid() >= p.staker_yield_reserved + p.backer_yield_reserved);
+    assert!(
+        p.deployed_book < env.pool_state().deployed_book + 1
+            && env.vault_liquid() >= p.staker_yield_reserved + p.backer_yield_reserved
+    );
 }
 
 // ------------------------------------------------------------------ harvest
@@ -167,7 +201,10 @@ fn harvest_credits_growth_up_to_the_daily_limit() {
     let after = env.pool_state();
     let credited = assert_credited(&before, &after);
     let limit = yields::harvest_limit(before.deployed_book, SECONDS_PER_DAY).unwrap();
-    assert!(credited > 0 && credited <= limit, "credited {credited}, limit {limit}");
+    assert!(
+        credited > 0 && credited <= limit,
+        "credited {credited}, limit {limit}"
+    );
     assert!(after.staker_yield_reserved > 0 && after.backer_yield_reserved > 0);
     // Book value never moves on a harvest; only mSOL leaves.
     assert_eq!(after.deployed_book, before.deployed_book);
@@ -183,7 +220,10 @@ fn harvest_is_a_no_op_without_growth_while_paused_or_when_marinade_cannot_pay() 
     let (mut env, _, _) = funded_pool();
     let untouched = |env: &Env, p: &Pool| {
         let q = env.pool_state();
-        assert_eq!((q.deployed_msol, q.last_harvest_at, q.total_extracted_yield), (p.deployed_msol, p.last_harvest_at, p.total_extracted_yield));
+        assert_eq!(
+            (q.deployed_msol, q.last_harvest_at, q.total_extracted_yield),
+            (p.deployed_msol, p.last_harvest_at, p.total_extracted_yield)
+        );
     };
     let p = env.pool_state();
     env.warp(SECONDS_PER_DAY);
@@ -233,7 +273,10 @@ fn staker_yield_goes_to_the_beneficiary_and_principal_stays() {
     env.ok(std::slice::from_ref(&ix), &[&s]);
     // Paid from set-aside cash: no unstake, no fee (the tx fee is the staker's).
     assert!(env.lamports(&s.pubkey()) + SOL / 1_000 > before + owed);
-    assert_eq!(env.pool_state().staker_yield_reserved, p.staker_yield_reserved - owed);
+    assert_eq!(
+        env.pool_state().staker_yield_reserved,
+        p.staker_yield_reserved - owed
+    );
     assert_eq!(env.stake_state(&s.pubkey()).amount, r.amount);
     assert_err(env.send(&[ix], &[&s]), PoolError::NothingToClaim);
 }
@@ -248,7 +291,10 @@ fn staker_yield_claim_refusals() {
     let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
     let rec = env.stake_record(&s.pubkey());
     env.edit::<StakeRecord>(&rec, |r| r.forfeited = true);
-    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::StakeForfeited);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::StakeForfeited,
+    );
     env.edit::<StakeRecord>(&rec, |r| r.forfeited = false);
     env.pause();
     assert_err(env.send(&[ix], &[&s]), PoolError::Paused);
@@ -296,7 +342,10 @@ fn rebalance_covers_open_claims_from_marinade() {
     let anyone = env.funded(SOL);
     env.ok(&[ix], &[&anyone]);
     // Book value of the shortfall came back less the pool's Marinade fee (multichain pulls the same).
-    assert!(env.vault_liquid() < entitlement && env.vault_liquid() + Env::max_unstake_fee(SOL / 2) >= entitlement);
+    assert!(
+        env.vault_liquid() < entitlement
+            && env.vault_liquid() + Env::max_unstake_fee(SOL / 2) >= entitlement
+    );
 }
 
 #[test]
@@ -351,7 +400,10 @@ fn treasury_takes_protocol_revenue_within_the_surplus_only() {
     env.edit::<Pool>(&env.pool(), |p| p.protocol_yield_balance = revenue);
     // Counted but not held: claims spent it (multichain W2). No surplus, no withdrawal.
     let ix = env.withdraw_yield_ix(&admin.pubkey(), &treasury, revenue);
-    assert_err(env.send(std::slice::from_ref(&ix), &[&admin]), PoolError::ExceedsYieldBalance);
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&admin]),
+        PoolError::ExceedsYieldBalance,
+    );
     let v = env.vault();
     env.svm.airdrop(&v, revenue).unwrap();
     let over = env.withdraw_yield_ix(&admin.pubkey(), &treasury, revenue + 1);
@@ -401,7 +453,10 @@ fn compute_units_fit_the_client_limit() {
 
     grow(&mut env, 100);
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
-    used.push(("withdraw + harvest + unstake", env.send_cu(&[ix], &[&s]).unwrap()));
+    used.push((
+        "withdraw + harvest + unstake",
+        env.send_cu(&[ix], &[&s]).unwrap(),
+    ));
 
     for (path, cu) in &used {
         eprintln!("CU {path}: {cu}");

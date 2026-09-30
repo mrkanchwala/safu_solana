@@ -27,7 +27,10 @@ pub fn free_liquid(pool: &Pool, vault: &AccountInfo) -> Result<u64> {
 
 /// Typed failure instead of a failed transfer, checked before any state changes.
 pub fn require_free_liquid(pool: &Pool, vault: &AccountInfo, amount: u64) -> Result<()> {
-    require!(free_liquid(pool, vault)? >= amount, PoolError::InsufficientLiquidity);
+    require!(
+        free_liquid(pool, vault)? >= amount,
+        PoolError::InsufficientLiquidity
+    );
     Ok(())
 }
 
@@ -40,7 +43,10 @@ pub fn receive<'info>(
     system_program::transfer(
         CpiContext::new(
             system_program::ID,
-            Transfer { from: from.clone(), to: vault.clone() },
+            Transfer {
+                from: from.clone(),
+                to: vault.clone(),
+            },
         ),
         amount,
     )
@@ -62,7 +68,10 @@ pub fn pay<'info>(
     system_program::transfer(
         CpiContext::new_with_signer(
             system_program::ID,
-            Transfer { from: vault.clone(), to: to.clone() },
+            Transfer {
+                from: vault.clone(),
+                to: to.clone(),
+            },
             seeds,
         ),
         amount,

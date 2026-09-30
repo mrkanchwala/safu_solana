@@ -17,6 +17,12 @@ fn approval_message_matches_the_backend_vector() {
     };
     let message = encode_message(&Pubkey::new_from_array([1; 32]), 1, &approval);
     assert_eq!(message.len(), 151);
-    let hex: String = approval_hash(&message).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, "3fe04ba305e72e46f8fbd1a66e1c5f634f0ab053b98309f7410e62e1a1a13105");
+    let hex: String = approval_hash(&message)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        hex,
+        "3fe04ba305e72e46f8fbd1a66e1c5f634f0ab053b98309f7410e62e1a1a13105"
+    );
 }

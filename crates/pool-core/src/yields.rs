@@ -5,13 +5,17 @@
 //! rounding dust) is protocol revenue. So the set-asides always equal what the indexes owe, to within
 //! per-record floor rounding, which favours the pool.
 
-use crate::params::{BPS_DENOMINATOR, HARVEST_MAX_GROWTH_BPS_PER_DAY, SECONDS_PER_DAY, YIELD_INDEX_PRECISION};
+use crate::params::{
+    BPS_DENOMINATOR, HARVEST_MAX_GROWTH_BPS_PER_DAY, SECONDS_PER_DAY, YIELD_INDEX_PRECISION,
+};
 use crate::{sub, to_u64, CoreError, Result};
 
 /// Yield owed on `amount` of principal since the index read `index_at`. Rounded down.
 pub fn owed(amount: u64, index_now: u128, index_at: u128) -> Result<u64> {
     let delta = index_now.saturating_sub(index_at);
-    let v = (amount as u128).checked_mul(delta).ok_or(CoreError::Overflow)?;
+    let v = (amount as u128)
+        .checked_mul(delta)
+        .ok_or(CoreError::Overflow)?;
     to_u64(v / YIELD_INDEX_PRECISION)
 }
 
@@ -42,18 +46,33 @@ fn side(amount: u64, side_total: u64, capacity: u64, side_bps: u64) -> Result<(u
 
 /// Splits `amount` of new yield between stakers, backers and the protocol, at the live split
 /// settings (`staker_bps` / `backer_bps`).
-pub fn credit(amount: u64, total_staked: u64, total_backed: u64, staker_bps: u64, backer_bps: u64) -> Result<Credit> {
+pub fn credit(
+    amount: u64,
+    total_staked: u64,
+    total_backed: u64,
+    staker_bps: u64,
+    backer_bps: u64,
+) -> Result<Credit> {
     let capacity = crate::capacity(total_staked, total_backed)?;
     if amount == 0 {
         return Ok(Credit::default());
     }
     if capacity == 0 {
-        return Ok(Credit { protocol_share: amount, ..Credit::default() });
+        return Ok(Credit {
+            protocol_share: amount,
+            ..Credit::default()
+        });
     }
     let (staker_index_bump, staker_share) = side(amount, total_staked, capacity, staker_bps)?;
     let (backer_index_bump, backer_share) = side(amount, total_backed, capacity, backer_bps)?;
     let protocol_share = sub(sub(amount, staker_share)?, backer_share)?;
-    Ok(Credit { staker_index_bump, staker_share, backer_index_bump, backer_share, protocol_share })
+    Ok(Credit {
+        staker_index_bump,
+        staker_share,
+        backer_index_bump,
+        backer_share,
+        protocol_share,
+    })
 }
 
 /// Most growth one harvest may book: `book x HARVEST_MAX_GROWTH_BPS_PER_DAY x elapsed / day`.

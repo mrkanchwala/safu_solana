@@ -95,7 +95,10 @@ impl SettingKey {
 
     /// The key in slot `index`; an unused slot is an error.
     pub fn from_index(index: u8) -> Result<Self> {
-        Self::ALL.get(index as usize).copied().ok_or(CoreError::UnknownSetting)
+        Self::ALL
+            .get(index as usize)
+            .copied()
+            .ok_or(CoreError::UnknownSetting)
     }
 
     pub const fn index(self) -> usize {
@@ -113,9 +116,13 @@ impl SettingKey {
             SettingKey::CooldownSecs => (clock(7 * DAY, MIN), clock(30 * DAY, SECONDS_PER_HOUR)),
             SettingKey::VestingSecs => (clock(30 * DAY, MIN), clock(90 * DAY, SECONDS_PER_HOUR)),
             // 25%/day, the default low band.
-            SettingKey::AdmitLowBps | SettingKey::AdmitMidBps | SettingKey::AdmitHighBps => (1, 2_500),
+            SettingKey::AdmitLowBps | SettingKey::AdmitMidBps | SettingKey::AdmitHighBps => {
+                (1, 2_500)
+            }
             // 6%/day ceiling on claim money leaving (multichain).
-            SettingKey::PayoutLowBps | SettingKey::PayoutMidBps | SettingKey::PayoutHighBps => (1, 600),
+            SettingKey::PayoutLowBps | SettingKey::PayoutMidBps | SettingKey::PayoutHighBps => {
+                (1, 600)
+            }
             SettingKey::BackerNoticeSecs => (0, clock(90 * DAY, SECONDS_PER_HOUR)),
             SettingKey::BackerMaturitySecs => (clock(DAY, MIN), clock(30 * DAY, SECONDS_PER_HOUR)),
             SettingKey::PauseMaxSecs => (clock(DAY, MIN), 30 * DAY),
@@ -219,15 +226,20 @@ impl Settings {
         };
         let ok = match key {
             SettingKey::MinStakeBps => {
-                value <= g(SettingKey::MaxStakeBps) && min_stake_positive(g(SettingKey::PoolCap), value)?
+                value <= g(SettingKey::MaxStakeBps)
+                    && min_stake_positive(g(SettingKey::PoolCap), value)?
             }
             SettingKey::MaxStakeBps => value >= g(SettingKey::MinStakeBps),
             SettingKey::PoolCap => min_stake_positive(value, g(SettingKey::MinStakeBps))?,
             SettingKey::AdmitLowBps => value >= g(SettingKey::AdmitMidBps),
-            SettingKey::AdmitMidBps => value <= g(SettingKey::AdmitLowBps) && value >= g(SettingKey::AdmitHighBps),
+            SettingKey::AdmitMidBps => {
+                value <= g(SettingKey::AdmitLowBps) && value >= g(SettingKey::AdmitHighBps)
+            }
             SettingKey::AdmitHighBps => value <= g(SettingKey::AdmitMidBps),
             SettingKey::PayoutLowBps => value >= g(SettingKey::PayoutMidBps),
-            SettingKey::PayoutMidBps => value <= g(SettingKey::PayoutLowBps) && value >= g(SettingKey::PayoutHighBps),
+            SettingKey::PayoutMidBps => {
+                value <= g(SettingKey::PayoutLowBps) && value >= g(SettingKey::PayoutHighBps)
+            }
             SettingKey::PayoutHighBps => value <= g(SettingKey::PayoutMidBps),
             _ => true,
         };

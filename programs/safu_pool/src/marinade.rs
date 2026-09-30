@@ -47,7 +47,11 @@ fn u32_at(d: &[u8], at: usize) -> u32 {
 }
 
 pub fn read_state(state: &AccountInfo, marinade_program: &Pubkey) -> Result<MarinadeState> {
-    require_keys_eq!(*state.owner, *marinade_program, PoolError::WrongMarinadeAccount);
+    require_keys_eq!(
+        *state.owner,
+        *marinade_program,
+        PoolError::WrongMarinadeAccount
+    );
     let d = state.try_borrow_data()?;
     require!(d.len() >= m::STATE_MIN_LEN, PoolError::WrongMarinadeAccount);
     require!(d[..8] == m::ACCOUNT_STATE, PoolError::WrongMarinadeAccount);
@@ -65,9 +69,21 @@ pub fn read_state(state: &AccountInfo, marinade_program: &Pubkey) -> Result<Mari
 }
 
 /// The pool's own Marinade: program, state and mint must be the ones stored at `initialize`.
-pub fn read_pool_state(pool: &Pool, program: &AccountInfo, state: &AccountInfo) -> Result<MarinadeState> {
-    require_keys_eq!(program.key(), pool.marinade_program, PoolError::WrongMarinadeAccount);
-    require_keys_eq!(state.key(), pool.marinade_state, PoolError::WrongMarinadeAccount);
+pub fn read_pool_state(
+    pool: &Pool,
+    program: &AccountInfo,
+    state: &AccountInfo,
+) -> Result<MarinadeState> {
+    require_keys_eq!(
+        program.key(),
+        pool.marinade_program,
+        PoolError::WrongMarinadeAccount
+    );
+    require_keys_eq!(
+        state.key(),
+        pool.marinade_state,
+        PoolError::WrongMarinadeAccount
+    );
     let s = read_state(state, &pool.marinade_program)?;
     require_keys_eq!(s.msol_mint, pool.msol_mint, PoolError::WrongMarinadeAccount);
     Ok(s)
@@ -112,8 +128,16 @@ pub struct MarinadeLeg<'info> {
 impl<'info> MarinadeLeg<'info> {
     /// Checks the accounts the pool is responsible for and reads Marinade's state.
     pub fn state(&self, pool: &Pool) -> Result<MarinadeState> {
-        require_keys_eq!(self.msol_mint.key(), pool.msol_mint, PoolError::WrongMarinadeAccount);
-        require_keys_eq!(self.pool_msol.key(), pool.pool_msol, PoolError::WrongMarinadeAccount);
+        require_keys_eq!(
+            self.msol_mint.key(),
+            pool.msol_mint,
+            PoolError::WrongMarinadeAccount
+        );
+        require_keys_eq!(
+            self.pool_msol.key(),
+            pool.pool_msol,
+            PoolError::WrongMarinadeAccount
+        );
         read_pool_state(pool, &self.marinade_program, &self.marinade_state)
     }
 
@@ -125,11 +149,25 @@ impl<'info> MarinadeLeg<'info> {
 
     /// SOL Marinade's liquidity pool can pay out now (above its rent floor).
     pub fn sol_leg_available(&self) -> Result<u64> {
-        Ok(self.liq_pool_sol_leg.lamports().saturating_sub(crate::vault::rent_floor()?))
+        Ok(self
+            .liq_pool_sol_leg
+            .lamports()
+            .saturating_sub(crate::vault::rent_floor()?))
     }
 
-    fn call(&self, pool: &Pool, pool_key: &Pubkey, vault: &AccountInfo<'info>, data: Vec<u8>, metas: Vec<AccountMeta>) -> Result<()> {
-        let ix = Instruction { program_id: pool.marinade_program, accounts: metas, data };
+    fn call(
+        &self,
+        pool: &Pool,
+        pool_key: &Pubkey,
+        vault: &AccountInfo<'info>,
+        data: Vec<u8>,
+        metas: Vec<AccountMeta>,
+    ) -> Result<()> {
+        let ix = Instruction {
+            program_id: pool.marinade_program,
+            accounts: metas,
+            data,
+        };
         let infos = [
             self.marinade_state.to_account_info(),
             self.msol_mint.to_account_info(),
@@ -151,7 +189,13 @@ impl<'info> MarinadeLeg<'info> {
     }
 
     /// Marinade `deposit`: `lamports` from the vault, mSOL to the pool's account.
-    pub fn deposit(&self, pool: &Pool, pool_key: &Pubkey, vault: &AccountInfo<'info>, lamports: u64) -> Result<()> {
+    pub fn deposit(
+        &self,
+        pool: &Pool,
+        pool_key: &Pubkey,
+        vault: &AccountInfo<'info>,
+        lamports: u64,
+    ) -> Result<()> {
         let mut data = m::IX_DEPOSIT.to_vec();
         data.extend_from_slice(&lamports.to_le_bytes());
         let metas = vec![
@@ -171,7 +215,13 @@ impl<'info> MarinadeLeg<'info> {
     }
 
     /// Marinade `liquid_unstake`: `msol` from the pool's account, SOL (less Marinade's fee) to the vault.
-    pub fn liquid_unstake(&self, pool: &Pool, pool_key: &Pubkey, vault: &AccountInfo<'info>, msol: u64) -> Result<()> {
+    pub fn liquid_unstake(
+        &self,
+        pool: &Pool,
+        pool_key: &Pubkey,
+        vault: &AccountInfo<'info>,
+        msol: u64,
+    ) -> Result<()> {
         let mut data = m::IX_LIQUID_UNSTAKE.to_vec();
         data.extend_from_slice(&msol.to_le_bytes());
         let metas = vec![

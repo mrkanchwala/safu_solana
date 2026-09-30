@@ -65,21 +65,37 @@ const PUBKEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
 
 fn read_u16(data: &[u8], at: usize) -> Result<u16> {
-    let end = at.checked_add(2).ok_or(PoolError::MalformedEd25519Instruction)?;
-    let b = data.get(at..end).ok_or(PoolError::MalformedEd25519Instruction)?;
+    let end = at
+        .checked_add(2)
+        .ok_or(PoolError::MalformedEd25519Instruction)?;
+    let b = data
+        .get(at..end)
+        .ok_or(PoolError::MalformedEd25519Instruction)?;
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
 fn slice_at(data: &[u8], offset: u16, len: usize) -> Result<&[u8]> {
     let start = offset as usize;
-    let end = start.checked_add(len).ok_or(PoolError::MalformedEd25519Instruction)?;
-    Ok(data.get(start..end).ok_or(PoolError::MalformedEd25519Instruction)?)
+    let end = start
+        .checked_add(len)
+        .ok_or(PoolError::MalformedEd25519Instruction)?;
+    Ok(data
+        .get(start..end)
+        .ok_or(PoolError::MalformedEd25519Instruction)?)
 }
 
 /// Checks the raw data of the precompile instruction at `own_index`. Pure: no sysvar access, so
 /// every malformed shape is unit-testable.
-pub fn check_ed25519_data(data: &[u8], own_index: u16, expected_signer: &Pubkey, expected_message: &[u8]) -> Result<()> {
-    require!(data.len() >= DATA_START, PoolError::MalformedEd25519Instruction);
+pub fn check_ed25519_data(
+    data: &[u8],
+    own_index: u16,
+    expected_signer: &Pubkey,
+    expected_message: &[u8],
+) -> Result<()> {
+    require!(
+        data.len() >= DATA_START,
+        PoolError::MalformedEd25519Instruction
+    );
     require!(data[0] == 1, PoolError::WrongSignatureCount);
     require!(data[1] == 0, PoolError::MalformedEd25519Instruction);
 
@@ -99,23 +115,48 @@ pub fn check_ed25519_data(data: &[u8], own_index: u16, expected_signer: &Pubkey,
     );
     slice_at(data, signature_offset, SIGNATURE_LEN)?;
     let pubkey = slice_at(data, pubkey_offset, PUBKEY_LEN)?;
-    require!(pubkey == expected_signer.as_ref(), PoolError::WrongOracleSigner);
-    require!(message_size as usize == expected_message.len(), PoolError::ApprovalMessageMismatch);
+    require!(
+        pubkey == expected_signer.as_ref(),
+        PoolError::WrongOracleSigner
+    );
+    require!(
+        message_size as usize == expected_message.len(),
+        PoolError::ApprovalMessageMismatch
+    );
     let message = slice_at(data, message_offset, message_size as usize)?;
-    require!(message == expected_message, PoolError::ApprovalMessageMismatch);
+    require!(
+        message == expected_message,
+        PoolError::ApprovalMessageMismatch
+    );
     Ok(())
 }
 
 /// Finds the precompile instruction directly before the current top-level instruction and checks it.
-pub fn verify_preceding_ed25519(instructions_sysvar: &AccountInfo, expected_signer: &Pubkey, expected_message: &[u8]) -> Result<()> {
+pub fn verify_preceding_ed25519(
+    instructions_sysvar: &AccountInfo,
+    expected_signer: &Pubkey,
+    expected_message: &[u8],
+) -> Result<()> {
     // Top-level only: the sysvar's "current index" names the outer instruction, so a CPI caller could
     // otherwise borrow a neighbouring precompile instruction whose meaning it does not control.
-    require!(get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT, PoolError::ApprovalNotTopLevel);
+    require!(
+        get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT,
+        PoolError::ApprovalNotTopLevel
+    );
     let current = load_current_index_checked(instructions_sysvar)?;
-    let own_index = current.checked_sub(1).ok_or(PoolError::MissingEd25519Instruction)?;
+    let own_index = current
+        .checked_sub(1)
+        .ok_or(PoolError::MissingEd25519Instruction)?;
     let ix = load_instruction_at_checked(own_index as usize, instructions_sysvar)
         .map_err(|_| PoolError::MissingEd25519Instruction)?;
-    require_keys_eq!(ix.program_id, solana_sdk_ids::ed25519_program::ID, PoolError::MissingEd25519Instruction);
-    require!(ix.accounts.is_empty(), PoolError::MalformedEd25519Instruction);
+    require_keys_eq!(
+        ix.program_id,
+        solana_sdk_ids::ed25519_program::ID,
+        PoolError::MissingEd25519Instruction
+    );
+    require!(
+        ix.accounts.is_empty(),
+        PoolError::MalformedEd25519Instruction
+    );
     check_ed25519_data(&ix.data, own_index, expected_signer, expected_message)
 }

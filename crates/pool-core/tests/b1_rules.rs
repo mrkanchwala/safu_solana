@@ -24,21 +24,42 @@ fn stake_edges() {
     let (min, max) = stake::bounds(&settings(CAP)).unwrap();
     assert_eq!(stake::check_new_stake(min, 0, &settings(CAP)), Ok(()));
     assert_eq!(stake::check_new_stake(max, 0, &settings(CAP)), Ok(()));
-    assert_eq!(stake::check_new_stake(min - 1, 0, &settings(CAP)), Err(CoreError::StakeOutOfRange));
-    assert_eq!(stake::check_new_stake(max + 1, 0, &settings(CAP)), Err(CoreError::StakeOutOfRange));
-    assert_eq!(stake::check_new_stake(0, 0, &settings(CAP)), Err(CoreError::StakeOutOfRange));
-    assert_eq!(stake::check_new_stake(max, CAP - max, &settings(CAP)), Ok(()));
-    assert_eq!(stake::check_new_stake(max, CAP - max + 1, &settings(CAP)), Err(CoreError::PoolCapExceeded));
+    assert_eq!(
+        stake::check_new_stake(min - 1, 0, &settings(CAP)),
+        Err(CoreError::StakeOutOfRange)
+    );
+    assert_eq!(
+        stake::check_new_stake(max + 1, 0, &settings(CAP)),
+        Err(CoreError::StakeOutOfRange)
+    );
+    assert_eq!(
+        stake::check_new_stake(0, 0, &settings(CAP)),
+        Err(CoreError::StakeOutOfRange)
+    );
+    assert_eq!(
+        stake::check_new_stake(max, CAP - max, &settings(CAP)),
+        Ok(())
+    );
+    assert_eq!(
+        stake::check_new_stake(max, CAP - max + 1, &settings(CAP)),
+        Err(CoreError::PoolCapExceeded)
+    );
 }
 
 #[test]
 fn backer_rule_3() {
     assert_eq!(pool_core::check_capital_free(60, 100, 40), Ok(()));
-    assert_eq!(pool_core::check_capital_free(61, 100, 40), Err(CoreError::CapitalNotFree));
+    assert_eq!(
+        pool_core::check_capital_free(61, 100, 40),
+        Err(CoreError::CapitalNotFree)
+    );
     // Saturating: taking more than the capacity leaves zero, which still covers zero claims (the last
     // staker out after a Marinade loss); any open claim then blocks it.
     assert_eq!(pool_core::check_capital_free(0, 10, 11), Ok(()));
-    assert_eq!(pool_core::check_capital_free(1, 10, 11), Err(CoreError::CapitalNotFree));
+    assert_eq!(
+        pool_core::check_capital_free(1, 10, 11),
+        Err(CoreError::CapitalNotFree)
+    );
 }
 
 #[test]
@@ -71,7 +92,10 @@ fn owed_follows_the_index_additively() {
 
 #[test]
 fn harvest_limit_is_10bp_per_day() {
-    assert_eq!(yields::harvest_limit(10 * SOL, SECONDS_PER_DAY), Ok(10 * SOL / 1_000));
+    assert_eq!(
+        yields::harvest_limit(10 * SOL, SECONDS_PER_DAY),
+        Ok(10 * SOL / 1_000)
+    );
     assert_eq!(yields::harvest_limit(10 * SOL, 0), Ok(0));
     assert_eq!(yields::harvest_limit(10 * SOL, -5), Ok(0));
 }
@@ -86,7 +110,10 @@ fn buffer_and_push_lines() {
     // Below AUTO_PUSH_MIN_BPS of capacity: skipped.
     assert_eq!(liquidity::push_amount(SOL / 20, 0, 10 * SOL, 0), Ok(0));
     // Open claims keep their cash.
-    assert_eq!(liquidity::push_amount(5 * SOL, 4 * SOL, 10 * SOL, 0), Ok(SOL));
+    assert_eq!(
+        liquidity::push_amount(5 * SOL, 4 * SOL, 10 * SOL, 0),
+        Ok(SOL)
+    );
     assert_eq!(liquidity::free_liquid(5, 7), 0);
 }
 

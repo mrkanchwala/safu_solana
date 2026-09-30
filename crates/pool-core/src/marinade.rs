@@ -39,7 +39,12 @@ pub const ACCOUNT_STATE: [u8; 8] = [216, 146, 107, 94, 104, 75, 182, 177];
 /// Marinade's `liquid_unstake` fee in bps (`LiqPool::linear_fee`): the minimum once the SOL left in its
 /// liquidity pool after the unstake is at or above the target, rising linearly to the maximum as that
 /// SOL falls to zero. Clients show it before a payout that needs an unstake.
-pub fn unstake_fee_bps(sol_left_after: u64, liquidity_target: u64, min_fee_bps: u32, max_fee_bps: u32) -> u32 {
+pub fn unstake_fee_bps(
+    sol_left_after: u64,
+    liquidity_target: u64,
+    min_fee_bps: u32,
+    max_fee_bps: u32,
+) -> u32 {
     if sol_left_after >= liquidity_target || liquidity_target == 0 {
         return min_fee_bps;
     }

@@ -17,7 +17,9 @@ pub fn tier_ratio(tier: u8) -> Result<u64> {
 
 /// Most a claim on `stake` can pay: `stake x ratio x TIER_COVERAGE_BPS / BPS`.
 pub fn tier_cap(stake: u64, tier: u8) -> Result<u64> {
-    let raw = stake.checked_mul(tier_ratio(tier)?).ok_or(CoreError::Overflow)?;
+    let raw = stake
+        .checked_mul(tier_ratio(tier)?)
+        .ok_or(CoreError::Overflow)?;
     apply_bps(raw, TIER_COVERAGE_BPS)
 }
 
@@ -42,7 +44,11 @@ pub fn check_hack_time(hack_ts: i64, staked_at: i64, now: i64, window_now: i64) 
     if hack_ts < staked_at {
         return Err(CoreError::HackPredatesStake);
     }
-    if window_now > hack_ts.checked_add(CLAIM_WINDOW_SECS).ok_or(CoreError::Overflow)? {
+    if window_now
+        > hack_ts
+            .checked_add(CLAIM_WINDOW_SECS)
+            .ok_or(CoreError::Overflow)?
+    {
         return Err(CoreError::ClaimWindowExpired);
     }
     Ok(())
@@ -53,7 +59,11 @@ pub fn check_deadline(deadline: i64, now: i64) -> Result<()> {
     if now > deadline {
         return Err(CoreError::SignatureExpired);
     }
-    if deadline > now.checked_add(MAX_APPROVAL_WINDOW_SECS).ok_or(CoreError::Overflow)? {
+    if deadline
+        > now
+            .checked_add(MAX_APPROVAL_WINDOW_SECS)
+            .ok_or(CoreError::Overflow)?
+    {
         return Err(CoreError::SignatureDeadlineTooFar);
     }
     Ok(())
@@ -94,7 +104,13 @@ pub fn stress_cap(capacity: u64, allocated: u64, rates: Rates) -> Result<u64> {
 /// A claim fits now: the pool stays solvent and today's admissions stay under the stress cap.
 /// `false` means queue, not reject.
 /// `rates` are the live admit settings.
-pub fn admits(entitlement: u64, capacity: u64, allocated: u64, day_admitted: u64, rates: Rates) -> Result<bool> {
+pub fn admits(
+    entitlement: u64,
+    capacity: u64,
+    allocated: u64,
+    day_admitted: u64,
+    rates: Rates,
+) -> Result<bool> {
     let solvent = add(allocated, entitlement)? <= capacity;
     let under_cap = add(day_admitted, entitlement)? <= stress_cap(capacity, allocated, rates)?;
     Ok(solvent && under_cap)

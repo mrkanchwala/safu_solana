@@ -121,7 +121,10 @@ mod tests {
     fn divide_by_zero_and_overflow_are_errors() {
         assert_eq!(mul_div_floor(1, 1, 0), Err(CoreError::DivideByZero));
         assert_eq!(mul_div_ceil(1, 1, 0), Err(CoreError::DivideByZero));
-        assert_eq!(mul_div_floor(u64::MAX, u64::MAX, 1), Err(CoreError::Overflow));
+        assert_eq!(
+            mul_div_floor(u64::MAX, u64::MAX, 1),
+            Err(CoreError::Overflow)
+        );
     }
 
     #[test]

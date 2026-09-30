@@ -28,7 +28,13 @@ pub struct Upkeep<'info> {
 pub fn harvest(ctx: Context<Upkeep>) -> Result<()> {
     let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();
-    leg::harvest(&mut ctx.accounts.pool, &pool_key, &ctx.accounts.leg, &vault, now()?)?;
+    leg::harvest(
+        &mut ctx.accounts.pool,
+        &pool_key,
+        &ctx.accounts.leg,
+        &vault,
+        now()?,
+    )?;
     Ok(())
 }
 
@@ -43,9 +49,18 @@ pub fn rebalance(ctx: Context<Upkeep>) -> Result<()> {
     require!(!pool.is_paused(now), PoolError::Paused);
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     let free = vault::free_liquid(pool, &vault)?;
-    let shortfall = liquidity::rebalance_shortfall(free, pool.total_allocated, capacity, pool.deployed_book).core()?;
+    let shortfall =
+        liquidity::rebalance_shortfall(free, pool.total_allocated, capacity, pool.deployed_book)
+            .core()?;
     if shortfall > 0 && pool.deployed_msol > 0 {
-        leg::pull(pool, &pool_key, &ctx.accounts.leg, &vault, add(free, shortfall).core()?, false)?;
+        leg::pull(
+            pool,
+            &pool_key,
+            &ctx.accounts.leg,
+            &vault,
+            add(free, shortfall).core()?,
+            false,
+        )?;
         return Ok(());
     }
     let pushed = leg::push_idle(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
@@ -82,7 +97,10 @@ pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(super::now()?), PoolError::Paused);
     require!(amount > 0, PoolError::AmountNotPositive);
-    require!(amount <= pool.protocol_yield_balance, PoolError::ExceedsYieldBalance);
+    require!(
+        amount <= pool.protocol_yield_balance,
+        PoolError::ExceedsYieldBalance
+    );
     let held = add(vault::liquid_balance(&vault)?, pool.deployed_book).core()?;
     let owed = [
         pool.total_backed,
@@ -94,10 +112,16 @@ pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
     .into_iter()
     .try_fold(pool.total_staked, add)
     .core()?;
-    require!(amount <= yields::protocol_surplus(held, owed), PoolError::ExceedsYieldBalance);
+    require!(
+        amount <= yields::protocol_surplus(held, owed),
+        PoolError::ExceedsYieldBalance
+    );
 
     pool.protocol_yield_balance = sub(pool.protocol_yield_balance, amount).core()?;
-    emit!(YieldWithdrawn { treasury: pool.treasury, amount });
+    emit!(YieldWithdrawn {
+        treasury: pool.treasury,
+        amount
+    });
     let to = ctx.accounts.treasury.to_account_info();
     leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, amount)?;
     Ok(())

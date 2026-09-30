@@ -30,7 +30,9 @@ pub fn msol_for(lamports: u64, book: u64, deployed: u64) -> Result<u64> {
 /// mSOL a harvest unstakes: growth above book, capped by the daily growth limit, rounded down.
 pub fn harvest_msol(deployed: u64, book: u64, price: u64, elapsed_secs: i64) -> Result<u64> {
     let value = msol_value(deployed, price)?;
-    let growth = value.saturating_sub(book).min(yields::harvest_limit(book, elapsed_secs)?);
+    let growth = value
+        .saturating_sub(book)
+        .min(yields::harvest_limit(book, elapsed_secs)?);
     if growth == 0 {
         return Ok(0);
     }
@@ -62,10 +64,19 @@ pub struct Redeem {
 /// value, `payee_part` = the shortfall a payment needed (0 for a pool rebalance). The payee pays the
 /// fee on the part the unstake covers (rounded up) and takes what the unstake returns; the rest of the
 /// fee is the pool's. So a payment never exceeds the SOL that exists for it.
-pub fn settle_redeem(expected: u64, received: u64, principal: u64, payee_part: u64) -> Result<Redeem> {
+pub fn settle_redeem(
+    expected: u64,
+    received: u64,
+    principal: u64,
+    payee_part: u64,
+) -> Result<Redeem> {
     let fee = expected.saturating_sub(received);
     let covered = payee_part.min(expected);
-    let fee_share = if expected == 0 { 0 } else { mul_div_ceil(fee, covered, expected)?.min(fee) };
+    let fee_share = if expected == 0 {
+        0
+    } else {
+        mul_div_ceil(fee, covered, expected)?.min(fee)
+    };
     let payee_fee = crate::add(fee_share, payee_part - covered)?;
     // Pool's result: SOL in (plus what the payee covered) against the book value that left.
     let net = received as i128 + payee_fee as i128 - principal as i128;

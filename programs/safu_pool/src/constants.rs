@@ -117,7 +117,8 @@ pub const SEED_COVERED: &[u8] = b"covered";
 pub const SEED_STAKER_WALLETS: &[u8] = b"staker_wallets";
 
 /// The pool's asset today (`Pool::asset_mint`): the native SOL mint address.
-pub const NATIVE_SOL_MINT: Pubkey = anchor_lang::prelude::pubkey!("So11111111111111111111111111111111111111112");
+pub const NATIVE_SOL_MINT: Pubkey =
+    anchor_lang::prelude::pubkey!("So11111111111111111111111111111111111111112");
 
 // Oracle approval domain tag (version it when the message layout changes).
 #[constant]

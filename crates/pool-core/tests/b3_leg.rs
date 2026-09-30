@@ -59,7 +59,10 @@ fn payee_pays_the_fee_on_their_part_only() {
     assert_eq!((r.payee_fee, r.loss), (0, 2 * SOL / 100));
     // Growth covers the pool's fee: the rest is yield.
     let r = settle_redeem(2 * SOL, 2 * SOL - 2 * SOL / 100, SOL, SOL).unwrap();
-    assert_eq!((r.payee_fee, r.gain, r.loss), (SOL / 100, SOL - SOL / 100, 0));
+    assert_eq!(
+        (r.payee_fee, r.gain, r.loss),
+        (SOL / 100, SOL - SOL / 100, 0)
+    );
 }
 
 #[test]
@@ -73,12 +76,24 @@ fn whole_position_short_of_the_payment_costs_the_payee_the_gap() {
 fn rebalance_covers_claims_or_the_line_whichever_is_larger() {
     let cap = 10 * SOL;
     let line = pool_core::apply_bps(cap, DEPLOY_BPS).unwrap();
-    assert_eq!(liquidity::rebalance_shortfall(SOL, 3 * SOL, cap, line).unwrap(), 2 * SOL);
-    assert_eq!(liquidity::rebalance_shortfall(5 * SOL, 3 * SOL, cap, line + SOL).unwrap(), SOL);
-    assert_eq!(liquidity::rebalance_shortfall(5 * SOL, 3 * SOL, cap, line).unwrap(), 0);
+    assert_eq!(
+        liquidity::rebalance_shortfall(SOL, 3 * SOL, cap, line).unwrap(),
+        2 * SOL
+    );
+    assert_eq!(
+        liquidity::rebalance_shortfall(5 * SOL, 3 * SOL, cap, line + SOL).unwrap(),
+        SOL
+    );
+    assert_eq!(
+        liquidity::rebalance_shortfall(5 * SOL, 3 * SOL, cap, line).unwrap(),
+        0
+    );
     // After a push nothing is short, and after that pull nothing is left to push.
     let pushed = liquidity::push_amount(5 * SOL, 3 * SOL, cap, 0).unwrap();
-    assert_eq!(liquidity::rebalance_shortfall(5 * SOL - pushed, 3 * SOL, cap, pushed).unwrap(), 0);
+    assert_eq!(
+        liquidity::rebalance_shortfall(5 * SOL - pushed, 3 * SOL, cap, pushed).unwrap(),
+        0
+    );
 }
 
 proptest! {

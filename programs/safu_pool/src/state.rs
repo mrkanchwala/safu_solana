@@ -10,7 +10,9 @@ pub const ACCOUNT_VERSION: u8 = 1;
 
 /// A setting change on its way: proposed by the admin, approved by the co-signer (starting the
 /// timelock), executed by anyone after `eta`.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace,
+)]
 pub struct PendingSetting {
     pub value: i64,
     /// Earliest execution; 0 until approved.
@@ -102,12 +104,19 @@ impl Pool {
 
     /// The live settings: the one read path for every adjustable number.
     pub fn settings(&self) -> Settings {
-        Settings { values: self.settings }
+        Settings {
+            values: self.settings,
+        }
     }
 
     /// Seconds spent paused by time `t` (see `pool_core::settings::paused_secs_at`).
     pub fn paused_secs_at(&self, t: i64) -> i64 {
-        settings::paused_secs_at(self.paused_before, self.pause_started_at, self.paused_until, t)
+        settings::paused_secs_at(
+            self.paused_before,
+            self.pause_started_at,
+            self.paused_until,
+            t,
+        )
     }
 
     /// Claim clock for a window that started when the paused total was `mark`.
@@ -194,7 +203,9 @@ pub struct CoveredWallet {
 
 /// Claim lifecycle (multichain `ClaimStatus`). `Unused` is the zero value of a fresh account (an
 /// override approval can create the account before the claim exists).
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default,
+)]
 pub enum ClaimStatus {
     #[default]
     Unused,

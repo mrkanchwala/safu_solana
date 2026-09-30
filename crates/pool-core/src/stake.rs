@@ -6,7 +6,10 @@ use crate::{add, apply_bps, sub, CoreError, Result};
 /// `(min, max)` stake in lamports under the live settings.
 pub fn bounds(s: &Settings) -> Result<(u64, u64)> {
     let cap = s.pool_cap();
-    Ok((apply_bps(cap, s.amount(SettingKey::MinStakeBps))?, apply_bps(cap, s.amount(SettingKey::MaxStakeBps))?))
+    Ok((
+        apply_bps(cap, s.amount(SettingKey::MinStakeBps))?,
+        apply_bps(cap, s.amount(SettingKey::MaxStakeBps))?,
+    ))
 }
 
 /// A new stake of `amount` is in bounds and keeps total staked within the cap.
