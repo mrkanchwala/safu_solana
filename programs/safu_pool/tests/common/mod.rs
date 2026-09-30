@@ -310,6 +310,27 @@ impl Env {
         r
     }
 
+    /// Sends and returns the transaction logs (events are `Program data:` lines).
+    pub fn send_logs(
+        &mut self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+    ) -> Result<Vec<String>, String> {
+        let msg = Message::new_with_blockhash(
+            ixs,
+            Some(&signers[0].pubkey()),
+            &self.svm.latest_blockhash(),
+        );
+        let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), signers).unwrap();
+        let r = self
+            .svm
+            .send_transaction(tx)
+            .map(|m| m.logs)
+            .map_err(|e| format!("{:?} | logs: {:?}", e.err, e.meta.logs));
+        self.svm.expire_blockhash();
+        r
+    }
+
     pub fn ok(&mut self, ixs: &[Instruction], signers: &[&Keypair]) {
         if let Err(e) = self.send(ixs, signers) {
             panic!("transaction should have succeeded: {e}");

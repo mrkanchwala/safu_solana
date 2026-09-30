@@ -80,6 +80,9 @@ struct World {
     /// lets the books run short as well, so it is counted and allowed, not failed.
     unassigned_loss: u64,
     last_unassigned: u64,
+    /// Every Marinade loss the pool booked, from its `DeploymentLoss` events. With no stakers left
+    /// to mark it off (`total_staked` saturates at zero) it shows only here.
+    marinade_loss: u64,
     max_gap: u64,
     trace: Vec<String>,
 }
@@ -122,6 +125,7 @@ impl World {
             paid: 0,
             unassigned_loss: 0,
             last_unassigned: 0,
+            marinade_loss: 0,
             max_gap: 0,
             trace: Vec::new(),
         }
@@ -180,7 +184,26 @@ impl World {
         ixs: &[anchor_lang::solana_program::instruction::Instruction],
         who: &Keypair,
     ) -> bool {
-        self.env.send(ixs, &[who]).is_ok()
+        // Counts any Marinade loss the pool booked (`DeploymentLoss` events).
+        use anchor_lang::Discriminator;
+        use base64::Engine;
+        let Ok(logs) = self.env.send_logs(ixs, &[who]) else {
+            return false;
+        };
+        let disc = safu_pool::events::DeploymentLoss::DISCRIMINATOR;
+        for line in logs {
+            let Some(b64) = line.strip_prefix("Program data: ") else {
+                continue;
+            };
+            let Ok(d) = base64::engine::general_purpose::STANDARD.decode(b64) else {
+                continue;
+            };
+            if d.len() >= disc.len() + 8 && &d[..disc.len()] == disc {
+                let at = disc.len();
+                self.marinade_loss += u64::from_le_bytes(d[at..at + 8].try_into().unwrap());
+            }
+        }
+        true
     }
 
     /// A claim not yet finished (mostly), so claim steps reach the whole path.
@@ -594,10 +617,17 @@ impl World {
         self.last_unassigned = unassigned;
         let gap = owed.saturating_sub(assets);
         self.max_gap = self.max_gap.max(gap);
-        if gap > self.paid + self.unassigned_loss {
+        if gap > self.paid + self.marinade_loss {
             return Err(format!(
-                "books {owed} > held {assets} + claims paid {} + unassigned loss {}",
-                self.paid, self.unassigned_loss
+                "books {owed} > held {assets} + claims paid {} + Marinade loss {}",
+                self.paid, self.marinade_loss
+            ));
+        }
+        // Every loss that left the stake records full was booked as a Marinade loss.
+        if self.unassigned_loss > self.marinade_loss {
+            return Err(format!(
+                "stake records exceed total_staked by {} with only {} Marinade loss booked",
+                self.unassigned_loss, self.marinade_loss
             ));
         }
         // Settings stay in range and in order.
@@ -710,7 +740,7 @@ fn run_episode(
             return Err(format!("seed {seed} step {i}: {msg}\n{tail}"));
         }
     }
-    Ok((w.max_gap, w.unassigned_loss))
+    Ok((w.max_gap, w.marinade_loss))
 }
 
 #[test]
@@ -758,7 +788,7 @@ fn fuzz_pool() {
         "episodes {n}, steps {}, largest books-over-holdings gap {max_gap} lamports",
         n * STEPS as u64
     );
-    println!("F1 unassigned Marinade loss in {loss_eps} episodes (first seed {first_loss:?})");
+    println!("F1 Marinade loss booked in {loss_eps} episodes (first seed {first_loss:?})");
     for (name, (tried, went)) in &stats {
         println!("  {name:<28} tried {tried:>7}  went through {went:>7}");
     }
