@@ -7,3 +7,4 @@ node_modules/
 # Keypairs never enter git. Throwaway devnet keys live outside the repo.
 *-keypair.json
 keys/
+.localnet/

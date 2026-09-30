@@ -21,4 +21,7 @@ NO_DNA=1 anchor build -- --features demo && cargo test -p safu_pool --features d
 ./scripts/check_no_hardcodes.sh
 ```
 
+Local chain for the claim backend: `./scripts/localnet.sh` (demo build, Marinade loaded from the
+test fixtures, fresh ledger each start). `config/pool.localnet.json` points clients at it.
+
 Apache-2.0.
