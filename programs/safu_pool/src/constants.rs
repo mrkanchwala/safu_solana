@@ -41,6 +41,8 @@ pub const MAX_STAKE_BPS: u64 = p::MAX_STAKE_BPS;
 #[constant]
 pub const MAX_COVERED_WALLETS: u8 = p::MAX_COVERED_WALLETS;
 #[constant]
+pub const MAX_TXIDS_PER_CLAIM: u8 = p::MAX_TXIDS_PER_CLAIM;
+#[constant]
 pub const TIER_A: u8 = p::TIER_A;
 #[constant]
 pub const TIER_B: u8 = p::TIER_B;

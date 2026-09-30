@@ -69,8 +69,12 @@ pub const BACKER_NOTICE_SECS: i64 = clock(30 * SECONDS_PER_DAY, SECONDS_PER_MINU
 pub const MIN_STAKE_BPS: u64 = 10;
 pub const MAX_STAKE_BPS: u64 = 100;
 
-/// Covered wallets per staker, forever (key-decisions: 3 wallets per staker).
-pub const MAX_COVERED_WALLETS: u8 = 3;
+/// Covered wallets per staker, forever. Solana pool: 1 (founder, 2026-09-30). Multichain: 3.
+pub const MAX_COVERED_WALLETS: u8 = 1;
+
+/// Drain transactions one claim may list. The program sees one claim either way: the claim API checks
+/// this, and the site reads it from the IDL. Solana pool: 5 (founder, 2026-09-30). Multichain: 20.
+pub const MAX_TXIDS_PER_CLAIM: u8 = 5;
 
 // -----------------------------------------------------------------------
 // Tiers: coverage = stake x ratio x TIER_COVERAGE_BPS / BPS_DENOMINATOR. Tier codes 1=A, 2=B, 3=C.

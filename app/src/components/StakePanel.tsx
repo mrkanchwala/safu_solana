@@ -16,6 +16,7 @@ import { TxStatus } from "./TxStatus";
 // wallets proven by a self-transfer; the staking wallet itself can never be one (burn-wallet staking,
 // same rule as the multichain site, enforced by the claim API too).
 const MAX_COVERED_WALLETS = Number(num("MAX_COVERED_WALLETS"));
+const WALLETS_TEXT = MAX_COVERED_WALLETS === 1 ? "1 wallet" : `${MAX_COVERED_WALLETS} wallets`;
 const RATIOS = [num("TIER_A_RATIO"), num("TIER_B_RATIO"), num("TIER_C_RATIO")];
 
 export function FeeNote({ bps }: { bps: number | null }) {
@@ -87,7 +88,7 @@ export function StakePanel() {
     setWalletMsg(null);
     if (!staker) return setWalletMsg("Connect a wallet first.");
     if (!live) return setWalletMsg("Stake first, then add the wallets you want covered.");
-    if (coveredWallets.length >= MAX_COVERED_WALLETS) return setWalletMsg(`You can cover at most ${MAX_COVERED_WALLETS} wallets.`);
+    if (coveredWallets.length >= MAX_COVERED_WALLETS) return setWalletMsg(`You can cover at most ${WALLETS_TEXT}.`);
     const w = newWallet.trim();
     if (!w) return setWalletMsg("Enter a wallet address.");
     if (w === staker) return setWalletMsg("A covered wallet can't be your staking wallet. Cover the wallets that hold your money.");
@@ -188,8 +189,8 @@ export function StakePanel() {
           </div>
           <div className="ramp-disclosure">
             Register a wallet before it's drained, because a claim can only name a wallet already on this list.
-            Up to {MAX_COVERED_WALLETS} Solana wallets, not your staking wallet. To prove a wallet is yours, it
-            sends a tiny amount of SOL to itself.
+            You can cover {WALLETS_TEXT}, not your staking wallet. To prove a wallet is yours, it sends a tiny
+            amount of SOL to itself.
           </div>
           {coveredWallets.map((w) => (
             <div className="side-stat" key={w.wallet}>

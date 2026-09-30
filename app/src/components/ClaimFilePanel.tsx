@@ -4,12 +4,12 @@ import { fileClaim } from "../lib/claimApi";
 import type { FileClaimResult } from "../lib/claimApi";
 import { toFriendlyError } from "../lib/friendly-error";
 import { fmtSol } from "../lib/reads";
-import { explorerTx } from "../lib/pool";
+import { explorerTx, num } from "../lib/pool";
 
-// File a claim tab. ONE claim per stake, bundling up to 20 drain transactions across the covered
-// wallets. The backend matches each drain to a covered wallet, measures the loss, the hack time and the
+// File a claim tab. ONE claim per stake, bundling up to MAX_TXIDS_PER_CLAIM drain transactions from the
+// covered wallet. The backend matches each drain to a covered wallet, measures the loss, the hack time and the
 // tier from the chain, and the oracle submits the claim. Nothing about the payout is typed in here.
-const MAX_DRAINS = 20; // MAX_TXIDS_PER_CLAIM (backend config), enforced again by the backend
+const MAX_DRAINS = Number(num("MAX_TXIDS_PER_CLAIM")); // IDL; the claim API enforces the same constant
 
 export function ClaimFilePanel() {
   const client = useClient();
@@ -71,7 +71,7 @@ export function ClaimFilePanel() {
 
       <div className="ramp-disclosure" style={{ marginBottom: 12 }}>
         One claim per stake. List every drain from the same incident (up to {MAX_DRAINS}): each is matched to
-        one of your covered wallets, and the loss, the time it happened and your tier are read from the chain,
+        your covered wallets, and the loss, the time it happened and your tier are read from the chain,
         never typed in. The total payout never goes above your tier's ceiling.
       </div>
 
