@@ -102,7 +102,7 @@ fn devnet_liquidity_the_payee_pays_marinades_fee_the_pool_does_not() {
     let b = env.matured_backer(BACKING);
     let ix = env.upkeep_ix(safu_pool::instruction::Rebalance {});
     env.ok(&[ix.clone()], &[&b]);
-    let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: BACKING / 2 });
+    let req = env.request_backer_ix(&b.pubkey(), BACKING / 2);
     env.ok(&[req], &[&b]);
     env.warp(BACKER_NOTICE_SECS);
     let done = env.complete_backer_ix(&b.pubkey());
@@ -303,7 +303,7 @@ fn rebalance_covers_open_claims_from_marinade() {
 fn rebalance_pulls_back_to_the_line_and_the_pool_pays_the_fee() {
     let (mut env, s, b) = funded_pool();
     // The backer leaves: capacity shrinks and the deployment sits above the line.
-    let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: BACKING });
+    let req = env.request_backer_ix(&b.pubkey(), BACKING);
     env.ok(&[req], &[&b]);
     env.warp(BACKER_NOTICE_SECS);
     let done = env.complete_backer_ix(&b.pubkey());
@@ -324,7 +324,7 @@ fn rebalance_pulls_back_to_the_line_and_the_pool_pays_the_fee() {
 #[test]
 fn rebalance_growth_pays_the_pools_fee_first() {
     let (mut env, _, b) = funded_pool();
-    let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: BACKING });
+    let req = env.request_backer_ix(&b.pubkey(), BACKING);
     env.ok(&[req], &[&b]);
     env.warp(BACKER_NOTICE_SECS);
     let done = env.complete_backer_ix(&b.pubkey());

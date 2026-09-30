@@ -26,7 +26,7 @@ export const back = (w: Signer, pool: PoolRecord | null, lamports: bigint) =>
 export const matureBacking = async (w: Signer, pool: PoolRecord | null) =>
   run(w, pool, "mature_backing", { backer_record: await backerAddress(me(w)) }, {}, true);
 export const requestBackerWithdrawal = (w: Signer, pool: PoolRecord | null, lamports: bigint) =>
-  run(w, pool, "request_backer_withdrawal", { backer: me(w) }, { amount: lamports });
+  run(w, pool, "request_backer_withdrawal", { backer: me(w) }, { amount: lamports }, true);
 export const cancelBackerWithdrawal = (w: Signer, pool: PoolRecord | null) =>
   run(w, pool, "cancel_backer_withdrawal", { backer: me(w) });
 export const completeBackerWithdrawal = (w: Signer, pool: PoolRecord | null) =>

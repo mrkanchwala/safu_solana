@@ -120,6 +120,8 @@ pub fn vested(entitlement: u64, cooldown_ends: i64, vesting_ends: i64, now: i64)
 /// when the claim was approved), which is what keeps a shrinking pool from throttling old claims).
 pub fn payout_cap(base: u64, allocated: u64) -> Result<u64> {
     if base == 0 {
+        // As multichain (`dynamic_outflow_bps` returns 100 bps here): a rate of nothing is nothing.
+        // Unreachable from `claim_stream`, whose base includes the claim's non-zero capacity snapshot.
         return apply_bps(base, PAYOUT_EMPTY_POOL_BPS);
     }
     let bps = match band(allocated, base)? {

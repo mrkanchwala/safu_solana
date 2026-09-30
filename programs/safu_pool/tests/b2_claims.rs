@@ -135,6 +135,16 @@ fn revoked_approval_refused() {
 }
 
 #[test]
+fn sol_sent_to_the_revocation_address_does_not_block_the_approval() {
+    let (mut env, s) = setup();
+    let a = env.approval(&s.pubkey(), TX, entitlement(), TIER_A);
+    // Anyone can send SOL to the (derivable) revocation address; only a real revocation record counts.
+    env.svm.airdrop(&env.revoked_addr(&a), SOL).unwrap();
+    env.submit(&a).unwrap();
+    assert_eq!(env.claim_state(&s.pubkey(), &TX).status, ClaimStatus::PendingTime);
+}
+
+#[test]
 fn revocation_account_must_match_the_approval() {
     let (mut env, s) = setup();
     let a = env.approval(&s.pubkey(), TX, entitlement(), TIER_A);
@@ -692,6 +702,23 @@ fn override_refused_when_insolvent_or_completed() {
     let claim = env.claim_addr(&s.pubkey(), &TX);
     env.edit::<safu_pool::state::Claim>(&claim, |c| c.status = ClaimStatus::Completed);
     assert_err(both_approve(&mut env, &s.pubkey(), TX, entitlement(), TIER_A), PoolError::ClaimAlreadyCompleted);
+}
+
+#[test]
+fn override_on_a_forfeited_stake_only_for_the_claim_that_forfeited_it() {
+    let (mut env, s) = setup();
+    active(&mut env, &s);
+    // The forfeiting claim goes stale and returns its unpaid rest; the stake stays forfeited.
+    env.warp(COOLDOWN_SECS + COLLECTION_INACTIVITY_SECS + 1);
+    let expire = env.transition_ix(&s.pubkey(), &TX, safu_pool::instruction::ExpireStaleClaim {});
+    let anyone = env.funded(SOL);
+    env.ok(&[expire], &[&anyone]);
+    assert_eq!(env.stake_state(&s.pubkey()).forfeited_by, Some(env.claim_addr(&s.pubkey(), &TX)));
+    // A new claim may not count the same forfeited principal as capacity again.
+    assert_err(both_approve(&mut env, &s.pubkey(), TX2, entitlement(), TIER_A), PoolError::StakeForfeited);
+    // Re-executing the claim that forfeited it still works.
+    both_approve(&mut env, &s.pubkey(), TX, entitlement(), TIER_A).unwrap();
+    assert_eq!(env.claim_state(&s.pubkey(), &TX).status, ClaimStatus::Active);
 }
 
 #[test]

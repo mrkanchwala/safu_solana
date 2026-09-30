@@ -89,6 +89,7 @@ pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()
         staked_at: now,
         penalty_locked_until: 0,
         forfeited: false,
+        forfeited_by: None,
         suspended: false,
         active_claim: None,
         reserved_claim: None,

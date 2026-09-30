@@ -62,7 +62,7 @@ pub mod safu_pool {
     pub fn mature_backing(ctx: Context<MatureBacking>) -> Result<()> {
         instructions::backer::mature_backing(ctx)
     }
-    pub fn request_backer_withdrawal(ctx: Context<BackerOnly>, amount: u64) -> Result<()> {
+    pub fn request_backer_withdrawal(ctx: Context<RequestBackerWithdrawal>, amount: u64) -> Result<()> {
         instructions::backer::request_backer_withdrawal(ctx, amount)
     }
     pub fn cancel_backer_withdrawal(ctx: Context<BackerOnly>) -> Result<()> {

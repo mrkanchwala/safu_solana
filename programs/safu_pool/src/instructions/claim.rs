@@ -85,9 +85,10 @@ fn start_clocks(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
 }
 
 /// Approval: forfeits the stake (and its unpaid yield) and starts cooldown + vesting.
-fn activate(pool: &mut Pool, stake: &mut StakeRecord, claim: &mut Claim, now: i64) -> Result<()> {
+fn activate(pool: &mut Pool, stake: &mut StakeRecord, claim: &mut Claim, claim_key: Pubkey, now: i64) -> Result<()> {
     forfeit_staker_yield(pool, stake)?;
     stake.forfeited = true;
+    stake.forfeited_by = Some(claim_key);
     start_clocks(pool, claim, now)?;
     claim.stake = stake.amount;
     pool.total_staked = pool.total_staked.saturating_sub(stake.amount);
@@ -119,7 +120,8 @@ pub struct SubmitClaim<'info> {
         bump,
     )]
     pub claim: Box<Account<'info, Claim>>,
-    /// CHECK: the revocation record of this exact approval; must be its address and must not exist.
+    /// CHECK: the revocation record of this exact approval; must be its address and not be a record
+    /// owned by this program.
     pub revoked: UncheckedAccount<'info>,
     /// CHECK: the instructions sysvar (address constraint).
     #[account(address = solana_sdk_ids::sysvar::instructions::ID)]
@@ -140,7 +142,9 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
     let message = approval::encode_message(&crate::ID, pool.cluster, &a);
     let hash = approval::approval_hash(&message);
     require_keys_eq!(ctx.accounts.revoked.key(), approval::revoked_address(&pool.key(), &hash), PoolError::WrongRevocationAccount);
-    require!(ctx.accounts.revoked.lamports() == 0, PoolError::ApprovalRevoked);
+    // Revoked = the revocation record exists (owned by this program). Lamports alone mean nothing:
+    // anyone can send SOL to that address, which must not block the approval.
+    require!(ctx.accounts.revoked.owner != &crate::ID, PoolError::ApprovalRevoked);
     approval::verify_preceding_ed25519(&ctx.accounts.instructions, &pool.oracle, &message)?;
 
     let stake = &mut ctx.accounts.stake_record;
@@ -197,7 +201,8 @@ pub struct ClaimTransition<'info> {
     pub stake_record: Box<Account<'info, StakeRecord>>,
 }
 
-/// Re-checks a queued claim against the pool now; admits it if it fits.
+/// Re-checks a queued claim against the pool now; admits it if it fits. No claim-window check, as
+/// multichain: a genuine queued claim stays releasable until someone expires it.
 pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
     let pool = &mut ctx.accounts.pool;
@@ -311,7 +316,7 @@ pub fn approve_claim(ctx: Context<ApproveClaim>) -> Result<()> {
     let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
     require!(!stake.forfeited && stake.active_claim == Some(claim_key), PoolError::ClaimStakeMismatch);
-    activate(pool, stake, claim, now)?;
+    activate(pool, stake, claim, claim_key, now)?;
     emit!(ClaimApproved { claim: claim_key });
     Ok(())
 }
@@ -412,6 +417,7 @@ pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
         // Growth so far belongs to the stakes in before this one returns (multichain call site).
         leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
         stake.forfeited = false;
+        stake.forfeited_by = None;
         stake.penalty_locked_until = secs_after(now, PENALTY_LOCK_SECS)?;
         // Out of total_staked while forfeited, so it earns again only from now.
         stake.yield_index_at = pool.staker_yield_index;
@@ -592,6 +598,11 @@ fn execute_override(
     if let Some(active) = stake.active_claim {
         require_keys_eq!(active, claim_key, PoolError::WalletHasDifferentActiveClaim);
     }
+    // A forfeited stake is earmarked for the claim that forfeited it: only that claim may be re-executed
+    // on it. Any other claim would count the same principal as capacity a second time.
+    if stake.forfeited {
+        require!(stake.forfeited_by == Some(claim_key), PoolError::StakeForfeited);
+    }
     rules::check_entitlement(entitlement, stake.amount, tier).core()?;
 
     // An already-forfeited stake (re-execution of this same claim) is earmarked for it, not new capacity.
@@ -621,7 +632,7 @@ fn execute_override(
     if stake.forfeited {
         start_clocks(pool, claim, now)?;
     } else {
-        activate(pool, stake, claim, now)?;
+        activate(pool, stake, claim, claim_key, now)?;
     }
     stake.active_claim = Some(claim_key);
     if stake.reserved_claim == Some(claim_key) {

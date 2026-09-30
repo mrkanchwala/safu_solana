@@ -112,6 +112,23 @@ pub fn mature_backing(ctx: Context<MatureBacking>) -> Result<()> {
 }
 
 #[derive(Accounts)]
+pub struct RequestBackerWithdrawal<'info> {
+    pub backer: Signer<'info>,
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    pub pool: Box<Account<'info, Pool>>,
+    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [SEED_BACKER, pool.key().as_ref(), backer.key().as_ref()],
+        bump = backer_record.bump,
+        has_one = backer,
+    )]
+    pub backer_record: Box<Account<'info, BackerRecord>>,
+    pub leg: MarinadeLeg<'info>,
+}
+
+#[derive(Accounts)]
 pub struct BackerOnly<'info> {
     pub backer: Signer<'info>,
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
@@ -126,11 +143,16 @@ pub struct BackerOnly<'info> {
 }
 
 /// Starts the notice on matured money. Works while paused.
-pub fn request_backer_withdrawal(ctx: Context<BackerOnly>, amount: u64) -> Result<()> {
+pub fn request_backer_withdrawal(ctx: Context<RequestBackerWithdrawal>, amount: u64) -> Result<()> {
     let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
     require!(amount > 0, PoolError::AmountNotPositive);
     let record = &mut ctx.accounts.backer_record;
     require!(record.withdraw_amount == 0, PoolError::BackerWithdrawalPending);
+    // Settling may mature pending money: growth so far belongs to the capacity before it counts
+    // (as `mature_backing`). The harvest skips itself while paused.
+    leg::harvest(&mut ctx.accounts.pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     settle(&mut ctx.accounts.pool, record, now)?;
     require!(amount <= record.amount, PoolError::BackerAmountExceedsBalance);
     let ready_at = now.checked_add(BACKER_NOTICE_SECS).ok_or(PoolError::MathOverflow)?;
@@ -181,9 +203,9 @@ pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Res
     let amount = record.withdraw_amount;
     require!(amount > 0, PoolError::NoBackerWithdrawal);
     require!(now >= record.withdraw_ready_at, PoolError::BackerNoticeNotPassed);
+    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     pool_core::check_backer_capital_free(pool.total_allocated, capacity, amount).core()?;
-    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
 
     settle(pool, record, now)?;
     let yield_paid = record.yield_owed.min(pool.backer_yield_reserved);
@@ -198,6 +220,10 @@ pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Res
     let total = add(amount, yield_paid).core()?;
     let to = ctx.accounts.backer.to_account_info();
     leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, total)?;
+    // An unstake inside pay_out can mark a Marinade loss off total_staked: re-check that the capital
+    // that left was still free afterwards, or the whole withdrawal reverts.
+    let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
+    pool_core::check_backer_capital_free(pool.total_allocated, capacity, 0).core()?;
     Ok(())
 }
 

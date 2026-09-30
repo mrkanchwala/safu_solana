@@ -306,7 +306,7 @@ fn withdraw_refused_when_forfeited_claimed_queued_or_penalty_locked() {
     ] {
         let now = env.now;
         env.edit::<StakeRecord>(&rec, |r| {
-            *r = StakeRecord { forfeited: false, active_claim: None, reserved_claim: None, penalty_locked_until: 0, ..r.clone() };
+            *r = StakeRecord { forfeited: false, forfeited_by: None, active_claim: None, reserved_claim: None, penalty_locked_until: 0, ..r.clone() };
             match edit {
                 0 => r.forfeited = true,
                 1 => r.active_claim = Some(marker),
@@ -444,7 +444,7 @@ fn back_refuses_zero_and_pause() {
 fn backer_withdrawal_request_rules() {
     let mut env = Env::new();
     let b = env.matured_backer(2 * SOL);
-    let req = |env: &Env, a| env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: a });
+    let req = |env: &Env, a| env.request_backer_ix(&b.pubkey(), a);
     assert_err(env.send(&[req(&env, 0)], &[&b]), PoolError::AmountNotPositive);
     assert_err(env.send(&[req(&env, 2 * SOL + 1)], &[&b]), PoolError::BackerAmountExceedsBalance);
     let cancel = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::CancelBackerWithdrawal {});
@@ -463,7 +463,7 @@ fn backer_withdrawal_waits_for_notice_and_free_capital() {
     let b = env.matured_backer(2 * SOL);
     let complete = env.complete_backer_ix(&b.pubkey());
     assert_err(env.send(&[complete.clone()], &[&b]), PoolError::NoBackerWithdrawal);
-    let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: SOL });
+    let req = env.request_backer_ix(&b.pubkey(), SOL);
     env.ok(&[req], &[&b]);
     assert_err(env.send(&[complete.clone()], &[&b]), PoolError::BackerNoticeNotPassed);
     env.warp(BACKER_NOTICE_SECS);
@@ -485,7 +485,7 @@ fn backer_withdrawal_works_while_paused() {
     let admin = env.admin.insecure_clone();
     let p = env.admin_ix(safu_pool::instruction::Pause {});
     env.ok(&[p], &[&admin]);
-    let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: SOL });
+    let req = env.request_backer_ix(&b.pubkey(), SOL);
     env.ok(&[req], &[&b]);
     env.warp(BACKER_NOTICE_SECS);
     let complete = env.complete_backer_ix(&b.pubkey());

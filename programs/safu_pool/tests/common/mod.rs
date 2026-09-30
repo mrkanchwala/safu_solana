@@ -402,6 +402,19 @@ impl Env {
         )
     }
 
+    pub fn request_backer_ix(&self, backer: &Pubkey, amount: u64) -> Instruction {
+        self.ix(
+            safu_pool::accounts::RequestBackerWithdrawal {
+                backer: *backer,
+                pool: self.pool(),
+                vault: self.vault(),
+                backer_record: self.backer_record(backer),
+                leg: self.leg(),
+            },
+            safu_pool::instruction::RequestBackerWithdrawal { amount },
+        )
+    }
+
     pub fn backer_only_ix(&self, backer: &Pubkey, data: impl InstructionData) -> Instruction {
         self.ix(
             safu_pool::accounts::BackerOnly { backer: *backer, pool: self.pool(), backer_record: self.backer_record(backer) },

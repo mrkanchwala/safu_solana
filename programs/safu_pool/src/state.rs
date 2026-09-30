@@ -81,6 +81,9 @@ pub struct StakeRecord {
     pub penalty_locked_until: i64,
     /// Set when a claim on this stake is approved. Cleared only by `cancel_claim` undoing it.
     pub forfeited: bool,
+    /// The claim whose approval forfeited this stake. Only that claim may re-use the forfeited
+    /// principal (a 2-of-2 override correcting it); any other claim on this stake is refused.
+    pub forfeited_by: Option<Pubkey>,
     /// Admin hold on payouts. Does not block principal withdrawal.
     pub suspended: bool,
     /// Claim account open on this stake (admitted, not yet terminal).
