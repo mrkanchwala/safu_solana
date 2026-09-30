@@ -11,17 +11,18 @@ form differs (reason given). **Left out** = not in this build.
 
 | Multichain | Solana | Kind | Note |
 |---|---|---|---|
-| `__constructor` | `initialize` | Changed | Also takes Marinade program/state/mint (checked against the live state) and the cluster tag. Pool cap from `config/pool.devnet.json`. |
+| `__constructor` | `initialize` | Changed | Also takes Marinade program/state/mint (checked against the live state) and the cluster tag. Pool cap from `config/pool.devnet.json`; every other setting starts at its `params.rs` default. |
+| settings (`propose_setting` … timers, cap, outflow) | `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` | Changed | 19 settings, each by slot number (`SETTING_*` in the IDL): stake min/max, yield split, cooldown, vesting, admit + payout bands, backer notice, maturity, pause max + gap, approve + inactivity windows, pool cap. Admin proposes, co-signer approves the same value, anyone executes after `SETTINGS_TIMELOCK_SECS` (7 days, demo 5 min). Hard ranges (`pool_core::settings`) and the order between settings (min ≤ max, low ≥ mid ≥ high) are checked at proposal and again at execution. 32 slots, 13 spare. Stored inside `Pool`, so no extra account in any instruction. Every read goes through `Pool::settings()`, the one hook for a future self-managing mode. Multichain only lets timers, cap and outflow change. |
 | `propose_change` / `approve_change` / `propose_recovery` / `cancel_change` / `execute_change` / `get_pending_change` | — | Left out | Governance 2-of-3 + 90-day recovery. Admin + co-signer override kept. Stretch item. |
 | `get_admin` / `get_co_signer` / `get_oracle` / `get_guardian` / `get_paused_until` | `Pool` account fields | Changed | Reads are account fetches on Solana. No guardian (came with governance). |
-| `set_pool_cap` | `set_pool_cap` | Rules | Increase only. |
+| `set_pool_cap` | — (`PoolCap` setting) | Changed | Through the settings timelock, up or down. Lowering it never touches money already in; it only blocks new stake above it. |
 | `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` / `get_setting` / `get_pending_setting` | — | Left out | Settings timelock. Values are constants in `params.rs`; returns with governance. |
-| `pause` / `unpause` | `pause` / `unpause` | Rules | Pause expires after `PAUSE_MAX_SECS`. |
+| `pause` / `unpause` | `pause` / `unpause` | Changed | Pause expires after the `PauseMaxSecs` setting. **No pause while paused, and a gap** (`PauseGapSecs`, 30 days, demo 1 hour) after the last pause ends (X2: stops back-to-back pauses). **Paused time does not count** against a claim's approve, inactivity or hack-time window (X1: `paused_before` + `pause_mark` per claim); expiry sweeps are refused while paused. Multichain has neither (flagged). |
 | `suspend_stake` / `unsuspend_stake` | same | Rules | Unsuspend restarts the approve / collection clock. |
 | `stake` | `stake` | Rules | SOL. Bounds = bps of pool cap (0.05–0.5 SOL at 50 SOL). `StakeRecord` PDA `[stake, pool, staker]`. |
-| `withdraw` | `withdraw` | Changed | Pays principal + unpaid yield to the stored beneficiary and **closes** the `StakeRecord` (rent back to the staker). |
+| `withdraw` | `withdraw(amount)` | Changed | **Whole or partial.** What stays must be 0 or at least the min stake. Pays that principal + all unpaid yield to the stored beneficiary. Principal leaves only if open claims still fit in capacity afterwards (X3, one rule for staker withdraw, emergency exit and backer withdrawal; re-checked after the payout). Whole withdraw **closes** the `StakeRecord` (rent back to the staker). |
 | `set_beneficiary` | `set_beneficiary` | Changed | Also blocked while a claim is open or queued (eng review D1). |
-| `emergency_exit` | `emergency_exit` | Changed | **Only while paused**, pays the staker, closes the record, and **honours the penalty lock** (multichain has neither check, so there a cancelled false positive could leave early; flagged to the founder). |
+| `emergency_exit` | `emergency_exit(amount)` | Changed | **Only while paused**, whole or partial (same rules and free-capital check as `withdraw`), pays the staker, closes the record on a whole exit, and **honours the penalty lock** (multichain has neither check, so there a cancelled false positive could leave early; flagged to the founder). |
 | `back` / `mature_backing` / `request_backer_withdrawal` / `cancel_backer_withdrawal` / `complete_backer_withdrawal` | same | Changed | Four withdrawal-safety rules unchanged. `BackerRecord` PDA `[backer, pool, backer]`. Two additions (code review 2026-09-30): `request_backer_withdrawal` harvests first (it can mature pending money, like `mature_backing`), and `complete_backer_withdrawal` re-checks free capital **after** the payout, since its Marinade unstake can mark a loss off `total_staked`. |
 | `get_backer` / `get_total_backed` / `get_total_backed_pending` / `get_capacity` | account fields | Changed | Capacity = total staked + total backed (matured). |
 | `submit_claim` | `submit_claim` | Changed | Oracle signs the tx **and** an Ed25519 precompile instruction right before it (backstop `verdict.rs` pattern). Claim PDA `[claim, pool, staker, tx_hash]`: the address is the id; a record whose status is not `Unused` means the claim already exists (so a cancelled or expired claim can never be resubmitted). |
@@ -38,7 +39,7 @@ form differs (reason given). **Left out** = not in this build.
 | `deploy_to_vault` / `auto_deploy_liquidity` / `provide_liquidity` / `ensure_liquidity` | `rebalance` (permissionless) + in-path push (after `stake` / `back`) and pull (every payout) | Changed | Marinade `deposit` / `liquid_unstake`, built by hand. Push = multichain `push_idle` (idle above open claims, up to `DEPLOY_BPS` = 80%, once ≥ `AUTO_PUSH_MIN_BPS`). `rebalance` pull = multichain `ensure_liquidity` target (open claims short of free cash, or deployment above the line); the pool pays that fee. No admin deploy / provide calls. |
 | `harvest` | `harvest` | Changed | Yield = mSOL value growth above book (Marinade `State.msol_price`), unstaked and credited as the SOL that arrives. Growth limit 10 bp/day kept. Also runs first inside `stake`, `back`, `mature_backing`, `withdraw`, `cancel_claim` (approved claims), `claim_yield`, `claim_backer_yield`, `complete_backer_withdrawal` (multichain call sites), so growth goes to the money already in. |
 | `claim_yield` / `claim_backer_yield` | same | Rules | Any time (not while paused), principal untouched. Staker yield goes to the stored beneficiary. |
-| `withdraw_yield` | `withdraw_yield` | Rules | Treasury takes protocol revenue only, capped at the protocol surplus. |
+| `withdraw_yield` | `withdraw_yield` | Changed | Treasury takes protocol revenue only, capped at the protocol surplus. **Refused while paused** (X4; multichain allows it, flagged). |
 | `get_liquid_balance` … `get_total_stakers` / `is_paused` (views) | account fields | Changed | Read the `Pool` account. |
 
 ## Accounts
@@ -52,13 +53,15 @@ form differs (reason given). **Left out** = not in this build.
 | `Claim(claim_id)` | `Claim` `[claim, pool, staker, tx_hash]` |
 | `Override(claim_id)` | `Override` `[override, claim]` |
 | Revoked approvals (temporary, TTL) | `RevokedApproval` `[revoked, pool, payload_hash]` (permanent) |
-| `covered-registry` contract (separate) | `CoveredWallet` `[covered, pool, wallet_hash]` (forever) + `StakerWallets` `[staker_wallets, pool, staker]` (max 3). Writer = backend key. |
+| `covered-registry` contract (separate) | `CoveredWallet` `[covered, pool, wallet_hash]` (forever) + `StakerWallets` `[staker_wallets, pool, staker]` (max `MAX_COVERED_WALLETS`, 1). Writer = backend key. |
 | Daily counters keyed by day | Current day only, on `Pool`, reset when the day changes. |
 
 ## Other changes
 
 - **One clock:** Unix seconds (`Clock`). Multichain used ledger sequence for durations and timestamps for windows.
-- **Beneficiary:** stored as a plain `Pubkey` (it is public at payout anyway), not a hash.
+- **Beneficiary:** stored as a plain `Pubkey` (it is public at payout anyway), not a hash. Never the pool or vault (`BeneficiaryIsPoolAccount`).
+- **Room to upgrade:** the program is upgradeable (same pool address, same records). `StakeRecord`, `BackerRecord`, `Claim` and `StakerWallets` carry `version` (1) + 64 spare bytes; `Pool` carries 256 spare bytes, 13 spare setting slots and `asset_mint` (native SOL today) so a USDC or CCTP version can migrate in place instead of launching a new pool.
+- **Snapshots:** a claim keeps the rules it started with. Approve window at admission, inactivity window at activation, cooldown and vesting at approval. A later setting change applies to new claims only.
 - **Stake record reuse:** closed on withdraw / emergency exit and re-created by the next stake. A forfeited record is never closed, so that address can never stake again (multichain H2), enforced by `init` failing.
 - **Positions are records, not tokens.** mSOL never leaves the pool.
 - **No price feed.** The oracle converts the USD loss to lamports off-chain and signs the lamport amount; the program checks it against the tier ceiling in SOL.
