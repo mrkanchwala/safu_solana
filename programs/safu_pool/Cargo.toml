@@ -30,6 +30,8 @@ pool-core = { path = "../../crates/pool-core", version = "=0.1.0" }
 # Same versions as the vetted safucredit lockfile (transitive via anchor-lang).
 solana-instructions-sysvar = "3.0.1"
 solana-sdk-ids = "3.1.0"
+# sha256 syscall on-chain; `sha2` backs it in host tests.
+solana-sha256-hasher = { version = "3.1.0", features = ["sha2"] }
 
 [dev-dependencies]
 litesvm = { version = "0.10.0", features = ["precompiles"] }

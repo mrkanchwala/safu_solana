@@ -71,3 +71,73 @@ pub struct WalletRegistered {
     pub staker: Pubkey,
     pub wallet_hash: [u8; 32],
 }
+#[event]
+pub struct ClaimSubmitted {
+    pub staker: Pubkey,
+    pub claim: Pubkey,
+    pub entitlement: u64,
+}
+#[event]
+pub struct ClaimQueued {
+    pub staker: Pubkey,
+    pub claim: Pubkey,
+    pub entitlement: u64,
+}
+#[event]
+pub struct ClaimQueueReleased {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct ClaimQueueExpired {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct ClaimUnlocked {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct ClaimApproved {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct ClaimExpired {
+    pub claim: Pubkey,
+    pub released: u64,
+}
+#[event]
+pub struct ClaimStreamed {
+    pub claim: Pubkey,
+    pub amount: u64,
+}
+#[event]
+pub struct ClaimCancelled {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct OverrideApproved {
+    pub claim: Pubkey,
+    pub approver: Pubkey,
+    pub entitlement: u64,
+    pub tier: u8,
+}
+#[event]
+pub struct OverrideExecuted {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct OverrideCancelled {
+    pub claim: Pubkey,
+}
+#[event]
+pub struct ApprovalRevoked {
+    pub staker: Pubkey,
+    pub hash: [u8; 32],
+}
+#[event]
+pub struct StakeSuspended {
+    pub staker: Pubkey,
+}
+#[event]
+pub struct StakeUnsuspended {
+    pub staker: Pubkey,
+}

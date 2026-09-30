@@ -5,6 +5,7 @@
 
 use anchor_lang::prelude::*;
 
+pub mod approval;
 pub mod constants;
 pub mod errors;
 pub mod events;
@@ -13,6 +14,7 @@ pub mod marinade;
 pub mod state;
 pub mod vault;
 
+use approval::ClaimApproval;
 use instructions::*;
 
 declare_id!("Aa6ncthjKmWaDX91jrY3HeUdHfP2fnhaPLQAPPVsG686");
@@ -69,5 +71,49 @@ pub mod safu_pool {
     // Covered wallets.
     pub fn register_wallet(ctx: Context<RegisterWallet>, staker: Pubkey, wallet_hash: [u8; 32]) -> Result<()> {
         instructions::registry::register_wallet(ctx, staker, wallet_hash)
+    }
+
+    // Claims.
+    pub fn submit_claim(ctx: Context<SubmitClaim>, approval: ClaimApproval) -> Result<()> {
+        instructions::claim::submit_claim(ctx, approval)
+    }
+    pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+        instructions::claim::try_release_queued_claim(ctx)
+    }
+    pub fn expire_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+        instructions::claim::expire_queued_claim(ctx)
+    }
+    pub fn unlock_pending_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+        instructions::claim::unlock_pending_claim(ctx)
+    }
+    pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
+        instructions::claim::expire_pending_approval(ctx)
+    }
+    pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+        instructions::claim::expire_stale_claim(ctx)
+    }
+    pub fn approve_claim(ctx: Context<ApproveClaim>) -> Result<()> {
+        instructions::claim::approve_claim(ctx)
+    }
+    pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
+        instructions::claim::claim_stream(ctx)
+    }
+    pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
+        instructions::claim::cancel_claim(ctx)
+    }
+    pub fn suspend_stake(ctx: Context<AdminStake>, staker: Pubkey) -> Result<()> {
+        instructions::claim::suspend_stake(ctx, staker)
+    }
+    pub fn unsuspend_stake(ctx: Context<AdminStake>, staker: Pubkey) -> Result<()> {
+        instructions::claim::unsuspend_stake(ctx, staker)
+    }
+    pub fn revoke_approval(ctx: Context<RevokeApproval>, approval: ClaimApproval, hash: [u8; 32]) -> Result<()> {
+        instructions::claim::revoke_approval(ctx, approval, hash)
+    }
+    pub fn approve_override(ctx: Context<ApproveOverride>, staker: Pubkey, tx_hash: [u8; 32], entitlement: u64, tier: u8) -> Result<()> {
+        instructions::claim::approve_override(ctx, staker, tx_hash, entitlement, tier)
+    }
+    pub fn cancel_pending_override(ctx: Context<CancelPendingOverride>) -> Result<()> {
+        instructions::claim::cancel_pending_override(ctx)
     }
 }

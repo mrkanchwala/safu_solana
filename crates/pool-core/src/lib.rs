@@ -8,6 +8,7 @@
 //! - **Rounding favours the pool:** payouts and yield round down, amounts owed to the pool round up.
 #![no_std]
 
+pub mod claim;
 pub mod liquidity;
 pub mod marinade;
 pub mod params;
@@ -26,6 +27,14 @@ pub enum CoreError {
     PoolCapExceeded,
     /// A backer withdrawal would leave open claims without the capital they need (backer rule 3).
     BackerCapitalNotFree,
+    InvalidTier,
+    EntitlementNotPositive,
+    EntitlementExceedsTierCap,
+    HackTimestampInFuture,
+    HackPredatesStake,
+    ClaimWindowExpired,
+    SignatureExpired,
+    SignatureDeadlineTooFar,
 }
 
 pub type Result<T> = core::result::Result<T, CoreError>;

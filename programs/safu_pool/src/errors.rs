@@ -78,6 +78,95 @@ pub enum PoolError {
     WalletTakenByOtherStaker,
     #[msg("Staker already has the maximum number of covered wallets")]
     StakerLimitReached,
+    // ---- claims (B2)
+    #[msg("Signer is not the oracle")]
+    NotOracle,
+    #[msg("Signer is neither the admin nor the co-signer")]
+    NotAdminOrCoSigner,
+    #[msg("Unknown tier")]
+    InvalidTier,
+    #[msg("Entitlement must be above zero")]
+    EntitlementNotPositive,
+    #[msg("Entitlement is above the tier ceiling for this stake")]
+    EntitlementExceedsTierCap,
+    #[msg("Hack time is in the future")]
+    HackTimestampInFuture,
+    #[msg("Hack happened before the stake")]
+    HackPredatesStake,
+    #[msg("Claim window after the hack has passed")]
+    ClaimWindowExpired,
+    #[msg("Oracle approval has expired")]
+    SignatureExpired,
+    #[msg("Oracle approval deadline is too far out")]
+    SignatureDeadlineTooFar,
+    #[msg("This oracle approval was revoked")]
+    ApprovalRevoked,
+    #[msg("No Ed25519 instruction directly before this instruction")]
+    MissingEd25519Instruction,
+    #[msg("Ed25519 instruction data is malformed or offsets are out of bounds")]
+    MalformedEd25519Instruction,
+    #[msg("Ed25519 instruction must carry exactly one signature")]
+    WrongSignatureCount,
+    #[msg("Ed25519 offsets must all point into the precompile instruction itself")]
+    OffsetsOutsideEd25519Instruction,
+    #[msg("Approval is not signed by the oracle")]
+    WrongOracleSigner,
+    #[msg("Signed message does not match this approval")]
+    ApprovalMessageMismatch,
+    #[msg("Claim submission must be a top-level instruction")]
+    ApprovalNotTopLevel,
+    #[msg("Payouts on this stake are suspended")]
+    StakeSuspended,
+    #[msg("A claim is already open on this stake")]
+    ClaimAlreadyActiveForStake,
+    #[msg("A claim is already queued on this stake")]
+    ClaimAlreadyQueued,
+    #[msg("A claim for this wallet and transaction already exists")]
+    ClaimAlreadyExists,
+    #[msg("Claim is not queued")]
+    NoSuchQueuedClaim,
+    #[msg("A different claim is open on this stake")]
+    WalletHasDifferentActiveClaim,
+    #[msg("The stake behind this queued claim changed")]
+    QueuedClaimStakeChanged,
+    #[msg("Queued claim still does not fit")]
+    QueueReleaseNotYetEligible,
+    #[msg("Queued claim is still inside its claim window")]
+    QueueNotYetExpired,
+    #[msg("Claim is not waiting on the time gate")]
+    ClaimNotPending,
+    #[msg("Time gate not met yet")]
+    TimeGateNotMet,
+    #[msg("Claim is not waiting for approval")]
+    ClaimNotAwaitingApproval,
+    #[msg("Approval window has passed")]
+    ApprovalWindowExpired,
+    #[msg("Claim does not belong to this stake")]
+    ClaimStakeMismatch,
+    #[msg("Approval window has not passed")]
+    ApprovalWindowNotExpired,
+    #[msg("Claim is not active")]
+    ClaimNotActive,
+    #[msg("Claim is fully paid")]
+    ClaimFullyStreamed,
+    #[msg("Claim has been collected recently")]
+    ClaimNotStale,
+    #[msg("Cooldown has not passed")]
+    CooldownNotPassed,
+    #[msg("Nothing vested yet")]
+    NothingVested,
+    #[msg("Daily payout cap reached; try again tomorrow")]
+    DailyOutflowCapReached,
+    #[msg("Claim cannot be cancelled in this state")]
+    ClaimNotCancellable,
+    #[msg("Override terms differ from the pending request")]
+    OverrideParamsMismatch,
+    #[msg("Claim is already completed")]
+    ClaimAlreadyCompleted,
+    #[msg("Pool cannot cover this claim")]
+    Insolvent,
+    #[msg("Revocation account does not match this approval")]
+    WrongRevocationAccount,
 }
 
 impl From<CoreError> for PoolError {
@@ -89,6 +178,14 @@ impl From<CoreError> for PoolError {
             CoreError::StakeOutOfRange => PoolError::StakeOutOfRange,
             CoreError::PoolCapExceeded => PoolError::PoolCapExceeded,
             CoreError::BackerCapitalNotFree => PoolError::BackerCapitalNotFree,
+            CoreError::InvalidTier => PoolError::InvalidTier,
+            CoreError::EntitlementNotPositive => PoolError::EntitlementNotPositive,
+            CoreError::EntitlementExceedsTierCap => PoolError::EntitlementExceedsTierCap,
+            CoreError::HackTimestampInFuture => PoolError::HackTimestampInFuture,
+            CoreError::HackPredatesStake => PoolError::HackPredatesStake,
+            CoreError::ClaimWindowExpired => PoolError::ClaimWindowExpired,
+            CoreError::SignatureExpired => PoolError::SignatureExpired,
+            CoreError::SignatureDeadlineTooFar => PoolError::SignatureDeadlineTooFar,
         }
     }
 }

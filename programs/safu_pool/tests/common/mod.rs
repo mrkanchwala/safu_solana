@@ -12,7 +12,8 @@ use anchor_lang::{
 use base64::Engine;
 use litesvm::LiteSVM;
 use safu_pool::constants::*;
-use safu_pool::state::{BackerRecord, Pool, StakeRecord};
+use safu_pool::approval::{approval_hash, encode_message, ClaimApproval};
+use safu_pool::state::{BackerRecord, Claim, Pool, StakeRecord};
 use solana_account::Account;
 use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
@@ -25,6 +26,8 @@ pub const SOL: u64 = 1_000_000_000;
 pub const START: i64 = 1_800_000_000;
 pub const SYSTEM: Pubkey = solana_system_interface::program::ID;
 pub const TOKEN: Pubkey = spl_token_interface::ID;
+pub const ED25519: Pubkey = anchor_lang::prelude::pubkey!("Ed25519SigVerify111111111111111111111111111");
+pub const IX_SYSVAR: Pubkey = anchor_lang::prelude::pubkey!("Sysvar1nstructions1111111111111111111111111");
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/pool.devnet.json");
@@ -388,6 +391,180 @@ impl Env {
         )
     }
 
+    // ---- claims
+
+    pub fn claim_addr(&self, staker: &Pubkey, tx: &[u8; 32]) -> Pubkey {
+        pda(&[SEED_CLAIM, self.pool().as_ref(), staker.as_ref(), tx.as_ref()])
+    }
+    pub fn override_addr(&self, claim: &Pubkey) -> Pubkey {
+        pda(&[SEED_OVERRIDE, claim.as_ref()])
+    }
+    pub fn claim_state(&self, staker: &Pubkey, tx: &[u8; 32]) -> Claim {
+        self.read(&self.claim_addr(staker, tx))
+    }
+
+    /// An approval signed "now", valid for the longest allowed window, hack "now" (never before a stake made this second).
+    pub fn approval(&self, staker: &Pubkey, tx: [u8; 32], entitlement: u64, tier: u8) -> ClaimApproval {
+        ClaimApproval {
+            staker: *staker,
+            tx_hash: tx,
+            entitlement,
+            tier,
+            hack_timestamp: self.now,
+            deadline: self.now + MAX_APPROVAL_WINDOW_SECS,
+        }
+    }
+
+    pub fn message(&self, a: &ClaimApproval) -> Vec<u8> {
+        encode_message(&safu_pool::ID, CLUSTER_LOCALNET, a)
+    }
+
+    pub fn revoked_addr(&self, a: &ClaimApproval) -> Pubkey {
+        pda(&[SEED_REVOKED, self.pool().as_ref(), approval_hash(&self.message(a)).as_ref()])
+    }
+
+    pub fn submit_ix(&self, oracle: &Pubkey, a: &ClaimApproval) -> Instruction {
+        self.ix(
+            safu_pool::accounts::SubmitClaim {
+                oracle: *oracle,
+                pool: self.pool(),
+                stake_record: self.stake_record(&a.staker),
+                claim: self.claim_addr(&a.staker, &a.tx_hash),
+                revoked: self.revoked_addr(a),
+                instructions: IX_SYSVAR,
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::SubmitClaim { approval: a.clone() },
+        )
+    }
+
+    /// Precompile + submit, signed by the oracle.
+    pub fn submit(&mut self, a: &ClaimApproval) -> Result<(), String> {
+        let oracle = self.oracle.insecure_clone();
+        let ed = ed25519_ix(&oracle, &self.message(a), [0, 0, 0]);
+        let ix = self.submit_ix(&oracle.pubkey(), a);
+        self.send(&[ed, ix], &[&oracle])
+    }
+
+    pub fn transition_ix(&self, staker: &Pubkey, tx: &[u8; 32], data: impl InstructionData) -> Instruction {
+        self.ix(
+            safu_pool::accounts::ClaimTransition {
+                pool: self.pool(),
+                claim: self.claim_addr(staker, tx),
+                stake_record: self.stake_record(staker),
+            },
+            data,
+        )
+    }
+
+    pub fn approve_claim_ix(&self, staker: &Pubkey, tx: &[u8; 32]) -> Instruction {
+        self.ix(
+            safu_pool::accounts::ApproveClaim {
+                staker: *staker,
+                pool: self.pool(),
+                claim: self.claim_addr(staker, tx),
+                stake_record: self.stake_record(staker),
+            },
+            safu_pool::instruction::ApproveClaim {},
+        )
+    }
+
+    pub fn stream_ix(&self, staker: &Pubkey, tx: &[u8; 32], beneficiary: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::ClaimStream {
+                staker: *staker,
+                pool: self.pool(),
+                vault: self.vault(),
+                claim: self.claim_addr(staker, tx),
+                stake_record: self.stake_record(staker),
+                beneficiary: *beneficiary,
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::ClaimStream {},
+        )
+    }
+
+    pub fn cancel_claim_ix(&self, admin: &Pubkey, staker: &Pubkey, tx: &[u8; 32]) -> Instruction {
+        self.ix(
+            safu_pool::accounts::CancelClaim {
+                admin: *admin,
+                pool: self.pool(),
+                claim: self.claim_addr(staker, tx),
+                stake_record: self.stake_record(staker),
+            },
+            safu_pool::instruction::CancelClaim {},
+        )
+    }
+
+    pub fn suspend_ix(&self, staker: &Pubkey, claim: Option<Pubkey>, suspend: bool) -> Instruction {
+        let accounts = safu_pool::accounts::AdminStake {
+            admin: self.admin.pubkey(),
+            pool: self.pool(),
+            stake_record: self.stake_record(staker),
+            claim,
+        };
+        if suspend {
+            self.ix(accounts, safu_pool::instruction::SuspendStake { staker: *staker })
+        } else {
+            self.ix(accounts, safu_pool::instruction::UnsuspendStake { staker: *staker })
+        }
+    }
+
+    pub fn revoke_ix(&self, admin: &Pubkey, a: &ClaimApproval, hash: [u8; 32]) -> Instruction {
+        self.ix(
+            safu_pool::accounts::RevokeApproval {
+                admin: *admin,
+                pool: self.pool(),
+                revoked: pda(&[SEED_REVOKED, self.pool().as_ref(), hash.as_ref()]),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::RevokeApproval { approval: a.clone(), hash },
+        )
+    }
+
+    pub fn override_ix(&self, signer: &Pubkey, staker: &Pubkey, tx: [u8; 32], entitlement: u64, tier: u8) -> Instruction {
+        let claim = self.claim_addr(staker, &tx);
+        self.ix(
+            safu_pool::accounts::ApproveOverride {
+                signer: *signer,
+                pool: self.pool(),
+                stake_record: self.stake_record(staker),
+                claim,
+                override_request: self.override_addr(&claim),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::ApproveOverride { staker: *staker, tx_hash: tx, entitlement, tier },
+        )
+    }
+
+    pub fn cancel_override_ix(&self, admin: &Pubkey, claim: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::CancelPendingOverride {
+                admin: *admin,
+                pool: self.pool(),
+                override_request: self.override_addr(claim),
+            },
+            safu_pool::instruction::CancelPendingOverride {},
+        )
+    }
+
+    /// Matured backer money of `amount`: capacity for claims.
+    pub fn matured_backer(&mut self, amount: u64) -> Keypair {
+        let b = self.funded(amount + SOL);
+        let ix = self.back_ix(&b.pubkey(), amount);
+        self.ok(&[ix], &[&b]);
+        self.warp(BACKER_MATURITY_SECS);
+        let m = self.mature_ix(&b.pubkey());
+        self.ok(&[m], &[&b]);
+        b
+    }
+
+    pub fn pause(&mut self) {
+        let admin = self.admin.insecure_clone();
+        let ix = self.admin_ix(safu_pool::instruction::Pause {});
+        self.ok(&[ix], &[&admin]);
+    }
+
     /// A funded staker with a live stake of `amount` (beneficiary = itself).
     pub fn staker(&mut self, amount: u64) -> Keypair {
         let k = self.funded(amount + SOL);
@@ -395,6 +572,24 @@ impl Env {
         self.ok(&[ix], &[&k]);
         k
     }
+}
+
+/// One-signature Ed25519 precompile instruction. `indexes` = [signature, pubkey, message] instruction
+/// indexes; a self-contained instruction uses its own position in the transaction.
+pub fn ed25519_ix(signer: &Keypair, message: &[u8], indexes: [u16; 3]) -> Instruction {
+    let signature = signer.sign_message(message);
+    // Header (2) + one offsets record (14), then signature (64), pubkey (32), message.
+    let sig_off = 16u16;
+    let pk_off = sig_off + 64;
+    let msg_off = pk_off + 32;
+    let mut data = vec![1u8, 0u8];
+    for v in [sig_off, indexes[0], pk_off, indexes[1], msg_off, message.len() as u16, indexes[2]] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    data.extend_from_slice(signature.as_ref());
+    data.extend_from_slice(signer.pubkey().as_ref());
+    data.extend_from_slice(message);
+    Instruction { program_id: ED25519, accounts: vec![], data }
 }
 
 pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolError) {

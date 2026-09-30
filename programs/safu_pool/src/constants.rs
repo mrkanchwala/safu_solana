@@ -85,6 +85,10 @@ pub const SEED_COVERED: &[u8] = b"covered";
 #[constant]
 pub const SEED_STAKER_WALLETS: &[u8] = b"staker_wallets";
 
+// Oracle approval domain tag (version it when the message layout changes).
+#[constant]
+pub const APPROVAL_DOMAIN: &[u8] = b"SAFU_CLAIM_APPROVAL_SOLANA_V1";
+
 // Cluster tag, fixed at `initialize` and signed into every oracle approval.
 #[constant]
 pub const CLUSTER_LOCALNET: u8 = 0;

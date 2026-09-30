@@ -415,20 +415,10 @@ fn back_refuses_zero_and_pause() {
     assert_err(env.send(&[ix], &[&b]), PoolError::Paused);
 }
 
-fn matured_backer(env: &mut Env, amount: u64) -> Keypair {
-    let b = env.funded(amount + SOL);
-    let ix = env.back_ix(&b.pubkey(), amount);
-    env.ok(&[ix], &[&b]);
-    env.warp(BACKER_MATURITY_SECS);
-    let m = env.mature_ix(&b.pubkey());
-    env.ok(&[m], &[&b]);
-    b
-}
-
 #[test]
 fn backer_withdrawal_request_rules() {
     let mut env = Env::new();
-    let b = matured_backer(&mut env, 2 * SOL);
+    let b = env.matured_backer(2 * SOL);
     let req = |env: &Env, a| env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: a });
     assert_err(env.send(&[req(&env, 0)], &[&b]), PoolError::AmountNotPositive);
     assert_err(env.send(&[req(&env, 2 * SOL + 1)], &[&b]), PoolError::BackerAmountExceedsBalance);
@@ -445,7 +435,7 @@ fn backer_withdrawal_request_rules() {
 #[test]
 fn backer_withdrawal_waits_for_notice_and_free_capital() {
     let mut env = Env::new();
-    let b = matured_backer(&mut env, 2 * SOL);
+    let b = env.matured_backer(2 * SOL);
     let complete = env.complete_backer_ix(&b.pubkey());
     assert_err(env.send(&[complete.clone()], &[&b]), PoolError::NoBackerWithdrawal);
     let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: SOL });
@@ -466,7 +456,7 @@ fn backer_withdrawal_waits_for_notice_and_free_capital() {
 #[test]
 fn backer_withdrawal_works_while_paused() {
     let mut env = Env::new();
-    let b = matured_backer(&mut env, SOL);
+    let b = env.matured_backer(SOL);
     let admin = env.admin.insecure_clone();
     let p = env.admin_ix(safu_pool::instruction::Pause {});
     env.ok(&[p], &[&admin]);

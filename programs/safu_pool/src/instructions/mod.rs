@@ -1,10 +1,12 @@
 pub mod admin;
 pub mod backer;
+pub mod claim;
 pub mod registry;
 pub mod stake;
 
 pub use admin::*;
 pub use backer::*;
+pub use claim::*;
 pub use registry::*;
 pub use stake::*;
 

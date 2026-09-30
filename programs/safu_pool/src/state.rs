@@ -127,3 +127,65 @@ pub struct CoveredWallet {
     pub registered_at: i64,
     pub bump: u8,
 }
+
+/// Claim lifecycle (multichain `ClaimStatus`). `Unused` is the zero value of a fresh account (an
+/// override approval can create the account before the claim exists).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace, Default)]
+pub enum ClaimStatus {
+    #[default]
+    Unused,
+    /// Queued: genuine but not admittable now (insolvent, over the stress cap, or oracle limit).
+    Reserved,
+    /// Admitted; waiting for the stake's time gate.
+    PendingTime,
+    /// Time gate met; the staker has `APPROVE_WINDOW_SECS` to approve.
+    AwaitingApproval,
+    /// Approved: stake forfeited, cooling down or paying out.
+    Active,
+    Completed,
+    Cancelled,
+    Expired,
+}
+
+/// One claim. PDA `[SEED_CLAIM, pool, staker, tx_hash]`: the address is the claim id.
+#[account]
+#[derive(InitSpace)]
+pub struct Claim {
+    pub staker: Pubkey,
+    pub tx_hash: [u8; 32],
+    pub hack_timestamp: i64,
+    pub entitlement: u64,
+    pub streamed: u64,
+    /// Stake principal behind the claim (restored to `total_staked` by a cancel).
+    pub stake: u64,
+    pub cooldown_ends: i64,
+    pub vesting_ends: i64,
+    /// Capacity just before this claim's forfeiture: the floor of its daily payout base.
+    pub capacity_snapshot: u64,
+    pub tier: u8,
+    pub status: ClaimStatus,
+    pub approve_deadline: i64,
+    pub last_collected: i64,
+    pub bump: u8,
+}
+
+/// 2-of-2 override request (admin + co-signer). PDA `[SEED_OVERRIDE, claim]`. Deleted on execution.
+#[account]
+#[derive(InitSpace)]
+pub struct OverrideRequest {
+    pub claim: Pubkey,
+    pub entitlement: u64,
+    pub tier: u8,
+    /// The approving keys, not flags: a rotated role's old approval no longer counts.
+    pub admin_approver: Option<Pubkey>,
+    pub co_signer_approver: Option<Pubkey>,
+    pub bump: u8,
+}
+
+/// A revoked oracle approval. PDA `[SEED_REVOKED, pool, sha256(approval message)]`. Permanent.
+#[account]
+#[derive(InitSpace)]
+pub struct RevokedApproval {
+    pub hash: [u8; 32],
+    pub bump: u8,
+}

@@ -24,7 +24,7 @@ form differs (reason given). **Left out** = not in this build.
 | `emergency_exit` | `emergency_exit` | Changed | **Only while paused**, pays the staker, closes the record, and **honours the penalty lock** (multichain has neither check, so there a cancelled false positive could leave early; flagged to the founder). |
 | `back` / `mature_backing` / `request_backer_withdrawal` / `cancel_backer_withdrawal` / `complete_backer_withdrawal` | same | Rules | Four withdrawal-safety rules unchanged. `BackerRecord` PDA `[backer, pool, backer]`. |
 | `get_backer` / `get_total_backed` / `get_total_backed_pending` / `get_capacity` | account fields | Changed | Capacity = total staked + total backed (matured). |
-| `submit_claim` | `submit_claim` | Changed | Oracle signs the tx **and** an Ed25519 precompile instruction right before it (backstop `verdict.rs` pattern). Claim PDA `[claim, pool, staker, tx_hash]`: the address is the id, `init` is the duplicate check. |
+| `submit_claim` | `submit_claim` | Changed | Oracle signs the tx **and** an Ed25519 precompile instruction right before it (backstop `verdict.rs` pattern). Claim PDA `[claim, pool, staker, tx_hash]`: the address is the id; a record whose status is not `Unused` means the claim already exists (so a cancelled or expired claim can never be resubmitted). |
 | `revoke_approval` | `revoke_approval` | Changed | `RevokedApproval` PDA per payload hash, permanent (no TTL problem). |
 | `unlock_pending_claim` | same | Rules | |
 | `try_release_queued_claim` / `expire_queued_claim` | same | Rules | Permissionless. |

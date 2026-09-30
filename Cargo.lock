@@ -2517,6 +2517,7 @@ dependencies = [
  "solana-keypair",
  "solana-message",
  "solana-sdk-ids",
+ "solana-sha256-hasher",
  "solana-signer",
  "solana-system-interface 2.0.0",
  "solana-transaction",
