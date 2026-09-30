@@ -69,6 +69,8 @@ pub const SEED_POOL: &[u8] = b"pool";
 #[constant]
 pub const SEED_VAULT: &[u8] = b"vault";
 #[constant]
+pub const SEED_MSOL: &[u8] = b"msol";
+#[constant]
 pub const SEED_STAKE: &[u8] = b"stake";
 #[constant]
 pub const SEED_BACKER: &[u8] = b"backer";

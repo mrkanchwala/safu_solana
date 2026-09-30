@@ -1,0 +1,409 @@
+//! LiteSVM harness shared by every test file. Marinade runs as the real program, loaded with its
+//! devnet accounts from `tests/fixtures/` (dumped 2026-09-30). Deploy values come from
+//! `config/pool.devnet.json`, rule numbers from `pool_core::params`: nothing is retyped here.
+#![allow(dead_code)]
+
+use anchor_lang::solana_program::bpf_loader_upgradeable;
+use anchor_lang::{
+    prelude::{Clock, Pubkey},
+    solana_program::instruction::Instruction,
+    AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
+};
+use base64::Engine;
+use litesvm::LiteSVM;
+use safu_pool::constants::*;
+use safu_pool::state::{BackerRecord, Pool, StakeRecord};
+use solana_account::Account;
+use solana_keypair::Keypair;
+use solana_message::{Message, VersionedMessage};
+use solana_signer::Signer;
+use solana_transaction::versioned::VersionedTransaction;
+use std::str::FromStr;
+
+pub const SOL: u64 = 1_000_000_000;
+/// Any fixed start time; every test moves the clock from here.
+pub const START: i64 = 1_800_000_000;
+pub const SYSTEM: Pubkey = solana_system_interface::program::ID;
+pub const TOKEN: Pubkey = spl_token_interface::ID;
+
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/pool.devnet.json");
+
+pub struct Config {
+    pub pool_cap: u64,
+    pub marinade_program: Pubkey,
+    pub marinade_state: Pubkey,
+    pub msol_mint: Pubkey,
+}
+
+pub fn config() -> Config {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(CONFIG).unwrap()).unwrap();
+    let key = |s: &serde_json::Value| Pubkey::from_str(s.as_str().unwrap()).unwrap();
+    Config {
+        pool_cap: v["poolCapLamports"].as_u64().unwrap(),
+        marinade_program: key(&v["marinade"]["program"]),
+        marinade_state: key(&v["marinade"]["state"]),
+        msol_mint: key(&v["marinade"]["msolMint"]),
+    }
+}
+
+/// Loads a `solana account --output json` dump.
+fn load_fixture(svm: &mut LiteSVM, name: &str) -> Pubkey {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{FIXTURES}/{name}.json")).unwrap()).unwrap();
+    let a = &v["account"];
+    let data = base64::engine::general_purpose::STANDARD.decode(a["data"][0].as_str().unwrap()).unwrap();
+    let key = Pubkey::from_str(v["pubkey"].as_str().unwrap()).unwrap();
+    svm.set_account(
+        key,
+        Account {
+            lamports: a["lamports"].as_u64().unwrap(),
+            data,
+            owner: Pubkey::from_str(a["owner"].as_str().unwrap()).unwrap(),
+            executable: a["executable"].as_bool().unwrap(),
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+    key
+}
+
+pub const MARINADE_FIXTURES: [&str; 8] = [
+    "marinade_state",
+    "marinade_msol_mint",
+    "marinade_liq_sol_leg",
+    "marinade_msol_leg",
+    "marinade_reserve",
+    "marinade_treasury_msol",
+    "marinade_st_mint_auth",
+    "marinade_msol_leg_auth",
+];
+
+pub fn pda(seeds: &[&[u8]]) -> Pubkey {
+    Pubkey::find_program_address(seeds, &safu_pool::ID).0
+}
+
+pub fn programdata(program_id: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program_id.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// LiteSVM loads programs with no upgrade authority; set it as a real deploy would.
+pub fn set_upgrade_authority(svm: &mut LiteSVM, program_id: &Pubkey, authority: &Pubkey) {
+    let address = programdata(program_id);
+    let mut account = svm.get_account(&address).expect("program data account");
+    // bincode UpgradeableLoaderState::ProgramData: u32 tag (3) · u64 slot · Option<Pubkey> (1 + 32).
+    assert_eq!(&account.data[..4], &3u32.to_le_bytes(), "not a ProgramData account");
+    account.data[12] = 1;
+    account.data[13..45].copy_from_slice(authority.as_ref());
+    svm.set_account(address, account).unwrap();
+}
+
+pub struct Env {
+    pub svm: LiteSVM,
+    pub cfg: Config,
+    pub admin: Keypair,
+    pub co_signer: Keypair,
+    pub oracle: Keypair,
+    pub writer: Keypair,
+    pub treasury: Keypair,
+    pub now: i64,
+}
+
+impl Env {
+    /// Programs and Marinade loaded, clock set, roles funded; pool not initialized.
+    pub fn uninitialized() -> Env {
+        let mut svm = LiteSVM::new();
+        let cfg = config();
+        svm.add_program(safu_pool::ID, include_bytes!("../../../../target/deploy/safu_pool.so")).unwrap();
+        svm.add_program(cfg.marinade_program, &std::fs::read(format!("{FIXTURES}/marinade.so")).unwrap())
+            .unwrap();
+        for f in MARINADE_FIXTURES {
+            load_fixture(&mut svm, f);
+        }
+        let mut clock: Clock = svm.get_sysvar();
+        clock.unix_timestamp = START;
+        svm.set_sysvar(&clock);
+        let (admin, co_signer, oracle, writer, treasury) =
+            (Keypair::new(), Keypair::new(), Keypair::new(), Keypair::new(), Keypair::new());
+        for k in [&admin, &co_signer, &oracle, &writer, &treasury] {
+            svm.airdrop(&k.pubkey(), 100 * SOL).unwrap();
+        }
+        set_upgrade_authority(&mut svm, &safu_pool::ID, &admin.pubkey());
+        Env { svm, cfg, admin, co_signer, oracle, writer, treasury, now: START }
+    }
+
+    /// Initialized with the devnet config.
+    pub fn new() -> Env {
+        let mut env = Env::uninitialized();
+        let args = env.init_args();
+        let admin = env.admin.insecure_clone();
+        let ix = env.init_ix(&admin.pubkey(), args, env.cfg.marinade_state, env.cfg.msol_mint);
+        env.ok(&[ix], &[&admin]);
+        env
+    }
+
+    pub fn init_args(&self) -> safu_pool::instructions::InitArgs {
+        safu_pool::instructions::InitArgs {
+            co_signer: self.co_signer.pubkey(),
+            oracle: self.oracle.pubkey(),
+            registry_writer: self.writer.pubkey(),
+            treasury: self.treasury.pubkey(),
+            cluster: CLUSTER_LOCALNET,
+            pool_cap: self.cfg.pool_cap,
+        }
+    }
+
+    pub fn init_ix(
+        &self,
+        admin: &Pubkey,
+        args: safu_pool::instructions::InitArgs,
+        marinade_state: Pubkey,
+        msol_mint: Pubkey,
+    ) -> Instruction {
+        let pool = self.pool();
+        self.ix(
+            safu_pool::accounts::Initialize {
+                admin: *admin,
+                program: safu_pool::ID,
+                program_data: programdata(&safu_pool::ID),
+                pool,
+                vault: self.vault(),
+                marinade_program: self.cfg.marinade_program,
+                marinade_state,
+                msol_mint,
+                pool_msol: self.pool_msol(),
+                token_program: TOKEN,
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::Initialize { args },
+        )
+    }
+
+    pub fn ix(&self, accounts: impl ToAccountMetas, data: impl InstructionData) -> Instruction {
+        Instruction { program_id: safu_pool::ID, accounts: accounts.to_account_metas(None), data: data.data() }
+    }
+
+    // ---- addresses
+
+    pub fn pool(&self) -> Pubkey {
+        pda(&[SEED_POOL])
+    }
+    pub fn vault(&self) -> Pubkey {
+        pda(&[SEED_VAULT, self.pool().as_ref()])
+    }
+    pub fn pool_msol(&self) -> Pubkey {
+        pda(&[SEED_MSOL, self.pool().as_ref()])
+    }
+    pub fn stake_record(&self, staker: &Pubkey) -> Pubkey {
+        pda(&[SEED_STAKE, self.pool().as_ref(), staker.as_ref()])
+    }
+    pub fn backer_record(&self, backer: &Pubkey) -> Pubkey {
+        pda(&[SEED_BACKER, self.pool().as_ref(), backer.as_ref()])
+    }
+    pub fn staker_wallets(&self, staker: &Pubkey) -> Pubkey {
+        pda(&[SEED_STAKER_WALLETS, self.pool().as_ref(), staker.as_ref()])
+    }
+    pub fn covered(&self, hash: &[u8; 32]) -> Pubkey {
+        pda(&[SEED_COVERED, self.pool().as_ref(), hash.as_ref()])
+    }
+
+    // ---- sending
+
+    pub fn send(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<(), String> {
+        let msg = Message::new_with_blockhash(ixs, Some(&signers[0].pubkey()), &self.svm.latest_blockhash());
+        let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), signers).unwrap();
+        let r = self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?} | logs: {:?}", e.err, e.meta.logs));
+        self.svm.expire_blockhash();
+        r
+    }
+
+    pub fn ok(&mut self, ixs: &[Instruction], signers: &[&Keypair]) {
+        if let Err(e) = self.send(ixs, signers) {
+            panic!("transaction should have succeeded: {e}");
+        }
+    }
+
+    pub fn warp(&mut self, secs: i64) {
+        self.now += secs;
+        let mut c: Clock = self.svm.get_sysvar();
+        c.unix_timestamp = self.now;
+        self.svm.set_sysvar(&c);
+        self.svm.expire_blockhash();
+    }
+
+    pub fn funded(&mut self, lamports: u64) -> Keypair {
+        let k = Keypair::new();
+        self.svm.airdrop(&k.pubkey(), lamports).unwrap();
+        k
+    }
+
+    pub fn lamports(&self, a: &Pubkey) -> u64 {
+        self.svm.get_account(a).map(|a| a.lamports).unwrap_or(0)
+    }
+
+    pub fn exists(&self, a: &Pubkey) -> bool {
+        self.svm.get_account(a).is_some_and(|a| a.lamports > 0)
+    }
+
+    // ---- reading and editing accounts
+
+    pub fn read<T: AccountDeserialize>(&self, a: &Pubkey) -> T {
+        let acc = self.svm.get_account(a).expect("account exists");
+        T::try_deserialize(&mut acc.data.as_slice()).unwrap()
+    }
+
+    /// Rewrites an account's data in place (test setup only, for states another step would create).
+    pub fn edit<T: AccountDeserialize + AccountSerialize>(&mut self, a: &Pubkey, f: impl FnOnce(&mut T)) {
+        let mut acc = self.svm.get_account(a).expect("account exists");
+        let mut v = T::try_deserialize(&mut acc.data.as_slice()).unwrap();
+        f(&mut v);
+        let mut data = Vec::with_capacity(acc.data.len());
+        v.try_serialize(&mut data).unwrap();
+        data.resize(acc.data.len(), 0);
+        acc.data = data;
+        self.svm.set_account(*a, acc).unwrap();
+    }
+
+    pub fn pool_state(&self) -> Pool {
+        self.read(&self.pool())
+    }
+    pub fn stake_state(&self, staker: &Pubkey) -> StakeRecord {
+        self.read(&self.stake_record(staker))
+    }
+    pub fn backer_state(&self, backer: &Pubkey) -> BackerRecord {
+        self.read(&self.backer_record(backer))
+    }
+
+    /// Rent-exempt minimum of a data-less account, as the program computes it.
+    pub fn rent_floor(&self) -> u64 {
+        self.svm.minimum_balance_for_rent_exemption(0)
+    }
+    pub fn vault_liquid(&self) -> u64 {
+        self.lamports(&self.vault()) - self.rent_floor()
+    }
+
+    // ---- instruction builders
+
+    pub fn admin_ix(&self, data: impl InstructionData) -> Instruction {
+        self.ix(safu_pool::accounts::AdminOnly { admin: self.admin.pubkey(), pool: self.pool() }, data)
+    }
+
+    pub fn stake_ix(&self, staker: &Pubkey, amount: u64, beneficiary: Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::Stake {
+                staker: *staker,
+                pool: self.pool(),
+                vault: self.vault(),
+                stake_record: self.stake_record(staker),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::Stake { amount, beneficiary },
+        )
+    }
+
+    pub fn withdraw_ix(&self, staker: &Pubkey, beneficiary: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::Withdraw {
+                staker: *staker,
+                pool: self.pool(),
+                vault: self.vault(),
+                stake_record: self.stake_record(staker),
+                beneficiary: *beneficiary,
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::Withdraw {},
+        )
+    }
+
+    pub fn emergency_exit_ix(&self, staker: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::EmergencyExit {
+                staker: *staker,
+                pool: self.pool(),
+                vault: self.vault(),
+                stake_record: self.stake_record(staker),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::EmergencyExit {},
+        )
+    }
+
+    pub fn set_beneficiary_ix(&self, staker: &Pubkey, beneficiary: Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::SetBeneficiary { staker: *staker, pool: self.pool(), stake_record: self.stake_record(staker) },
+            safu_pool::instruction::SetBeneficiary { beneficiary },
+        )
+    }
+
+    pub fn back_ix(&self, backer: &Pubkey, amount: u64) -> Instruction {
+        self.ix(
+            safu_pool::accounts::Back {
+                backer: *backer,
+                pool: self.pool(),
+                vault: self.vault(),
+                backer_record: self.backer_record(backer),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::Back { amount },
+        )
+    }
+
+    pub fn mature_ix(&self, backer: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::MatureBacking { pool: self.pool(), backer_record: self.backer_record(backer) },
+            safu_pool::instruction::MatureBacking {},
+        )
+    }
+
+    pub fn backer_only_ix(&self, backer: &Pubkey, data: impl InstructionData) -> Instruction {
+        self.ix(
+            safu_pool::accounts::BackerOnly { backer: *backer, pool: self.pool(), backer_record: self.backer_record(backer) },
+            data,
+        )
+    }
+
+    pub fn complete_backer_ix(&self, backer: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::CompleteBackerWithdrawal {
+                backer: *backer,
+                pool: self.pool(),
+                vault: self.vault(),
+                backer_record: self.backer_record(backer),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::CompleteBackerWithdrawal {},
+        )
+    }
+
+    pub fn register_ix(&self, writer: &Pubkey, staker: Pubkey, wallet_hash: [u8; 32]) -> Instruction {
+        self.ix(
+            safu_pool::accounts::RegisterWallet {
+                registry_writer: *writer,
+                pool: self.pool(),
+                staker_wallets: self.staker_wallets(&staker),
+                covered_wallet: self.covered(&wallet_hash),
+                system_program: SYSTEM,
+            },
+            safu_pool::instruction::RegisterWallet { staker, wallet_hash },
+        )
+    }
+
+    /// A funded staker with a live stake of `amount` (beneficiary = itself).
+    pub fn staker(&mut self, amount: u64) -> Keypair {
+        let k = self.funded(amount + SOL);
+        let ix = self.stake_ix(&k.pubkey(), amount, k.pubkey());
+        self.ok(&[ix], &[&k]);
+        k
+    }
+}
+
+pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolError) {
+    let code = anchor_lang::error::ERROR_CODE_OFFSET + error as u32;
+    let err = result.expect_err("transaction should have failed");
+    assert!(err.contains(&format!("Custom({code})")), "expected Custom({code}) ({error:?}), got: {err}");
+}
+
+/// Stake bounds for the configured pool cap, from the same rule the program uses.
+pub fn bounds() -> (u64, u64) {
+    pool_core::stake::bounds(config().pool_cap).unwrap()
+}

@@ -21,7 +21,7 @@ form differs (reason given). **Left out** = not in this build.
 | `stake` | `stake` | Rules | SOL. Bounds = bps of pool cap (0.05–0.5 SOL at 50 SOL). `StakeRecord` PDA `[stake, pool, staker]`. |
 | `withdraw` | `withdraw` | Changed | Pays principal + unpaid yield to the stored beneficiary and **closes** the `StakeRecord` (rent back to the staker). |
 | `set_beneficiary` | `set_beneficiary` | Changed | Also blocked while a claim is open or queued (eng review D1). |
-| `emergency_exit` | `emergency_exit` | Changed | Works while paused, pays the staker. Closes the record. |
+| `emergency_exit` | `emergency_exit` | Changed | **Only while paused**, pays the staker, closes the record, and **honours the penalty lock** (multichain has neither check, so there a cancelled false positive could leave early; flagged to the founder). |
 | `back` / `mature_backing` / `request_backer_withdrawal` / `cancel_backer_withdrawal` / `complete_backer_withdrawal` | same | Rules | Four withdrawal-safety rules unchanged. `BackerRecord` PDA `[backer, pool, backer]`. |
 | `get_backer` / `get_total_backed` / `get_total_backed_pending` / `get_capacity` | account fields | Changed | Capacity = total staked + total backed (matured). |
 | `submit_claim` | `submit_claim` | Changed | Oracle signs the tx **and** an Ed25519 precompile instruction right before it (backstop `verdict.rs` pattern). Claim PDA `[claim, pool, staker, tx_hash]`: the address is the id, `init` is the duplicate check. |

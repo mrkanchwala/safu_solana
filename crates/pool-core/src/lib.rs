@@ -8,20 +8,54 @@
 //! - **Rounding favours the pool:** payouts and yield round down, amounts owed to the pool round up.
 #![no_std]
 
+pub mod liquidity;
 pub mod marinade;
 pub mod params;
+pub mod stake;
+pub mod yields;
 
+/// Maths failures and rule violations. The program maps each one to its own error code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreError {
     Overflow,
     DivideByZero,
     InvalidParameter,
+    /// Stake outside `[MIN_STAKE_BPS, MAX_STAKE_BPS]` of the pool cap.
+    StakeOutOfRange,
+    /// Stake would take total staked above the pool cap.
+    PoolCapExceeded,
+    /// A backer withdrawal would leave open claims without the capital they need (backer rule 3).
+    BackerCapitalNotFree,
 }
 
 pub type Result<T> = core::result::Result<T, CoreError>;
 
 pub(crate) fn to_u64(v: u128) -> Result<u64> {
     u64::try_from(v).map_err(|_| CoreError::Overflow)
+}
+
+/// Checked `a + b`.
+pub fn add(a: u64, b: u64) -> Result<u64> {
+    a.checked_add(b).ok_or(CoreError::Overflow)
+}
+
+/// Checked `a - b`.
+pub fn sub(a: u64, b: u64) -> Result<u64> {
+    a.checked_sub(b).ok_or(CoreError::Overflow)
+}
+
+/// Pool capacity: staker principal plus matured backer money.
+pub fn capacity(total_staked: u64, total_backed: u64) -> Result<u64> {
+    add(total_staked, total_backed)
+}
+
+/// Backer rule 3: only free capital can leave. After taking `amount` out, open claims
+/// (`total_allocated`) must still fit in capacity.
+pub fn check_backer_capital_free(total_allocated: u64, capacity: u64, amount: u64) -> Result<()> {
+    match capacity.checked_sub(amount) {
+        Some(left) if total_allocated <= left => Ok(()),
+        _ => Err(CoreError::BackerCapitalNotFree),
+    }
 }
 
 /// `amount x numerator / denominator`, rounded down.
