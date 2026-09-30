@@ -37,10 +37,13 @@ pub fn harvest_msol(deployed: u64, book: u64, price: u64, elapsed_secs: i64) -> 
     mul_div_floor(growth, deployed, value)
 }
 
-/// Marinade's fee on an unstake is within `MAX_REBALANCE_SLIPPAGE_BPS` of the expected value.
-pub fn fee_within_limit(expected: u64, received: u64) -> Result<bool> {
-    let fee = expected.saturating_sub(received);
-    Ok(fee as u128 * BPS_DENOMINATOR as u128 <= expected as u128 * MAX_REBALANCE_SLIPPAGE_BPS as u128)
+/// Marinade's fee on an unstake is within `limit_bps` of the expected value, plus one lamport for
+/// Marinade's rounding. Payee-paid unstakes use Marinade's own `lp_max_fee` (founder decision
+/// 2026-09-30: the payee pays whatever Marinade charges); pool-paid rebalances use
+/// `MAX_REBALANCE_SLIPPAGE_BPS`.
+pub fn fee_within_limit(expected: u64, received: u64, limit_bps: u64) -> Result<bool> {
+    let fee = expected.saturating_sub(received).saturating_sub(1);
+    Ok(fee as u128 * BPS_DENOMINATOR as u128 <= expected as u128 * limit_bps as u128)
 }
 
 /// How one unstake lands on the books.

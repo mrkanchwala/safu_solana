@@ -6,6 +6,7 @@
 //! it or fails with a typed error, and then nothing changes.
 
 use anchor_lang::prelude::*;
+use pool_core::params::MAX_REBALANCE_SLIPPAGE_BPS;
 use pool_core::{add, leg, liquidity, sub, yields};
 
 use crate::errors::{CoreResultExt, PoolError};
@@ -146,7 +147,10 @@ pub fn pull<'info>(
     let before = vault.lamports();
     leg.liquid_unstake(pool, pool_key, vault, msol)?;
     let received = sub(vault.lamports(), before).core()?;
-    require!(leg::fee_within_limit(expected, received).core()?, PoolError::UnstakeFeeTooHigh);
+    // The payee pays Marinade's fee, whatever it is up to Marinade's own maximum; the pool's own
+    // unstakes (rebalance) are held to `MAX_REBALANCE_SLIPPAGE_BPS`.
+    let limit_bps = if payee_pays { u64::from(st.lp_max_fee_bps) } else { MAX_REBALANCE_SLIPPAGE_BPS };
+    require!(leg::fee_within_limit(expected, received, limit_bps).core()?, PoolError::UnstakeFeeTooHigh);
 
     pool.deployed_msol = sub(pool.deployed_msol, msol).core()?;
     pool.deployed_book = sub(pool.deployed_book, principal).core()?;

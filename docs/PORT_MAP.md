@@ -74,11 +74,12 @@ form differs (reason given). **Left out** = not in this build.
   (in practice one lamport of Marinade rounding). A `rebalance` unstake is the pool's: growth that
   comes back pays the fee first, any rest is a loss marked off `total_staked` (multichain
   `DeploymentShortfall`).
-- **Fee limit.** `MAX_REBALANCE_SLIPPAGE_BPS` (5%) caps Marinade's fee on any unstake, else
-  `UnstakeFeeTooHigh`. Marinade's fee is linear from `lp_min_fee` (at or above its liquidity target)
-  to `lp_max_fee` (empty); `pool_core::marinade::unstake_fee_bps` computes it for clients.
-  **Devnet 2026-09-30:** 15,264 SOL in Marinade's liquidity pool against a 160,000 SOL target: fee
-  ~8.2%, so payouts that need an unstake are refused on devnet today. Open decision for the founder.
+- **Fee limit.** Payee-paid unstakes accept Marinade's fee up to Marinade's own `lp_max_fee` (founder
+  decision 2026-09-30: the payee pays whatever Marinade charges; the site shows it before signing, via
+  `pool_core::marinade::unstake_fee_bps`). Pool-paid `rebalance` unstakes are held to
+  `MAX_REBALANCE_SLIPPAGE_BPS` (5%), else `UnstakeFeeTooHigh`. Marinade's fee is linear from `lp_min_fee`
+  (at or above its liquidity target) to `lp_max_fee` (empty). Devnet 2026-09-30: 15,264 SOL against a
+  160,000 SOL target, fee ~8.2%: payouts go through at that cost, rebalances wait.
 - **Compute units** (LiteSVM, Marinade at target liquidity): stake + deposit 77k, harvest 60k,
   claim_yield + harvest 68k, withdraw + harvest + unstake 117k. Client limit `computeUnitLimit` in
   `config/pool.devnet.json` (200k); the test suite fails if any path exceeds it.

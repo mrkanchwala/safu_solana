@@ -42,8 +42,10 @@ fn harvest_takes_growth_up_to_the_daily_limit() {
 #[test]
 fn fee_limit() {
     let over = SOL - SOL * MAX_REBALANCE_SLIPPAGE_BPS / BPS_DENOMINATOR - 1;
-    assert!(fee_within_limit(SOL, SOL - SOL * MAX_REBALANCE_SLIPPAGE_BPS / BPS_DENOMINATOR).unwrap());
-    assert!(!fee_within_limit(SOL, over).unwrap());
+    let limit = MAX_REBALANCE_SLIPPAGE_BPS;
+    assert!(fee_within_limit(SOL, SOL - SOL * limit / BPS_DENOMINATOR, limit).unwrap());
+    assert!(fee_within_limit(SOL, SOL - SOL * limit / BPS_DENOMINATOR - 1, limit).unwrap());
+    assert!(!fee_within_limit(SOL, over - 1, limit).unwrap());
 }
 
 #[test]

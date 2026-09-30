@@ -79,15 +79,35 @@ fn backing_deploys_only_once_it_counts() {
 // ------------------------------------------------------------------ payouts through Marinade
 
 #[test]
-fn devnet_liquidity_refuses_payouts_with_a_typed_error() {
-    // Real devnet dump: Marinade's liquidity pool is far below target, so its fee is near 9%.
+fn devnet_liquidity_the_payee_pays_marinades_fee_the_pool_does_not() {
+    // Real devnet dump: Marinade's liquidity pool is far below target, so its fee is near its maximum.
     let mut env = Env::new();
-    let s = env.staker(bounds().1);
+    let (_, max) = bounds();
+    let s = env.staker(max);
     let deployed = env.pool_state().deployed_book;
-    assert!(u64::from(env.marinade_fee_bps(deployed)) > MAX_REBALANCE_SLIPPAGE_BPS);
+    let fee_bps = env.marinade_fee_bps(deployed);
+    assert!(u64::from(fee_bps) > MAX_REBALANCE_SLIPPAGE_BPS);
+
+    // Payout: goes through, the staker pays Marinade's fee on the unstaked part.
+    let fee = apply_bps(deployed, fee_bps.into()).unwrap();
+    let rent = env.lamports(&env.stake_record(&s.pubkey()));
+    let before = env.lamports(&s.pubkey());
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
-    assert_err(env.send(&[ix], &[&s]), PoolError::UnstakeFeeTooHigh);
-    assert_eq!(env.stake_state(&s.pubkey()).amount, bounds().1);
+    env.ok(&[ix], &[&s]);
+    let got = env.lamports(&s.pubkey()) - before;
+    let slack = apply_bps(deployed, 1).unwrap() + SOL / 1_000;
+    assert!(got + fee <= max + rent + slack && got + fee + slack >= max + rent, "got {got}, fee {fee}");
+
+    // Rebalance: the pool would pay, so the 5% limit holds and it is refused.
+    let b = env.matured_backer(BACKING);
+    let ix = env.upkeep_ix(safu_pool::instruction::Rebalance {});
+    env.ok(&[ix.clone()], &[&b]);
+    let req = env.backer_only_ix(&b.pubkey(), safu_pool::instruction::RequestBackerWithdrawal { amount: BACKING / 2 });
+    env.ok(&[req], &[&b]);
+    env.warp(BACKER_NOTICE_SECS);
+    let done = env.complete_backer_ix(&b.pubkey());
+    env.ok(&[done], &[&b]);
+    assert_err(env.send(&[ix], &[&b]), PoolError::UnstakeFeeTooHigh);
 }
 
 #[test]
