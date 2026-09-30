@@ -94,7 +94,7 @@ pub struct Pool {
     pub day_oracle_count: u64,
     pub day_outflow: u64,
     /// Room for fields a later upgrade adds.
-    pub reserved: [u8; 256],
+    pub reserved: [u8; 256], // hardcode-ok: spare layout bytes, not a rule
 }
 
 impl Pool {

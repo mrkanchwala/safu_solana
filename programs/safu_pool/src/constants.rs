@@ -118,7 +118,7 @@ pub const SEED_STAKER_WALLETS: &[u8] = b"staker_wallets";
 
 /// The pool's asset today (`Pool::asset_mint`): the native SOL mint address.
 pub const NATIVE_SOL_MINT: Pubkey =
-    anchor_lang::prelude::pubkey!("So11111111111111111111111111111111111111112");
+    anchor_lang::prelude::pubkey!("So11111111111111111111111111111111111111112"); // hardcode-ok: the network's native mint, not a deploy value
 
 // Oracle approval domain tag (version it when the message layout changes).
 #[constant]

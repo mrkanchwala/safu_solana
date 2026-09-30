@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fails if an address or a rule number is typed outside its one source.
-#   Rule numbers  -> crates/pool-core/src/params.rs (clients read them from the IDL)
+#   Rule numbers  -> crates/pool-core/src/params.rs, setting ranges -> settings.rs (clients read
+#                    them from the IDL or the pool's settings)
 #   Marinade facts-> crates/pool-core/src/marinade.rs
 #   Deploy values -> config/*.json
 #   Program id    -> declare_id! (clients read the IDL `address`)
@@ -10,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 SOURCES=(programs/safu_pool/src crates/pool-core/src)
 [ -d app/src ] && SOURCES+=(app/src)
-ALLOWED='crates/pool-core/src/(params|marinade)\.rs'
+ALLOWED='crates/pool-core/src/(params|marinade|settings)\.rs'
 fail=0
 
 # 1. Base58 addresses (32-44 chars).

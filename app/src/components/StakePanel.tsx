@@ -3,9 +3,9 @@ import { useAction, useClient } from "../lib/client";
 import { claimYield, stake, withdraw } from "../lib/actions";
 import { addCoveredWallet, confirmCoveredWallet } from "../lib/claimApi";
 import type { CoveredWalletResponse } from "../lib/claimApi";
-import { num } from "../lib/pool";
+import { num, setting } from "../lib/pool";
 import { unstakeFeeBps } from "../lib/program";
-import { fmtSol, parseSol, readCoveredWallets, readMyStake, rememberCoveredWallet, stakeBounds } from "../lib/reads";
+import { fmtSol, parseSol, readCoveredWallets, readMyStake, rememberCoveredWallet, stakeBounds, withdrawCheck } from "../lib/reads";
 import type { CoveredWallet, MyStake } from "../lib/reads";
 import { usePool } from "../lib/usePool";
 import { toFriendlyError } from "../lib/friendly-error";
@@ -39,6 +39,7 @@ export function StakePanel() {
   const [coveredWallets, setCoveredWallets] = useState<CoveredWallet[]>([]);
 
   const [stakeAmount, setStakeAmount] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
   const [newWallet, setNewWallet] = useState("");
   const [pending, setPending] = useState<CoveredWalletResponse | null>(null);
   const [walletMsg, setWalletMsg] = useState<string | null>(null);
@@ -72,7 +73,11 @@ export function StakePanel() {
   const done = () => setRefreshKey((k) => k + 1);
 
   const stakeAction = useAction(() => stake(client, pool, lamports ?? 0n).finally(() => (setStakeAmount(""), done())));
-  const withdrawAction = useAction(() => withdraw(client, pool).finally(done));
+  // Blank = the whole stake. A part must leave at least the min stake (checked here and on-chain).
+  const withdrawLamports = withdrawAmount.trim() === "" ? (myStake?.amount ?? 0n) : parseSol(withdrawAmount);
+  const withdrawProblem =
+    live && pool ? (withdrawLamports === null ? "Enter an amount in SOL." : withdrawCheck(pool, myStake.amount, withdrawLamports)) : null;
+  const withdrawAction = useAction(() => withdraw(client, pool, withdrawLamports ?? 0n).finally(() => (setWithdrawAmount(""), done())));
   const takeYieldAction = useAction(() => claimYield(client, pool).finally(done));
 
   function registered(r: CoveredWalletResponse) {
@@ -170,9 +175,28 @@ export function StakePanel() {
             </>
           )}
         </div>
-        <button className="secondary-action" style={{ width: "100%" }} disabled={!live || withdrawAction.isRunning} onClick={() => withdrawAction.dispatch()}>
-          {withdrawAction.isRunning ? "Withdrawing..." : "Withdraw principal + yield"}
+        {live ? (
+          <div className="field-group">
+            <div className="field-label">
+              <span>Withdraw</span>
+              <span>blank = all of it</span>
+            </div>
+            <div className="field-input">
+              <input placeholder={fmtSol(myStake.amount)} value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} inputMode="decimal" aria-label="Amount to withdraw in SOL" />
+              <span className="unit">SOL</span>
+            </div>
+            {withdrawAmount.trim() !== "" && withdrawProblem ? <div className="ramp-disclosure">{withdrawProblem}</div> : null}
+          </div>
+        ) : null}
+        <button className="secondary-action" style={{ width: "100%" }} disabled={!live || !!withdrawProblem || withdrawAction.isRunning} onClick={() => withdrawAction.dispatch()}>
+          {withdrawAction.isRunning ? "Withdrawing..." : withdrawAmount.trim() === "" ? "Withdraw all + yield" : "Withdraw this + all yield"}
         </button>
+        {live ? (
+          <div className="ramp-disclosure" style={{ marginTop: 8 }}>
+            You can take out part of your stake; your coverage shrinks with it. Money open claims still need
+            stays in the pool until they're paid, so a withdrawal can wait. It's never lost.
+          </div>
+        ) : null}
         <TxStatus action={withdrawAction} />
         {live && myStake.yieldOwed > 0n ? (
           <button className="secondary-action" style={{ width: "100%", marginTop: 8 }} disabled={takeYieldAction.isRunning} onClick={() => takeYieldAction.dispatch()}>
@@ -235,7 +259,7 @@ export function StakePanel() {
       <div>
         <div className="side-stat">
           <div className="k">Pool cap</div>
-          <div className="v">{pool ? fmtSol(pool.pool_cap, 0) : "--"} SOL</div>
+          <div className="v">{pool ? fmtSol(setting(pool, "POOL_CAP"), 0) : "--"} SOL</div>
         </div>
         <div className="side-stat">
           <div className="k">Total staked</div>

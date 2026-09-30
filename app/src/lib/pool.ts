@@ -55,6 +55,12 @@ export function num(name: string): bigint {
   return BigInt(rawConstant(name).value.replace(/_/g, ""));
 }
 
+/** A live pool setting (cooldown, stake bounds, pool cap, ...): `name` is the IDL constant without
+ *  its `SETTING_` prefix. Settings change through the program's timelock, so never use a constant. */
+export function setting(pool: { settings: bigint[] }, name: string): bigint {
+  return pool.settings[Number(num(`SETTING_${name}`))];
+}
+
 /** A byte-string constant from the IDL (PDA seeds, the approval domain). */
 export function bytes(name: string): Uint8Array {
   return new Uint8Array(JSON.parse(rawConstant(name).value) as number[]);

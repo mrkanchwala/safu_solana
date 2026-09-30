@@ -1,5 +1,5 @@
 // Chain reads for the panels: the pool, a stake, a backing, a claim. Layouts come from the IDL.
-import { num } from "./pool";
+import { num, setting } from "./pool";
 import { backerAddress, poolAddress, readAccount, stakeAddress } from "./program";
 import type { PoolRecord } from "./program";
 
@@ -69,10 +69,21 @@ export function vested(c: ClaimRecord, now: number): bigint {
   return (c.entitlement * BigInt(elapsed)) / BigInt(end - start);
 }
 
-/** Stake bounds: pool cap x MIN/MAX_STAKE_BPS (pool-core stake::bounds). */
+/** Stake bounds: pool cap x min/max stake bps, all live settings (pool-core stake::bounds). */
 export function stakeBounds(pool: PoolRecord): { min: bigint; max: bigint } {
   const bps = num("BPS_DENOMINATOR");
-  return { min: (pool.pool_cap * num("MIN_STAKE_BPS")) / bps, max: (pool.pool_cap * num("MAX_STAKE_BPS")) / bps };
+  const cap = setting(pool, "POOL_CAP");
+  return { min: (cap * setting(pool, "MIN_STAKE_BPS")) / bps, max: (cap * setting(pool, "MAX_STAKE_BPS")) / bps };
+}
+
+/** What a withdrawal of `amount` leaves, or why it can't go (pool-core stake::check_withdraw). */
+export function withdrawCheck(pool: PoolRecord, stake: bigint, amount: bigint): string | null {
+  if (amount <= 0n) return "Enter an amount above zero.";
+  if (amount > stake) return "That's more than your stake.";
+  const left = stake - amount;
+  const { min } = stakeBounds(pool);
+  if (left > 0n && left < min) return `What stays must be at least ${fmtSol(min, 2)} SOL. Take it all out instead.`;
+  return null;
 }
 
 export const LAMPORTS = 1_000_000_000n;

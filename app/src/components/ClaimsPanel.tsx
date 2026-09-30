@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAction, useClient } from "../lib/client";
 import { approveClaim, collectClaim, releaseQueuedClaim, unlockPendingClaim } from "../lib/actions";
-import { num } from "../lib/pool";
+import { num, setting } from "../lib/pool";
 import { unstakeFeeBps } from "../lib/program";
 import { fmtDuration, fmtSol, readMyClaim, readMyStake, vested } from "../lib/reads";
 import type { ClaimStatus, MyClaim, MyStake } from "../lib/reads";
@@ -15,8 +15,6 @@ import { TxStatus } from "./TxStatus";
 //   AwaitingApproval -> "Approve claim" (the staker only; gives up the stake, starts the payout)
 //   Active -> "Collect payout" after the cooldown (the staker signs; SOL goes to the staking wallet)
 const TIME_GATE = Number(num("TIME_GATE_SECS"));
-const COOLDOWN = Number(num("COOLDOWN_SECS"));
-const VESTING = Number(num("VESTING_SECS"));
 const TIER_NAME: Record<number, string> = {
   [Number(num("TIER_A"))]: "A",
   [Number(num("TIER_B"))]: "B",
@@ -49,6 +47,9 @@ export function ClaimsPanel() {
   const staker = client.address;
   const [refreshKey, setRefreshKey] = useState(0);
   const { pool, now } = usePool(refreshKey);
+  // Live settings: what an approval now would start with.
+  const COOLDOWN = pool ? Number(setting(pool, "COOLDOWN_SECS")) : 0;
+  const VESTING = pool ? Number(setting(pool, "VESTING_SECS")) : 0;
   const [stake, setStake] = useState<MyStake | null>(null);
   const [claim, setClaim] = useState<MyClaim | null>(null);
   const [feeBps, setFeeBps] = useState<number | null>(null);

@@ -80,7 +80,9 @@ export async function chainNow(): Promise<number> {
 export type PoolRecord = {
   admin: string; oracle: string; registry_writer: string;
   marinade_program: string; marinade_state: string; msol_mint: string; pool_msol: string;
-  cluster: number; pool_cap: bigint; paused_until: bigint;
+  cluster: number; paused_until: bigint;
+  /** Live adjustable settings, one slot per IDL `SETTING_*` constant: read them with `setting()`. */
+  settings: bigint[];
   total_staked: bigint; total_stakers: bigint; total_backed: bigint; total_backed_pending: bigint;
   total_allocated: bigint; staker_yield_index: bigint; backer_yield_index: bigint;
 };

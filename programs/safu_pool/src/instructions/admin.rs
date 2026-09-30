@@ -129,7 +129,7 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
         day_admitted: 0,
         day_oracle_count: 0,
         day_outflow: 0,
-        reserved: [0; 256],
+        reserved: [0; 256], // hardcode-ok: spare layout bytes, not a rule
     });
     emit!(PoolInitialized {
         admin,

@@ -8,7 +8,7 @@ import {
   matureBacking,
   requestBackerWithdrawal,
 } from "../lib/actions";
-import { num } from "../lib/pool";
+import { setting } from "../lib/pool";
 import { fmtDuration, fmtSol, parseSol, readMyBacking } from "../lib/reads";
 import type { MyBacking } from "../lib/reads";
 import { usePool } from "../lib/usePool";
@@ -16,8 +16,6 @@ import { TxStatus } from "./TxStatus";
 
 // Back the pool tab: like Stake, without covered wallets. Backing adds capacity for claims; it
 // earns yield, no coverage. New backing matures before it counts; taking it out needs notice.
-const MATURITY = Number(num("BACKER_MATURITY_SECS"));
-const NOTICE = Number(num("BACKER_NOTICE_SECS"));
 
 function when(ts: bigint, now: bigint): string {
   if (!ts) return "--";
@@ -29,6 +27,9 @@ export function BackPanel() {
   const backer = client.address;
   const [refreshKey, setRefreshKey] = useState(0);
   const { pool, now: chainTime } = usePool(refreshKey);
+  // Live settings.
+  const MATURITY = pool ? Number(setting(pool, "BACKER_MATURITY_SECS")) : 0;
+  const NOTICE = pool ? Number(setting(pool, "BACKER_NOTICE_SECS")) : 0;
   const [amount, setAmount] = useState("");
   const [backing, setBacking] = useState<MyBacking | null>(null);
 

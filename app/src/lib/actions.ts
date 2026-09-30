@@ -15,8 +15,9 @@ const me = (w: Signer) => w.address as string;
 
 export const stake = (w: Signer, pool: PoolRecord | null, lamports: bigint) =>
   run(w, pool, "stake", { staker: me(w) }, { amount: lamports, beneficiary: me(w) }, true);
-export const withdraw = (w: Signer, pool: PoolRecord | null) =>
-  run(w, pool, "withdraw", { staker: me(w), beneficiary: me(w) }, {}, true);
+/** `lamports` of principal (all of it, or a part that leaves at least the min stake) + all yield. */
+export const withdraw = (w: Signer, pool: PoolRecord | null, lamports: bigint) =>
+  run(w, pool, "withdraw", { staker: me(w), beneficiary: me(w) }, { amount: lamports }, true);
 export const claimYield = (w: Signer, pool: PoolRecord | null) =>
   run(w, pool, "claim_yield", { staker: me(w), beneficiary: me(w) }, {}, true);
 
