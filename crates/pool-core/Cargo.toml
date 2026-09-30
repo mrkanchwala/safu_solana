@@ -1,0 +1,17 @@
+[package]
+name = "pool-core"
+version = "0.1.0"
+description = "SAFU Solana pool rules: pure integer functions, no chain dependencies"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+default = []
+# Fast devnet clocks (params.rs). Forwarded by the program's own `demo` feature.
+demo = []
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"

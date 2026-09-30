@@ -1,0 +1,14 @@
+{
+  "cluster": "devnet",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "poolCapLamports": 50000000000,
+  "marinade": {
+    "program": "MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",
+    "state": "8szGkuLTAux9XMgZ2vtY39jVSowEcpBfFfD8hXSEqdGC",
+    "msolMint": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"
+  },
+  "drainTestMints": {
+    "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  },
+  "_note": "Deploy values only. Program id comes from the IDL (target/idl/safu_pool.json `address`); every rule number comes from the IDL constants. Marinade PDAs are derived from `marinade.state` with the seeds in pool-core/src/marinade.rs."
+}

@@ -1,0 +1,9 @@
+target/
+node_modules/
+.anchor/
+*.log
+.env
+.env.*
+# Keypairs never enter git. Throwaway devnet keys live outside the repo.
+*-keypair.json
+keys/
