@@ -2,12 +2,18 @@
 //! stake) → cooldown → vesting stream under a daily payout cap → completed. Plus cancel (false
 //! positive), the 2-of-2 override, approval revocation, and the permissionless expiry sweeps.
 //!
+//! Pause and the claim windows (audit X1): every window (hack → submit, approve, collection) runs on
+//! the claim clock, `Pool::claim_clock(now, claim.pause_mark)`, which does not count time the pool
+//! spent paused. The expiry sweeps are also refused while paused. A pause therefore never uses up a
+//! claimant's window while they cannot act.
+//!
 //! The claim account address `[SEED_CLAIM, pool, staker, tx_hash]` is the claim id: one claim per
 //! (staker, drain transaction), forever.
 
 use anchor_lang::prelude::*;
 use pool_core::claim as rules;
-use pool_core::params::{APPROVE_WINDOW_SECS, COLLECTION_INACTIVITY_SECS, COOLDOWN_SECS, PENALTY_LOCK_SECS, VESTING_SECS};
+use pool_core::params::{CLAIM_WINDOW_SECS, PENALTY_LOCK_SECS};
+use pool_core::settings::SettingKey;
 use pool_core::{add, capacity, yields};
 
 use super::now;
@@ -15,7 +21,7 @@ use crate::approval::{self, ClaimApproval};
 use crate::constants::{SEED_CLAIM, SEED_OVERRIDE, SEED_POOL, SEED_STAKE, SEED_VAULT};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::*;
-use crate::state::{Claim, ClaimStatus, OverrideRequest, Pool, RevokedApproval, StakeRecord};
+use crate::state::{Claim, ClaimStatus, OverrideRequest, Pool, RevokedApproval, StakeRecord, ACCOUNT_VERSION};
 use crate::leg;
 // Glob: `#[derive(Accounts)]` on a struct holding `MarinadeLeg` needs its generated client modules.
 use crate::marinade::*;
@@ -52,9 +58,10 @@ fn admit(pool: &mut Pool, stake: &mut StakeRecord, claim: &mut Claim, claim_key:
     stake.active_claim = Some(claim_key);
     stake.reserved_claim = None;
     claim.stake = stake.amount;
+    // The claim keeps the approve window it was admitted with.
+    claim.approve_window = pool.settings().get(SettingKey::ApproveWindowSecs);
     if rules::time_gate_met(stake.staked_at, now) {
-        claim.status = ClaimStatus::AwaitingApproval;
-        claim.approve_deadline = secs_after(now, APPROVE_WINDOW_SECS)?;
+        open_approve_window(pool, claim, now)?;
     } else {
         claim.status = ClaimStatus::PendingTime;
     }
@@ -73,13 +80,31 @@ fn forfeit_staker_yield(pool: &mut Pool, stake: &mut StakeRecord) -> Result<()> 
     Ok(())
 }
 
-/// Starts the payout clocks from now, with the capacity snapshot taken first.
+/// The staker's approve window starts now, on the claim clock.
+fn open_approve_window(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
+    claim.status = ClaimStatus::AwaitingApproval;
+    claim.approve_deadline = secs_after(now, claim.approve_window)?;
+    claim.pause_mark = pool.paused_secs_at(now);
+    Ok(())
+}
+
+/// The collection (inactivity) window restarts now, on the claim clock.
+fn restart_collection_window(pool: &Pool, claim: &mut Claim, now: i64) {
+    claim.last_collected = now;
+    claim.pause_mark = pool.paused_secs_at(now);
+}
+
+/// Starts the payout clocks from now, with the capacity snapshot taken first. Cooldown, vesting and
+/// the inactivity window are the settings at this moment; the claim keeps them.
 fn start_clocks(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
+    let s = pool.settings();
     claim.capacity_snapshot = pool_capacity(pool)?;
-    claim.cooldown_ends = secs_after(now, COOLDOWN_SECS)?;
-    claim.vesting_ends = secs_after(claim.cooldown_ends, VESTING_SECS)?;
+    claim.cooldown_ends = secs_after(now, s.get(SettingKey::CooldownSecs))?;
+    claim.vesting_ends = secs_after(claim.cooldown_ends, s.get(SettingKey::VestingSecs))?;
+    claim.inactivity_window = s.get(SettingKey::InactivitySecs);
     // The inactivity clock starts at cooldown end: the cooldown is never the staker's inactivity.
     claim.last_collected = claim.cooldown_ends;
+    claim.pause_mark = pool.paused_secs_at(now);
     claim.status = ClaimStatus::Active;
     Ok(())
 }
@@ -153,12 +178,15 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
     require!(stake.active_claim.is_none(), PoolError::ClaimAlreadyActiveForStake);
     require!(stake.reserved_claim.is_none(), PoolError::ClaimAlreadyQueued);
     rules::check_entitlement(a.entitlement, stake.amount, a.tier).core()?;
-    rules::check_hack_time(a.hack_timestamp, stake.staked_at, now).core()?;
+    // The hack window runs on the claim clock from the hack: pause time since then does not count.
+    let hack_mark = pool.paused_secs_at(a.hack_timestamp);
+    rules::check_hack_time(a.hack_timestamp, stake.staked_at, now, pool.claim_clock(now, hack_mark)).core()?;
 
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(claim.status == ClaimStatus::Unused, PoolError::ClaimAlreadyExists);
     claim.set_inner(Claim {
+        version: ACCOUNT_VERSION,
         staker: a.staker,
         tx_hash: a.tx_hash,
         hack_timestamp: a.hack_timestamp,
@@ -173,10 +201,14 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
         approve_deadline: 0,
         last_collected: 0,
         bump: ctx.bumps.claim,
+        approve_window: 0,
+        inactivity_window: 0,
+        pause_mark: hack_mark,
+        reserved: [0; 64],
     });
 
     roll_day(pool, now);
-    let fits = rules::admits(a.entitlement, pool_capacity(pool)?, pool.total_allocated, pool.day_admitted).core()?;
+    let fits = rules::admits(a.entitlement, pool_capacity(pool)?, pool.total_allocated, pool.day_admitted, pool.settings().admit_rates()).core()?;
     let oracle_limited = pool.day_oracle_count >= rules::oracle_daily_limit(pool.total_stakers);
     // Genuine but not admittable now: queue, never lose it. Released later by anyone.
     if !fits || oracle_limited {
@@ -219,7 +251,7 @@ pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     require!(!stake.suspended, PoolError::StakeSuspended);
 
     roll_day(pool, now);
-    let fits = rules::admits(claim.entitlement, pool_capacity(pool)?, pool.total_allocated, pool.day_admitted).core()?;
+    let fits = rules::admits(claim.entitlement, pool_capacity(pool)?, pool.total_allocated, pool.day_admitted, pool.settings().admit_rates()).core()?;
     require!(fits, PoolError::QueueReleaseNotYetEligible);
     // Never counts toward the oracle's own limit: anyone may call this.
     admit(pool, stake, claim, claim_key, now, false)?;
@@ -227,14 +259,17 @@ pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     Ok(())
 }
 
-/// A queued claim whose claim window ran out. Frees the stake's queue slot; nothing was allocated.
+/// A queued claim whose claim window ran out (on the claim clock). Frees the stake's queue slot;
+/// nothing was allocated.
 pub fn expire_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
-    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
+    let pool = &ctx.accounts.pool;
+    require!(!pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(claim.status == ClaimStatus::Reserved, PoolError::NoSuchQueuedClaim);
-    require!(now > secs_after(claim.hack_timestamp, pool_core::params::CLAIM_WINDOW_SECS)?, PoolError::QueueNotYetExpired);
+    let clock = pool.claim_clock(now, claim.pause_mark);
+    require!(clock > secs_after(claim.hack_timestamp, CLAIM_WINDOW_SECS)?, PoolError::QueueNotYetExpired);
     let stake = &mut ctx.accounts.stake_record;
     if stake.reserved_claim == Some(claim_key) {
         stake.reserved_claim = None;
@@ -247,25 +282,28 @@ pub fn expire_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
 /// Time gate met: the claim waits for the staker's approval.
 pub fn unlock_pending_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
-    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
+    let pool = &ctx.accounts.pool;
+    require!(!pool.is_paused(now), PoolError::Paused);
     let claim = &mut ctx.accounts.claim;
     require!(claim.status == ClaimStatus::PendingTime, PoolError::ClaimNotPending);
     require!(rules::time_gate_met(ctx.accounts.stake_record.staked_at, now), PoolError::TimeGateNotMet);
-    claim.status = ClaimStatus::AwaitingApproval;
-    claim.approve_deadline = secs_after(now, APPROVE_WINDOW_SECS)?;
+    open_approve_window(pool, claim, now)?;
     emit!(ClaimUnlocked { claim: claim.key() });
     Ok(())
 }
 
-/// The staker did not approve in time: the reservation returns to the pool. Never while suspended.
+/// The staker did not approve in time (on the claim clock): the reservation returns to the pool.
+/// Never while suspended or paused (audit X1: the staker cannot approve then).
 pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
+    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(claim.status == ClaimStatus::AwaitingApproval, PoolError::ClaimNotAwaitingApproval);
     let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
-    require!(now > claim.approve_deadline, PoolError::ApprovalWindowNotExpired);
+    let clock = ctx.accounts.pool.claim_clock(now, claim.pause_mark);
+    require!(clock > claim.approve_deadline, PoolError::ApprovalWindowNotExpired);
     release_allocation(&mut ctx.accounts.pool, claim.entitlement);
     stake.active_claim = None;
     claim.status = ClaimStatus::Expired;
@@ -273,16 +311,19 @@ pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
     Ok(())
 }
 
-/// An approved claim left uncollected too long: the unpaid rest returns to the pool.
+/// An approved claim left uncollected too long (on the claim clock): the unpaid rest returns to the
+/// pool. Never while suspended or paused (audit X1: the staker cannot collect then).
 pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
+    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(claim.status == ClaimStatus::Active, PoolError::ClaimNotActive);
     require!(claim.streamed < claim.entitlement, PoolError::ClaimFullyStreamed);
     let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
-    require!(now.saturating_sub(claim.last_collected) > COLLECTION_INACTIVITY_SECS, PoolError::ClaimNotStale);
+    let clock = ctx.accounts.pool.claim_clock(now, claim.pause_mark);
+    require!(clock.saturating_sub(claim.last_collected) > claim.inactivity_window, PoolError::ClaimNotStale);
     let remaining = claim.entitlement - claim.streamed;
     release_allocation(&mut ctx.accounts.pool, remaining);
     stake.active_claim = None;
@@ -312,7 +353,7 @@ pub fn approve_claim(ctx: Context<ApproveClaim>) -> Result<()> {
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(claim.status == ClaimStatus::AwaitingApproval, PoolError::ClaimNotAwaitingApproval);
-    require!(now <= claim.approve_deadline, PoolError::ApprovalWindowExpired);
+    require!(pool.claim_clock(now, claim.pause_mark) <= claim.approve_deadline, PoolError::ApprovalWindowExpired);
     let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
     require!(!stake.forfeited && stake.active_claim == Some(claim_key), PoolError::ClaimStakeMismatch);
@@ -363,12 +404,12 @@ pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
 
     roll_day(pool, now);
     let base = pool_capacity(pool)?.max(claim.capacity_snapshot);
-    let cap = rules::payout_cap(base, pool.total_allocated).core()?;
+    let cap = rules::payout_cap(base, pool.total_allocated, pool.settings().payout_rates()).core()?;
     let amount = claimable.min(cap.saturating_sub(pool.day_outflow));
     require!(amount > 0, PoolError::DailyOutflowCapReached);
 
     claim.streamed += amount;
-    claim.last_collected = now;
+    restart_collection_window(pool, claim, now);
     if claim.streamed >= claim.entitlement {
         claim.status = ClaimStatus::Completed;
     }
@@ -459,10 +500,11 @@ pub fn unsuspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> 
     let stake = &mut ctx.accounts.stake_record;
     stake.suspended = false;
     emit!(StakeUnsuspended { staker: stake.staker });
+    let pool = &ctx.accounts.pool;
     if let Some(claim) = ctx.accounts.claim.as_mut() {
         match claim.status {
-            ClaimStatus::AwaitingApproval => claim.approve_deadline = secs_after(now, APPROVE_WINDOW_SECS)?,
-            ClaimStatus::Active => claim.last_collected = now,
+            ClaimStatus::AwaitingApproval => open_approve_window(pool, claim, now)?,
+            ClaimStatus::Active => restart_collection_window(pool, claim, now),
             _ => {}
         }
     }
@@ -614,6 +656,7 @@ fn execute_override(
     pool.total_allocated = add(pool.total_allocated, entitlement).core()?;
 
     *claim = Claim {
+        version: ACCOUNT_VERSION,
         staker,
         tx_hash,
         hack_timestamp: now,
@@ -628,6 +671,10 @@ fn execute_override(
         approve_deadline: 0,
         last_collected: 0,
         bump,
+        approve_window: pool.settings().get(SettingKey::ApproveWindowSecs),
+        inactivity_window: 0,
+        pause_mark: 0,
+        reserved: [0; 64],
     };
     if stake.forfeited {
         start_clocks(pool, claim, now)?;

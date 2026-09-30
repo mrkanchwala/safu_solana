@@ -7,17 +7,9 @@ use pool_core::params as p;
 #[constant]
 pub const DEMO_BUILD: bool = p::DEMO_BUILD;
 
-// Clocks (seconds). Demo values when built with `--features demo`.
+// Fixed clocks (seconds). Demo values when built with `--features demo`.
 #[constant]
 pub const TIME_GATE_SECS: i64 = p::TIME_GATE_SECS;
-#[constant]
-pub const COOLDOWN_SECS: i64 = p::COOLDOWN_SECS;
-#[constant]
-pub const VESTING_SECS: i64 = p::VESTING_SECS;
-#[constant]
-pub const APPROVE_WINDOW_SECS: i64 = p::APPROVE_WINDOW_SECS;
-#[constant]
-pub const COLLECTION_INACTIVITY_SECS: i64 = p::COLLECTION_INACTIVITY_SECS;
 #[constant]
 pub const PENALTY_LOCK_SECS: i64 = p::PENALTY_LOCK_SECS;
 #[constant]
@@ -25,19 +17,57 @@ pub const CLAIM_WINDOW_SECS: i64 = p::CLAIM_WINDOW_SECS;
 #[constant]
 pub const MAX_APPROVAL_WINDOW_SECS: i64 = p::MAX_APPROVAL_WINDOW_SECS;
 #[constant]
-pub const PAUSE_MAX_SECS: i64 = p::PAUSE_MAX_SECS;
-#[constant]
-pub const BACKER_MATURITY_SECS: i64 = p::BACKER_MATURITY_SECS;
-#[constant]
-pub const BACKER_NOTICE_SECS: i64 = p::BACKER_NOTICE_SECS;
+pub const SETTINGS_TIMELOCK_SECS: i64 = p::SETTINGS_TIMELOCK_SECS;
 
-// Stake bounds and coverage.
+// Adjustable settings: the live value is `Pool.settings[SETTING_x]`, never a constant. Slot numbers
+// are `pool_core::settings::SettingKey`, re-exported so clients never retype them.
+use pool_core::settings::{SettingKey as K, SETTING_COUNT as COUNT, SETTING_SLOTS as SLOTS};
+#[constant]
+pub const SETTING_SLOTS: u8 = SLOTS as u8;
+#[constant]
+pub const SETTING_COUNT: u8 = COUNT as u8;
+#[constant]
+pub const SETTING_MIN_STAKE_BPS: u8 = K::MinStakeBps as u8;
+#[constant]
+pub const SETTING_MAX_STAKE_BPS: u8 = K::MaxStakeBps as u8;
+#[constant]
+pub const SETTING_STAKER_YIELD_BPS: u8 = K::StakerYieldBps as u8;
+#[constant]
+pub const SETTING_BACKER_YIELD_BPS: u8 = K::BackerYieldBps as u8;
+#[constant]
+pub const SETTING_COOLDOWN_SECS: u8 = K::CooldownSecs as u8;
+#[constant]
+pub const SETTING_VESTING_SECS: u8 = K::VestingSecs as u8;
+#[constant]
+pub const SETTING_ADMIT_LOW_BPS: u8 = K::AdmitLowBps as u8;
+#[constant]
+pub const SETTING_ADMIT_MID_BPS: u8 = K::AdmitMidBps as u8;
+#[constant]
+pub const SETTING_ADMIT_HIGH_BPS: u8 = K::AdmitHighBps as u8;
+#[constant]
+pub const SETTING_PAYOUT_LOW_BPS: u8 = K::PayoutLowBps as u8;
+#[constant]
+pub const SETTING_PAYOUT_MID_BPS: u8 = K::PayoutMidBps as u8;
+#[constant]
+pub const SETTING_PAYOUT_HIGH_BPS: u8 = K::PayoutHighBps as u8;
+#[constant]
+pub const SETTING_BACKER_NOTICE_SECS: u8 = K::BackerNoticeSecs as u8;
+#[constant]
+pub const SETTING_BACKER_MATURITY_SECS: u8 = K::BackerMaturitySecs as u8;
+#[constant]
+pub const SETTING_PAUSE_MAX_SECS: u8 = K::PauseMaxSecs as u8;
+#[constant]
+pub const SETTING_PAUSE_GAP_SECS: u8 = K::PauseGapSecs as u8;
+#[constant]
+pub const SETTING_APPROVE_WINDOW_SECS: u8 = K::ApproveWindowSecs as u8;
+#[constant]
+pub const SETTING_INACTIVITY_SECS: u8 = K::InactivitySecs as u8;
+#[constant]
+pub const SETTING_POOL_CAP: u8 = K::PoolCap as u8;
+
+// Coverage.
 #[constant]
 pub const BPS_DENOMINATOR: u64 = p::BPS_DENOMINATOR;
-#[constant]
-pub const MIN_STAKE_BPS: u64 = p::MIN_STAKE_BPS;
-#[constant]
-pub const MAX_STAKE_BPS: u64 = p::MAX_STAKE_BPS;
 #[constant]
 pub const MAX_COVERED_WALLETS: u8 = p::MAX_COVERED_WALLETS;
 #[constant]
@@ -57,11 +87,7 @@ pub const TIER_C_RATIO: u64 = p::TIER_C_RATIO;
 #[constant]
 pub const TIER_COVERAGE_BPS: u64 = p::TIER_COVERAGE_BPS;
 
-// Yield split.
-#[constant]
-pub const STAKER_YIELD_BPS: u64 = p::STAKER_YIELD_BPS;
-#[constant]
-pub const BACKER_YIELD_BPS: u64 = p::BACKER_YIELD_BPS;
+// Marinade leg and yield indexes.
 #[constant]
 pub const DEPLOY_BPS: u64 = p::DEPLOY_BPS;
 /// Clients read it from the IDL to show yield owed (`pool_core::yields::owed`).
@@ -89,6 +115,9 @@ pub const SEED_REVOKED: &[u8] = b"revoked";
 pub const SEED_COVERED: &[u8] = b"covered";
 #[constant]
 pub const SEED_STAKER_WALLETS: &[u8] = b"staker_wallets";
+
+/// The pool's asset today (`Pool::asset_mint`): the native SOL mint address.
+pub const NATIVE_SOL_MINT: Pubkey = anchor_lang::prelude::pubkey!("So11111111111111111111111111111111111111112");
 
 // Oracle approval domain tag (version it when the message layout changes).
 #[constant]

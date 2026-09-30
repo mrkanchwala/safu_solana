@@ -12,9 +12,28 @@ pub struct PausedUntil {
 }
 #[event]
 pub struct Unpaused {}
+/// Setting changes: every step is public, so stakers see a change a full timelock ahead.
 #[event]
-pub struct PoolCapRaised {
-    pub pool_cap: u64,
+pub struct SettingProposed {
+    pub key: u8,
+    pub value: i64,
+}
+#[event]
+pub struct SettingApproved {
+    pub key: u8,
+    pub value: i64,
+    pub eta: i64,
+}
+#[event]
+pub struct SettingExecuted {
+    pub key: u8,
+    pub old_value: i64,
+    pub new_value: i64,
+}
+#[event]
+pub struct SettingCancelled {
+    pub key: u8,
+    pub by: Pubkey,
 }
 #[event]
 pub struct Staked {
@@ -31,12 +50,16 @@ pub struct Withdrawn {
     pub staker: Pubkey,
     pub principal: u64,
     pub yield_paid: u64,
+    /// Principal left in the stake (0 = fully withdrawn, record closed).
+    pub remaining: u64,
 }
 #[event]
 pub struct EmergencyExited {
     pub staker: Pubkey,
     pub principal: u64,
     pub yield_paid: u64,
+    /// Principal left in the stake (0 = fully withdrawn, record closed).
+    pub remaining: u64,
 }
 #[event]
 pub struct Backed {

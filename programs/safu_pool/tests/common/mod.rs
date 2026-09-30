@@ -13,6 +13,14 @@ use base64::Engine;
 use litesvm::LiteSVM;
 use safu_pool::constants::*;
 use safu_pool::approval::{approval_hash, encode_message, ClaimApproval};
+pub use pool_core::settings::SettingKey;
+// Setting defaults (a fresh pool's live values). Tests that change a setting read `Env::setting`.
+// Each test file uses a different subset.
+#[allow(unused_imports)]
+pub use pool_core::params::{
+    APPROVE_WINDOW_SECS, BACKER_MATURITY_SECS, BACKER_NOTICE_SECS, BACKER_YIELD_BPS, COLLECTION_INACTIVITY_SECS,
+    COOLDOWN_SECS, MAX_STAKE_BPS, MIN_STAKE_BPS, PAUSE_GAP_SECS, PAUSE_MAX_SECS, STAKER_YIELD_BPS, VESTING_SECS,
+};
 use safu_pool::state::{BackerRecord, Claim, Pool, StakeRecord};
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -340,7 +348,12 @@ impl Env {
         )
     }
 
+    /// The whole stake (whatever the record holds; 1 lamport if there is no record, for error tests).
     pub fn withdraw_ix(&self, staker: &Pubkey, beneficiary: &Pubkey) -> Instruction {
+        self.withdraw_part_ix(staker, beneficiary, self.stake_amount(staker))
+    }
+
+    pub fn withdraw_part_ix(&self, staker: &Pubkey, beneficiary: &Pubkey, amount: u64) -> Instruction {
         self.ix(
             safu_pool::accounts::Withdraw {
                 staker: *staker,
@@ -351,11 +364,16 @@ impl Env {
                 system_program: SYSTEM,
                 leg: self.leg(),
             },
-            safu_pool::instruction::Withdraw {},
+            safu_pool::instruction::Withdraw { amount },
         )
     }
 
+    /// The whole stake (see `withdraw_ix`).
     pub fn emergency_exit_ix(&self, staker: &Pubkey) -> Instruction {
+        self.emergency_exit_part_ix(staker, self.stake_amount(staker))
+    }
+
+    pub fn emergency_exit_part_ix(&self, staker: &Pubkey, amount: u64) -> Instruction {
         self.ix(
             safu_pool::accounts::EmergencyExit {
                 staker: *staker,
@@ -365,7 +383,7 @@ impl Env {
                 system_program: SYSTEM,
                 leg: self.leg(),
             },
-            safu_pool::instruction::EmergencyExit {},
+            safu_pool::instruction::EmergencyExit { amount },
         )
     }
 
@@ -740,6 +758,58 @@ impl Env {
         self.ok(&[ix], &[&admin]);
     }
 
+    pub fn unpause(&mut self) {
+        let admin = self.admin.insecure_clone();
+        let ix = self.admin_ix(safu_pool::instruction::Unpause {});
+        self.ok(&[ix], &[&admin]);
+    }
+
+    /// Principal in a staker's record, or 1 if there is none.
+    pub fn stake_amount(&self, staker: &Pubkey) -> u64 {
+        if self.exists(&self.stake_record(staker)) {
+            self.stake_state(staker).amount
+        } else {
+            1
+        }
+    }
+
+    // ---- settings
+
+    pub fn setting(&self, key: SettingKey) -> i64 {
+        self.pool_state().settings[key.index()]
+    }
+    pub fn propose_ix(&self, key: u8, value: i64) -> Instruction {
+        self.admin_ix(safu_pool::instruction::ProposeSetting { key, value })
+    }
+    pub fn approve_setting_ix(&self, signer: &Pubkey, key: u8, value: i64) -> Instruction {
+        self.ix(
+            safu_pool::accounts::ApproveSetting { co_signer: *signer, pool: self.pool() },
+            safu_pool::instruction::ApproveSetting { key, value },
+        )
+    }
+    pub fn execute_setting_ix(&self, key: u8) -> Instruction {
+        self.ix(safu_pool::accounts::ExecuteSetting { pool: self.pool() }, safu_pool::instruction::ExecuteSetting { key })
+    }
+    pub fn cancel_setting_ix(&self, signer: &Pubkey, key: u8) -> Instruction {
+        self.ix(
+            safu_pool::accounts::CancelSetting { signer: *signer, pool: self.pool() },
+            safu_pool::instruction::CancelSetting { key },
+        )
+    }
+    /// The full public path: propose, co-sign, wait out the timelock, execute.
+    pub fn set_setting(&mut self, key: SettingKey, value: i64) {
+        let (admin, co) = (self.admin.insecure_clone(), self.co_signer.insecure_clone());
+        let k = key as u8;
+        let ix = self.propose_ix(k, value);
+        self.ok(&[ix], &[&admin]);
+        let ix = self.approve_setting_ix(&co.pubkey(), k, value);
+        self.ok(&[ix], &[&co]);
+        self.warp(pool_core::params::SETTINGS_TIMELOCK_SECS);
+        // Anyone may execute; the admin just pays the fee here.
+        let ix = self.execute_setting_ix(k);
+        self.ok(&[ix], &[&admin]);
+    }
+
     /// A funded staker with a live stake of `amount` (beneficiary = itself).
     pub fn staker(&mut self, amount: u64) -> Keypair {
         let k = self.funded(amount + SOL);
@@ -773,7 +843,8 @@ pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolErro
     assert!(err.contains(&format!("Custom({code})")), "expected Custom({code}) ({error:?}), got: {err}");
 }
 
-/// Stake bounds for the configured pool cap, from the same rule the program uses.
+/// Stake bounds for the configured pool cap at the default settings, from the same rule the program
+/// uses.
 pub fn bounds() -> (u64, u64) {
-    pool_core::stake::bounds(config().pool_cap).unwrap()
+    pool_core::stake::bounds(&pool_core::settings::Settings::defaults(config().pool_cap).unwrap()).unwrap()
 }

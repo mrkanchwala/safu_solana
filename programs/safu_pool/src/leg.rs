@@ -7,6 +7,7 @@
 
 use anchor_lang::prelude::*;
 use pool_core::params::MAX_REBALANCE_SLIPPAGE_BPS;
+use pool_core::settings::SettingKey;
 use pool_core::{add, leg, liquidity, sub, yields};
 
 use crate::errors::{CoreResultExt, PoolError};
@@ -20,7 +21,15 @@ pub fn credit_yield(pool: &mut Pool, amount: u64) -> Result<()> {
     if amount == 0 {
         return Ok(());
     }
-    let c = yields::credit(amount, pool.total_staked, pool.total_backed).core()?;
+    let st = pool.settings();
+    let c = yields::credit(
+        amount,
+        pool.total_staked,
+        pool.total_backed,
+        st.amount(SettingKey::StakerYieldBps),
+        st.amount(SettingKey::BackerYieldBps),
+    )
+    .core()?;
     pool.staker_yield_index =
         pool.staker_yield_index.checked_add(c.staker_index_bump).ok_or(PoolError::MathOverflow)?;
     pool.backer_yield_index =

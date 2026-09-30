@@ -34,8 +34,19 @@ pub mod safu_pool {
     pub fn unpause(ctx: Context<AdminOnly>) -> Result<()> {
         instructions::admin::unpause(ctx)
     }
-    pub fn set_pool_cap(ctx: Context<AdminOnly>, pool_cap: u64) -> Result<()> {
-        instructions::admin::set_pool_cap(ctx, pool_cap)
+
+    // Settings timelock (pool cap, clocks, rates, yield split, stake bounds).
+    pub fn propose_setting(ctx: Context<AdminOnly>, key: u8, value: i64) -> Result<()> {
+        instructions::settings::propose_setting(ctx, key, value)
+    }
+    pub fn approve_setting(ctx: Context<ApproveSetting>, key: u8, value: i64) -> Result<()> {
+        instructions::settings::approve_setting(ctx, key, value)
+    }
+    pub fn execute_setting(ctx: Context<ExecuteSetting>, key: u8) -> Result<()> {
+        instructions::settings::execute_setting(ctx, key)
+    }
+    pub fn cancel_setting(ctx: Context<CancelSetting>, key: u8) -> Result<()> {
+        instructions::settings::cancel_setting(ctx, key)
     }
 
     // Stakers.
@@ -45,11 +56,11 @@ pub mod safu_pool {
     pub fn set_beneficiary(ctx: Context<SetBeneficiary>, beneficiary: Pubkey) -> Result<()> {
         instructions::stake::set_beneficiary(ctx, beneficiary)
     }
-    pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
-        instructions::stake::withdraw(ctx)
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        instructions::stake::withdraw(ctx, amount)
     }
-    pub fn emergency_exit(ctx: Context<EmergencyExit>) -> Result<()> {
-        instructions::stake::emergency_exit(ctx)
+    pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
+        instructions::stake::emergency_exit(ctx, amount)
     }
     pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
         instructions::stake::claim_yield(ctx)

@@ -40,7 +40,7 @@ fn harvest(env: &mut Env) {
 /// Yield books moved exactly as `yields::credit` splits `amount` over `before`'s capacity.
 fn assert_credited(before: &Pool, after: &Pool) -> u64 {
     let amount = after.total_extracted_yield - before.total_extracted_yield;
-    let c = yields::credit(amount, before.total_staked, before.total_backed).unwrap();
+    let c = yields::credit(amount, before.total_staked, before.total_backed, STAKER_YIELD_BPS, BACKER_YIELD_BPS).unwrap();
     assert_eq!(after.staker_yield_reserved - before.staker_yield_reserved, c.staker_share);
     assert_eq!(after.backer_yield_reserved - before.backer_yield_reserved, c.backer_share);
     assert_eq!(after.protocol_yield_balance - before.protocol_yield_balance, c.protocol_share);
@@ -101,7 +101,7 @@ fn devnet_liquidity_the_payee_pays_marinades_fee_the_pool_does_not() {
     // Rebalance: the pool would pay, so the 5% limit holds and it is refused.
     let b = env.matured_backer(BACKING);
     let ix = env.upkeep_ix(safu_pool::instruction::Rebalance {});
-    env.ok(&[ix.clone()], &[&b]);
+    env.ok(std::slice::from_ref(&ix), &[&b]);
     let req = env.request_backer_ix(&b.pubkey(), BACKING / 2);
     env.ok(&[req], &[&b]);
     env.warp(BACKER_NOTICE_SECS);
@@ -230,7 +230,7 @@ fn staker_yield_goes_to_the_beneficiary_and_principal_stays() {
     assert!(owed > 0);
     let before = env.lamports(&s.pubkey());
     let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
-    env.ok(&[ix.clone()], &[&s]);
+    env.ok(std::slice::from_ref(&ix), &[&s]);
     // Paid from set-aside cash: no unstake, no fee (the tx fee is the staker's).
     assert!(env.lamports(&s.pubkey()) + SOL / 1_000 > before + owed);
     assert_eq!(env.pool_state().staker_yield_reserved, p.staker_yield_reserved - owed);
@@ -248,7 +248,7 @@ fn staker_yield_claim_refusals() {
     let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
     let rec = env.stake_record(&s.pubkey());
     env.edit::<StakeRecord>(&rec, |r| r.forfeited = true);
-    assert_err(env.send(&[ix.clone()], &[&s]), PoolError::StakeForfeited);
+    assert_err(env.send(std::slice::from_ref(&ix), &[&s]), PoolError::StakeForfeited);
     env.edit::<StakeRecord>(&rec, |r| r.forfeited = false);
     env.pause();
     assert_err(env.send(&[ix], &[&s]), PoolError::Paused);
@@ -267,7 +267,7 @@ fn backer_yield_claim() {
     assert!(owed > 0);
     let before = env.lamports(&b.pubkey());
     let ix = env.claim_backer_yield_ix(&b.pubkey());
-    env.ok(&[ix.clone()], &[&b]);
+    env.ok(std::slice::from_ref(&ix), &[&b]);
     assert!(env.lamports(&b.pubkey()) + SOL / 1_000 > before + owed);
     assert_eq!(env.backer_state(&b.pubkey()).amount, BACKING);
     assert_err(env.send(&[ix], &[&b]), PoolError::NothingToClaim);
@@ -351,7 +351,7 @@ fn treasury_takes_protocol_revenue_within_the_surplus_only() {
     env.edit::<Pool>(&env.pool(), |p| p.protocol_yield_balance = revenue);
     // Counted but not held: claims spent it (multichain W2). No surplus, no withdrawal.
     let ix = env.withdraw_yield_ix(&admin.pubkey(), &treasury, revenue);
-    assert_err(env.send(&[ix.clone()], &[&admin]), PoolError::ExceedsYieldBalance);
+    assert_err(env.send(std::slice::from_ref(&ix), &[&admin]), PoolError::ExceedsYieldBalance);
     let v = env.vault();
     env.svm.airdrop(&v, revenue).unwrap();
     let over = env.withdraw_yield_ix(&admin.pubkey(), &treasury, revenue + 1);

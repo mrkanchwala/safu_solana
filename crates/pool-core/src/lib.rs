@@ -13,6 +13,7 @@ pub mod leg;
 pub mod liquidity;
 pub mod marinade;
 pub mod params;
+pub mod settings;
 pub mod stake;
 pub mod yields;
 
@@ -22,12 +23,13 @@ pub enum CoreError {
     Overflow,
     DivideByZero,
     InvalidParameter,
-    /// Stake outside `[MIN_STAKE_BPS, MAX_STAKE_BPS]` of the pool cap.
+    /// Stake outside the min/max stake settings (bps of the pool cap).
     StakeOutOfRange,
     /// Stake would take total staked above the pool cap.
     PoolCapExceeded,
-    /// A backer withdrawal would leave open claims without the capital they need (backer rule 3).
-    BackerCapitalNotFree,
+    /// Money leaving would leave open claims without the capital they need (one rule for every
+    /// exit: staker withdraw, emergency exit, backer withdrawal).
+    CapitalNotFree,
     InvalidTier,
     EntitlementNotPositive,
     EntitlementExceedsTierCap,
@@ -36,6 +38,16 @@ pub enum CoreError {
     ClaimWindowExpired,
     SignatureExpired,
     SignatureDeadlineTooFar,
+    /// A partial withdrawal would leave the stake below the min stake (take it all instead).
+    StakeBelowMinimum,
+    /// Withdrawal above the stake.
+    AmountExceedsStake,
+    /// No setting in that slot.
+    UnknownSetting,
+    /// Value outside the setting's hard bounds.
+    SettingOutOfBounds,
+    /// Value breaks the order between settings (min <= max stake, rate bands low >= mid >= high).
+    SettingOrderInvalid,
 }
 
 pub type Result<T> = core::result::Result<T, CoreError>;
@@ -59,12 +71,17 @@ pub fn capacity(total_staked: u64, total_backed: u64) -> Result<u64> {
     add(total_staked, total_backed)
 }
 
-/// Backer rule 3: only free capital can leave. After taking `amount` out, open claims
-/// (`total_allocated`) must still fit in capacity.
-pub fn check_backer_capital_free(total_allocated: u64, capacity: u64, amount: u64) -> Result<()> {
-    match capacity.checked_sub(amount) {
-        Some(left) if total_allocated <= left => Ok(()),
-        _ => Err(CoreError::BackerCapitalNotFree),
+/// Only free capital can leave, whoever takes it (staker withdraw, emergency exit, backer
+/// withdrawal; audit X3). After taking `amount` of principal out, open claims (`total_allocated`)
+/// must still fit in capacity. Yield is never capital and is not checked.
+/// Saturating: a Marinade loss can mark `total_staked` below the principal a stake still owes, and
+/// the capacity left is then zero, not an error (the last staker out can still leave with no open
+/// claims).
+pub fn check_capital_free(total_allocated: u64, capacity: u64, amount: u64) -> Result<()> {
+    if total_allocated <= capacity.saturating_sub(amount) {
+        Ok(())
+    } else {
+        Err(CoreError::CapitalNotFree)
     }
 }
 

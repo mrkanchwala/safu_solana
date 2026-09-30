@@ -24,8 +24,6 @@ pub enum PoolError {
     Paused,
     #[msg("Pool is not paused")]
     NotPaused,
-    #[msg("New pool cap must be higher than the current one")]
-    PoolCapNotIncreased,
     #[msg("Stake is outside the pool's stake bounds")]
     StakeOutOfRange,
     #[msg("Stake would take the pool above its cap")]
@@ -68,8 +66,8 @@ pub enum PoolError {
     NoBackerWithdrawal,
     #[msg("Backer notice period has not passed")]
     BackerNoticeNotPassed,
-    #[msg("Open claims need this capital")]
-    BackerCapitalNotFree,
+    #[msg("Open claims need this capital right now; take out less, or try again later")]
+    CapitalNotFree,
     #[msg("Signer is not the registry writer")]
     NotRegistryWriter,
     #[msg("This staker already registered this wallet")]
@@ -176,17 +174,44 @@ pub enum PoolError {
     NothingToClaim,
     #[msg("Amount is above the protocol's revenue or the pool's surplus")]
     ExceedsYieldBalance,
+    // B7 fix pass: settings, pause gap, partial withdrawal.
+    #[msg("A new pause must wait for the gap after the last one")]
+    PauseGapNotPassed,
+    #[msg("What stays in the stake would be below the min stake; take it all out instead")]
+    StakeBelowMinimum,
+    #[msg("Amount is above the stake")]
+    AmountExceedsStake,
+    #[msg("Beneficiary cannot be a pool account")]
+    BeneficiaryIsPoolAccount,
+    #[msg("No setting in that slot")]
+    UnknownSetting,
+    #[msg("Value is outside the setting's allowed range")]
+    SettingOutOfBounds,
+    #[msg("Value breaks the order between settings")]
+    SettingOrderInvalid,
+    #[msg("No change pending for this setting")]
+    NoPendingSetting,
+    #[msg("Value differs from the proposed change")]
+    SettingValueMismatch,
+    #[msg("Change already approved")]
+    SettingAlreadyApproved,
+    #[msg("Change is not approved, or its waiting time has not passed")]
+    SettingNotReady,
 }
 
 impl From<CoreError> for PoolError {
     fn from(e: CoreError) -> Self {
         match e {
-            CoreError::Overflow | CoreError::DivideByZero | CoreError::InvalidParameter => {
-                PoolError::MathOverflow
-            }
+            CoreError::Overflow | CoreError::DivideByZero => PoolError::MathOverflow,
+            CoreError::InvalidParameter => PoolError::AmountNotPositive,
             CoreError::StakeOutOfRange => PoolError::StakeOutOfRange,
             CoreError::PoolCapExceeded => PoolError::PoolCapExceeded,
-            CoreError::BackerCapitalNotFree => PoolError::BackerCapitalNotFree,
+            CoreError::CapitalNotFree => PoolError::CapitalNotFree,
+            CoreError::StakeBelowMinimum => PoolError::StakeBelowMinimum,
+            CoreError::AmountExceedsStake => PoolError::AmountExceedsStake,
+            CoreError::UnknownSetting => PoolError::UnknownSetting,
+            CoreError::SettingOutOfBounds => PoolError::SettingOutOfBounds,
+            CoreError::SettingOrderInvalid => PoolError::SettingOrderInvalid,
             CoreError::InvalidTier => PoolError::InvalidTier,
             CoreError::EntitlementNotPositive => PoolError::EntitlementNotPositive,
             CoreError::EntitlementExceedsTierCap => PoolError::EntitlementExceedsTierCap,

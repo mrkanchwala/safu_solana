@@ -2,8 +2,13 @@
 
 use pool_core::claim::*;
 use pool_core::params::*;
+use pool_core::settings::Rates;
 use pool_core::CoreError;
 use proptest::prelude::*;
+
+/// The default daily rates (a new pool's settings).
+const ADMIT: Rates = Rates { low: ADMIT_LOW_BPS, mid: ADMIT_MID_BPS, high: ADMIT_HIGH_BPS };
+const PAYOUT: Rates = Rates { low: PAYOUT_LOW_BPS, mid: PAYOUT_MID_BPS, high: PAYOUT_HIGH_BPS };
 
 const SOL: u64 = 1_000_000_000;
 const NOW: i64 = 1_800_000_000;
@@ -28,10 +33,10 @@ fn entitlement_checks() {
 #[test]
 fn hack_time_window() {
     let staked = NOW - 10;
-    assert_eq!(check_hack_time(NOW + 1, staked, NOW), Err(CoreError::HackTimestampInFuture));
-    assert_eq!(check_hack_time(staked - 1, staked, NOW), Err(CoreError::HackPredatesStake));
-    assert_eq!(check_hack_time(staked, staked, staked + CLAIM_WINDOW_SECS), Ok(()));
-    assert_eq!(check_hack_time(staked, staked, staked + CLAIM_WINDOW_SECS + 1), Err(CoreError::ClaimWindowExpired));
+    assert_eq!(check_hack_time(NOW + 1, staked, NOW, NOW), Err(CoreError::HackTimestampInFuture));
+    assert_eq!(check_hack_time(staked - 1, staked, NOW, NOW), Err(CoreError::HackPredatesStake));
+    assert_eq!(check_hack_time(staked, staked, staked + CLAIM_WINDOW_SECS, staked + CLAIM_WINDOW_SECS), Ok(()));
+    assert_eq!(check_hack_time(staked, staked, staked + CLAIM_WINDOW_SECS + 1, staked + CLAIM_WINDOW_SECS + 1), Err(CoreError::ClaimWindowExpired));
 }
 
 #[test]
@@ -45,20 +50,20 @@ fn approval_deadline_window() {
 #[test]
 fn stress_cap_bands() {
     let cap = 100 * SOL;
-    assert_eq!(stress_cap(cap, 0), Ok(25 * SOL));
-    assert_eq!(stress_cap(cap, 20 * SOL), Ok(10 * SOL));
-    assert_eq!(stress_cap(cap, 50 * SOL), Ok(3 * SOL));
-    assert_eq!(stress_cap(0, 0), Ok(0));
+    assert_eq!(stress_cap(cap, 0, ADMIT), Ok(25 * SOL));
+    assert_eq!(stress_cap(cap, 20 * SOL, ADMIT), Ok(10 * SOL));
+    assert_eq!(stress_cap(cap, 50 * SOL, ADMIT), Ok(3 * SOL));
+    assert_eq!(stress_cap(0, 0, ADMIT), Ok(0));
 }
 
 #[test]
 fn admission_needs_solvency_and_room_under_the_stress_cap() {
     let cap = 100 * SOL;
-    assert_eq!(admits(25 * SOL, cap, 0, 0), Ok(true));
-    assert_eq!(admits(25 * SOL + 1, cap, 0, 0), Ok(false));
-    assert_eq!(admits(SOL, cap, 0, 25 * SOL), Ok(false));
+    assert_eq!(admits(25 * SOL, cap, 0, 0, ADMIT), Ok(true));
+    assert_eq!(admits(25 * SOL + 1, cap, 0, 0, ADMIT), Ok(false));
+    assert_eq!(admits(SOL, cap, 0, 25 * SOL, ADMIT), Ok(false));
     // Insolvent even though the day is empty.
-    assert_eq!(admits(3 * SOL, cap, 98 * SOL, 0), Ok(false));
+    assert_eq!(admits(3 * SOL, cap, 98 * SOL, 0, ADMIT), Ok(false));
 }
 
 #[test]
@@ -87,10 +92,10 @@ fn vesting_is_linear_after_cooldown() {
 #[test]
 fn payout_cap_bands() {
     let base = 100 * SOL;
-    assert_eq!(payout_cap(base, 0), Ok(5 * SOL));
-    assert_eq!(payout_cap(base, 20 * SOL), Ok(3 * SOL));
-    assert_eq!(payout_cap(base, 50 * SOL), Ok(SOL));
-    assert_eq!(payout_cap(0, 0), Ok(0));
+    assert_eq!(payout_cap(base, 0, PAYOUT), Ok(5 * SOL));
+    assert_eq!(payout_cap(base, 20 * SOL, PAYOUT), Ok(3 * SOL));
+    assert_eq!(payout_cap(base, 50 * SOL, PAYOUT), Ok(SOL));
+    assert_eq!(payout_cap(0, 0, PAYOUT), Ok(0));
 }
 
 #[test]
@@ -112,9 +117,9 @@ proptest! {
 
     #[test]
     fn admitted_claims_never_exceed_capacity(e in 1u64..=100 * SOL, cap in 0u64..=100 * SOL, alloc in 0u64..=100 * SOL, day in 0u64..=100 * SOL) {
-        if admits(e, cap, alloc, day).unwrap() {
+        if admits(e, cap, alloc, day, ADMIT).unwrap() {
             prop_assert!(alloc + e <= cap);
-            prop_assert!(day + e <= stress_cap(cap, alloc).unwrap());
+            prop_assert!(day + e <= stress_cap(cap, alloc, ADMIT).unwrap());
         }
     }
 

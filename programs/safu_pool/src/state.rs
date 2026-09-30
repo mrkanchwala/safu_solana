@@ -2,12 +2,36 @@
 
 use anchor_lang::prelude::*;
 use pool_core::params::MAX_COVERED_WALLETS;
+use pool_core::settings::{self, Settings, SETTING_SLOTS};
 
-/// The one pool. PDA `[SEED_POOL]`. Holds roles, Marinade addresses, totals, yield books and the
-/// current day's counters (only today is ever read).
+/// Layout version of every record below. An upgrade that changes a layout bumps it and migrates;
+/// the spare `reserved` bytes let most new fields land without resizing anyone's account.
+pub const ACCOUNT_VERSION: u8 = 1;
+
+/// A setting change on its way: proposed by the admin, approved by the co-signer (starting the
+/// timelock), executed by anyone after `eta`.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct PendingSetting {
+    pub value: i64,
+    /// Earliest execution; 0 until approved.
+    pub eta: i64,
+    /// 0 none, 1 proposed, 2 approved.
+    pub state: u8,
+}
+
+pub const PENDING_NONE: u8 = 0;
+pub const PENDING_PROPOSED: u8 = 1;
+pub const PENDING_APPROVED: u8 = 2;
+
+/// The one pool. PDA `[SEED_POOL]`. Holds roles, Marinade addresses, settings, totals, yield books
+/// and the current day's counters (only today is ever read).
 #[account]
 #[derive(InitSpace)]
 pub struct Pool {
+    pub version: u8,
+    /// What the pool holds and pays in. The native SOL mint today; a later upgrade can move the
+    /// pool to another asset (e.g. USDC) and migrate, without a new pool.
+    pub asset_mint: Pubkey,
     pub admin: Pubkey,
     pub co_signer: Pubkey,
     /// Signs `submit_claim` and the Ed25519 approval in front of it.
@@ -25,9 +49,18 @@ pub struct Pool {
     pub cluster: u8,
     pub bump: u8,
     pub vault_bump: u8,
-    pub pool_cap: u64,
-    /// Unix seconds; paused while `now < paused_until`.
+    /// Every adjustable number, one slot per `pool_core::settings::SettingKey`. Read only through
+    /// [`Pool::settings`]. Unused slots are room for settings an upgrade adds.
+    pub settings: [i64; SETTING_SLOTS],
+    pub pending_settings: [PendingSetting; SETTING_SLOTS],
+    /// Unix seconds; paused while `now < paused_until`. After `unpause` it holds the moment the
+    /// pause ended, so it is always the end of the last pause (0 = never paused).
     pub paused_until: i64,
+    /// Start of the last pause (0 = never paused).
+    pub pause_started_at: i64,
+    /// Seconds paused in every pause before the last one. With the two above, the pause clock that
+    /// stops claim windows during a pause (audit X1).
+    pub paused_before: i64,
 
     pub total_staked: u64,
     pub total_stakers: u64,
@@ -58,23 +91,43 @@ pub struct Pool {
     pub day_admitted: u64,
     pub day_oracle_count: u64,
     pub day_outflow: u64,
+    /// Room for fields a later upgrade adds.
+    pub reserved: [u8; 256],
 }
 
 impl Pool {
     pub fn is_paused(&self, now: i64) -> bool {
         now < self.paused_until
     }
+
+    /// The live settings: the one read path for every adjustable number.
+    pub fn settings(&self) -> Settings {
+        Settings { values: self.settings }
+    }
+
+    /// Seconds spent paused by time `t` (see `pool_core::settings::paused_secs_at`).
+    pub fn paused_secs_at(&self, t: i64) -> i64 {
+        settings::paused_secs_at(self.paused_before, self.pause_started_at, self.paused_until, t)
+    }
+
+    /// Claim clock for a window that started when the paused total was `mark`.
+    pub fn claim_clock(&self, now: i64, mark: i64) -> i64 {
+        settings::claim_clock(now, self.paused_secs_at(now), mark)
+    }
 }
 
-/// One staker's stake. PDA `[SEED_STAKE, pool, staker]`. Closed on withdraw / emergency exit;
-/// a forfeited record is never closed, so that address can never stake again.
+/// One staker's stake. PDA `[SEED_STAKE, pool, staker]`. Closed when all of it is withdrawn (or
+/// taken by emergency exit); a forfeited record is never closed, so that address can never stake
+/// again.
 #[account]
 #[derive(InitSpace)]
 pub struct StakeRecord {
+    pub version: u8,
     pub staker: Pubkey,
     /// Receives withdrawals, yield and claim payouts.
     pub beneficiary: Pubkey,
-    /// Principal. Kept (not zeroed) when forfeited: the override path reads it.
+    /// Principal; a partial withdrawal lowers it (and with it the coverage ceiling). Kept (not
+    /// zeroed) when forfeited: the override path reads it.
     pub amount: u64,
     pub yield_index_at: u128,
     pub staked_at: i64,
@@ -91,12 +144,15 @@ pub struct StakeRecord {
     /// Claim account queued on this stake.
     pub reserved_claim: Option<Pubkey>,
     pub bump: u8,
+    /// Room for fields a later upgrade adds.
+    pub reserved: [u8; 64],
 }
 
 /// One backer. PDA `[SEED_BACKER, pool, backer]`.
 #[account]
 #[derive(InitSpace)]
 pub struct BackerRecord {
+    pub version: u8,
     pub backer: Pubkey,
     /// Matured money.
     pub amount: u64,
@@ -108,16 +164,21 @@ pub struct BackerRecord {
     pub yield_index_at: u128,
     pub yield_owed: u64,
     pub bump: u8,
+    /// Room for fields a later upgrade adds.
+    pub reserved: [u8; 64],
 }
 
 /// The covered wallets of one staker. PDA `[SEED_STAKER_WALLETS, pool, staker]`.
 #[account]
 #[derive(InitSpace)]
 pub struct StakerWallets {
+    pub version: u8,
     pub staker: Pubkey,
     pub count: u8,
     pub wallet_hashes: [[u8; 32]; MAX_COVERED_WALLETS as usize],
     pub bump: u8,
+    /// Room for fields a later upgrade adds (e.g. more covered wallets: 32 bytes each).
+    pub reserved: [u8; 64],
 }
 
 /// One covered wallet, bound to one staker forever. PDA `[SEED_COVERED, pool, wallet_hash]`.
@@ -141,7 +202,7 @@ pub enum ClaimStatus {
     Reserved,
     /// Admitted; waiting for the stake's time gate.
     PendingTime,
-    /// Time gate met; the staker has `APPROVE_WINDOW_SECS` to approve.
+    /// Time gate met; the staker has the claim's `approve_window` to approve.
     AwaitingApproval,
     /// Approved: stake forfeited, cooling down or paying out.
     Active,
@@ -154,6 +215,7 @@ pub enum ClaimStatus {
 #[account]
 #[derive(InitSpace)]
 pub struct Claim {
+    pub version: u8,
     pub staker: Pubkey,
     pub tx_hash: [u8; 32],
     pub hack_timestamp: i64,
@@ -170,6 +232,16 @@ pub struct Claim {
     pub approve_deadline: i64,
     pub last_collected: i64,
     pub bump: u8,
+    /// Approve window this claim was admitted with (the setting at admission).
+    pub approve_window: i64,
+    /// Inactivity window this claim started paying with (the setting at approval).
+    pub inactivity_window: i64,
+    /// Paused total (`Pool::paused_secs_at`) when the claim's current window started: the hack
+    /// window while queued, the approve window, then the collection window. Pause time after it
+    /// does not count against the window (audit X1).
+    pub pause_mark: i64,
+    /// Room for fields a later upgrade adds.
+    pub reserved: [u8; 64],
 }
 
 /// 2-of-2 override request (admin + co-signer). PDA `[SEED_OVERRIDE, claim]`. Deleted on execution.

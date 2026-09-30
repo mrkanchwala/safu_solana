@@ -1,8 +1,10 @@
 //! Backers (multichain `backer.rs`). The four withdrawal-safety rules:
 //!   1. Money returns only to the depositing address, with its signature. No admin path.
 //!   2. During the notice the money still counts toward capacity.
-//!   3. Only free capital leaves: after the withdrawal, `total_allocated <= capacity`.
-//!   4. New money counts only after `BACKER_MATURITY_SECS`.
+//!   3. Only free capital leaves: after the withdrawal, `total_allocated <= capacity` (the same rule
+//!      every staker exit follows, `stake.rs`).
+//!   4. New money counts only after the `BackerMaturitySecs` setting.
+//!
 //! Pause blocks new deposits only; request, cancel and complete still work.
 
 use anchor_lang::prelude::*;
@@ -16,8 +18,8 @@ use crate::events::{
 use crate::leg;
 // Glob: `#[derive(Accounts)]` on a struct holding `MarinadeLeg` needs its generated client modules.
 use crate::marinade::*;
-use crate::state::{BackerRecord, Pool};
-use pool_core::params::{BACKER_MATURITY_SECS, BACKER_NOTICE_SECS};
+use crate::state::{BackerRecord, Pool, ACCOUNT_VERSION};
+use pool_core::settings::SettingKey;
 use pool_core::{add, sub, yields};
 
 /// Settles yield on the counted balance, then moves matured pending money into it.
@@ -70,12 +72,13 @@ pub fn back(ctx: Context<Back>, amount: u64) -> Result<()> {
     leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let record = &mut ctx.accounts.backer_record;
     if record.backer == Pubkey::default() {
+        record.version = ACCOUNT_VERSION;
         record.backer = ctx.accounts.backer.key();
         record.yield_index_at = pool.backer_yield_index;
         record.bump = ctx.bumps.backer_record;
     }
     settle(pool, record, now)?;
-    let matures_at = now.checked_add(BACKER_MATURITY_SECS).ok_or(PoolError::MathOverflow)?;
+    let matures_at = now.checked_add(pool.settings().get(SettingKey::BackerMaturitySecs)).ok_or(PoolError::MathOverflow)?;
     record.pending_amount = add(record.pending_amount, amount).core()?;
     record.pending_matures_at = matures_at;
     pool.total_backed_pending = add(pool.total_backed_pending, amount).core()?;
@@ -155,7 +158,8 @@ pub fn request_backer_withdrawal(ctx: Context<RequestBackerWithdrawal>, amount: 
     leg::harvest(&mut ctx.accounts.pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     settle(&mut ctx.accounts.pool, record, now)?;
     require!(amount <= record.amount, PoolError::BackerAmountExceedsBalance);
-    let ready_at = now.checked_add(BACKER_NOTICE_SECS).ok_or(PoolError::MathOverflow)?;
+    let notice = ctx.accounts.pool.settings().get(SettingKey::BackerNoticeSecs);
+    let ready_at = now.checked_add(notice).ok_or(PoolError::MathOverflow)?;
     record.withdraw_amount = amount;
     record.withdraw_ready_at = ready_at;
     emit!(BackerWithdrawalRequested { backer: record.backer, amount, ready_at });
@@ -205,7 +209,7 @@ pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Res
     require!(now >= record.withdraw_ready_at, PoolError::BackerNoticeNotPassed);
     leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
-    pool_core::check_backer_capital_free(pool.total_allocated, capacity, amount).core()?;
+    pool_core::check_capital_free(pool.total_allocated, capacity, amount).core()?;
 
     settle(pool, record, now)?;
     let yield_paid = record.yield_owed.min(pool.backer_yield_reserved);
@@ -223,7 +227,7 @@ pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Res
     // An unstake inside pay_out can mark a Marinade loss off total_staked: re-check that the capital
     // that left was still free afterwards, or the whole withdrawal reverts.
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
-    pool_core::check_backer_capital_free(pool.total_allocated, capacity, 0).core()?;
+    pool_core::check_capital_free(pool.total_allocated, capacity, 0).core()?;
     Ok(())
 }
 

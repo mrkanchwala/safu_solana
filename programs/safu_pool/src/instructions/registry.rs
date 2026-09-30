@@ -46,6 +46,7 @@ pub fn register_wallet(ctx: Context<RegisterWallet>, staker: Pubkey, wallet_hash
     }
     let wallets = &mut ctx.accounts.staker_wallets;
     if wallets.staker == Pubkey::default() {
+        wallets.version = crate::state::ACCOUNT_VERSION;
         wallets.staker = staker;
         wallets.bump = ctx.bumps.staker_wallets;
     }

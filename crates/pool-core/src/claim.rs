@@ -2,6 +2,7 @@
 //! admission (solvency + daily stress cap), oracle daily limit, vesting, daily payout cap.
 
 use crate::params::*;
+use crate::settings::Rates;
 use crate::{add, apply_bps, mul_div_floor, CoreError, Result};
 
 /// Coverage ratio of a tier code (1 = A, 2 = B, 3 = C).
@@ -32,14 +33,16 @@ pub fn check_entitlement(entitlement: u64, stake: u64, tier: u8) -> Result<()> {
 }
 
 /// The hack is not in the future, not before the stake, and inside the claim window.
-pub fn check_hack_time(hack_ts: i64, staked_at: i64, now: i64) -> Result<()> {
+/// `window_now` is the claim clock since the hack (`settings::claim_clock`): time the pool spent
+/// paused does not count against the window (audit X1). Pass `now` when nothing was paused.
+pub fn check_hack_time(hack_ts: i64, staked_at: i64, now: i64, window_now: i64) -> Result<()> {
     if hack_ts > now {
         return Err(CoreError::HackTimestampInFuture);
     }
     if hack_ts < staked_at {
         return Err(CoreError::HackPredatesStake);
     }
-    if now > hack_ts.checked_add(CLAIM_WINDOW_SECS).ok_or(CoreError::Overflow)? {
+    if window_now > hack_ts.checked_add(CLAIM_WINDOW_SECS).ok_or(CoreError::Overflow)? {
         return Err(CoreError::ClaimWindowExpired);
     }
     Ok(())
@@ -76,23 +79,24 @@ pub fn band(allocated: u64, base: u64) -> Result<Band> {
 }
 
 /// New entitlement admitted per day: a band of capacity. Zero on an empty pool.
-pub fn stress_cap(capacity: u64, allocated: u64) -> Result<u64> {
+pub fn stress_cap(capacity: u64, allocated: u64, rates: Rates) -> Result<u64> {
     if capacity == 0 {
         return Ok(0);
     }
     let bps = match band(allocated, capacity)? {
-        Band::Low => ADMIT_LOW_BPS,
-        Band::Mid => ADMIT_MID_BPS,
-        Band::High => ADMIT_HIGH_BPS,
+        Band::Low => rates.low,
+        Band::Mid => rates.mid,
+        Band::High => rates.high,
     };
     apply_bps(capacity, bps)
 }
 
 /// A claim fits now: the pool stays solvent and today's admissions stay under the stress cap.
 /// `false` means queue, not reject.
-pub fn admits(entitlement: u64, capacity: u64, allocated: u64, day_admitted: u64) -> Result<bool> {
+/// `rates` are the live admit settings.
+pub fn admits(entitlement: u64, capacity: u64, allocated: u64, day_admitted: u64, rates: Rates) -> Result<bool> {
     let solvent = add(allocated, entitlement)? <= capacity;
-    let under_cap = add(day_admitted, entitlement)? <= stress_cap(capacity, allocated)?;
+    let under_cap = add(day_admitted, entitlement)? <= stress_cap(capacity, allocated, rates)?;
     Ok(solvent && under_cap)
 }
 
@@ -118,16 +122,17 @@ pub fn vested(entitlement: u64, cooldown_ends: i64, vesting_ends: i64, now: i64)
 
 /// Claim payouts allowed today: a band of `base` (the caller passes max(capacity now, capacity
 /// when the claim was approved), which is what keeps a shrinking pool from throttling old claims).
-pub fn payout_cap(base: u64, allocated: u64) -> Result<u64> {
+/// `rates` are the live payout settings.
+pub fn payout_cap(base: u64, allocated: u64, rates: Rates) -> Result<u64> {
     if base == 0 {
         // As multichain (`dynamic_outflow_bps` returns 100 bps here): a rate of nothing is nothing.
         // Unreachable from `claim_stream`, whose base includes the claim's non-zero capacity snapshot.
         return apply_bps(base, PAYOUT_EMPTY_POOL_BPS);
     }
     let bps = match band(allocated, base)? {
-        Band::Low => PAYOUT_LOW_BPS,
-        Band::Mid => PAYOUT_MID_BPS,
-        Band::High => PAYOUT_HIGH_BPS,
+        Band::Low => rates.low,
+        Band::Mid => rates.mid,
+        Band::High => rates.high,
     };
     apply_bps(base, bps)
 }

@@ -74,11 +74,13 @@ pub struct WithdrawYield<'info> {
 
 /// Protocol revenue to the treasury. Within the protocol's balance AND the pool's surplus over
 /// everything it owes (stakes, backing, set-aside yield, open claims), because claims may have spent
-/// protocol revenue that the balance still counts (multichain code review W2).
+/// protocol revenue that the balance still counts (multichain code review W2). Not while paused
+/// (audit X4): stakers and backers cannot claim yield then either.
 pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
     let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
+    require!(!pool.is_paused(super::now()?), PoolError::Paused);
     require!(amount > 0, PoolError::AmountNotPositive);
     require!(amount <= pool.protocol_yield_balance, PoolError::ExceedsYieldBalance);
     let held = add(vault::liquid_balance(&vault)?, pool.deployed_book).core()?;
