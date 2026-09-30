@@ -3,16 +3,12 @@ import type { ReactNode } from "react";
 import { getWallets } from "@wallet-standard/app";
 import type { Wallet, WalletAccount } from "@wallet-standard/base";
 import { WALLET_CHAIN } from "./pool";
-import type { WcSession } from "./walletconnect";
 
-// Solana only: any wallet-standard extension that can sign Solana transactions, plus WalletConnect
-// (lib/walletconnect.ts, a dynamic import, ~2 MB only on demand). From the multichain site's
+// Solana only: any wallet-standard extension that can sign Solana transactions (browser extensions,
+// and the in-app browsers of phone wallets such as Phantom and Solflare). No WalletConnect. From the multichain site's
 // lib/client.tsx with the Stellar and Ethereum halves removed.
 
 export type SolanaWalletOption = { id: string; name: string; icon?: string; wallet: Wallet };
-
-/** Id used in the picker for the WalletConnect option. */
-export const WALLETCONNECT_ID = "walletconnect";
 
 export function solanaWallets(): SolanaWalletOption[] {
   return getWallets()
@@ -54,24 +50,16 @@ export function ClientProvider({ children }: { children: ReactNode }) {
   const [walletName, setWalletName] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const solRef = useRef<{ opt: SolanaWalletOption; account: WalletAccount } | null>(null);
-  const wcRef = useRef<WcSession | null>(null);
 
   const connect = useCallback(async (walletId?: string) => {
     setConnecting(true);
     try {
-      if (walletId === WALLETCONNECT_ID) {
-        const session = await (await import("./walletconnect")).connect();
-        wcRef.current = session;
-        setAddress(session.address);
-        setWalletName("WalletConnect");
-      } else {
-        const opt = solanaWallets().find((w) => w.id === walletId) ?? solanaWallets()[0];
-        if (!opt) throw new Error("No Solana wallet found. Install Phantom, Solflare or Backpack.");
-        const account = await connectExtension(opt);
-        solRef.current = { opt, account };
-        setAddress(account.address);
-        setWalletName(opt.name);
-      }
+      const opt = solanaWallets().find((w) => w.id === walletId) ?? solanaWallets()[0];
+      if (!opt) throw new Error("No Solana wallet found. Install Phantom, Solflare or Backpack.");
+      const account = await connectExtension(opt);
+      solRef.current = { opt, account };
+      setAddress(account.address);
+      setWalletName(opt.name);
     } finally {
       setConnecting(false);
     }
@@ -80,9 +68,6 @@ export function ClientProvider({ children }: { children: ReactNode }) {
   const disconnect = useCallback(() => {
     const dis = solRef.current?.opt.wallet.features["standard:disconnect"] as { disconnect?: () => Promise<void> } | undefined;
     if (dis?.disconnect) void dis.disconnect();
-    const wc = wcRef.current;
-    if (wc) void import("./walletconnect").then((m) => m.disconnect(wc));
-    wcRef.current = null;
     solRef.current = null;
     setAddress(null);
     setWalletName(null);
@@ -90,7 +75,6 @@ export function ClientProvider({ children }: { children: ReactNode }) {
 
   const signMessage = useCallback(async (message: string | Uint8Array): Promise<string> => {
     const bytes = typeof message === "string" ? new TextEncoder().encode(message) : message;
-    if (wcRef.current) return (await import("./walletconnect")).signMessage(wcRef.current, bytes);
     const sol = solRef.current;
     if (!sol) throw new Error("Connect a wallet first.");
     const feature = sol.opt.wallet.features["solana:signMessage"] as
@@ -102,7 +86,6 @@ export function ClientProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const solanaSignTransaction = useCallback(async (tx: Uint8Array): Promise<Uint8Array> => {
-    if (wcRef.current) return (await import("./walletconnect")).solanaSignTransaction(wcRef.current, tx);
     const sol = solRef.current;
     if (!sol) throw new Error("Connect a wallet first.");
     const feature = sol.opt.wallet.features["solana:signTransaction"] as

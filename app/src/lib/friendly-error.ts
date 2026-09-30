@@ -85,9 +85,6 @@ const ACTION_HINTS: Record<string, string> = {
   BROADCAST_FAILED: NETWORK_BUSY,
   "Pool not available": `The pool is being updated. ${TRY_LATER}`,
   "another cluster": OUR_SIDE,
-  // WalletConnect 5100: the phone wallet refused the network.
-  "Unsupported chains":
-    "Your wallet doesn't support this test network. Turn on test networks in its settings, or use a browser wallet.",
 };
 
 /** Wallet and network errors, which have no fixed code. Checked after the codes above. */
@@ -125,8 +122,7 @@ export type FriendlyError = {
   cancelled?: boolean;
 };
 
-// Wallet SDKs don't always throw Errors: WalletConnect's modal rejects with a plain
-// `{ code: -1, message: "The user closed the modal." }`.
+// Wallet SDKs don't always throw Errors: some reject with a plain `{ code, message }` object.
 function rawText(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {

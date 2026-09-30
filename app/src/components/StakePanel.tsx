@@ -81,7 +81,7 @@ export function StakePanel() {
     setCoveredWallets((cur) => (cur.some((w) => w.wallet === row.wallet) ? cur : [...cur, row]));
     setPending(null);
     setNewWallet("");
-    setWalletMsg(r.onchain === "pending" ? "Registered. The on-chain copy will follow shortly." : "Registered.");
+    setWalletMsg(r.onchain && r.onchain !== "written" ? "Registered. The on-chain copy will follow shortly." : "Registered.");
   }
 
   async function addWallet() {

@@ -24,12 +24,8 @@ describe("toFriendlyError", () => {
     expect(result.message).not.toContain("SOME_UNMAPPED_CODE");
   });
 
-  it("treats WalletConnect's closed-modal rejection (a plain object) as a cancel", () => {
+  it("treats a wallet's closed-window rejection (a plain object) as a cancel", () => {
     expect(toFriendlyError({ code: -1, message: "The user closed the modal." }).cancelled).toBe(true);
-  });
-
-  it("explains WalletConnect's unsupported-chains rejection", () => {
-    expect(toFriendlyError({ code: 5100, message: "Unsupported chains." }).message).toContain("test network");
   });
 
   it("shows the app's own plain messages as written", () => {

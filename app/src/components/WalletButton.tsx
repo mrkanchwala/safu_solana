@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { AppClient } from "../lib/client";
-import { WALLETCONNECT_ID, solanaWallets } from "../lib/client";
+import { solanaWallets } from "../lib/client";
 import { toFriendlyError } from "../lib/friendly-error";
 import { POOL } from "../lib/pool";
-import { SolanaIcon, WalletConnectIcon } from "./Icons";
+import { SolanaIcon } from "./Icons";
 
-// One Connect button: the Solana wallets found in this browser, then WalletConnect (phone).
+// One Connect button: the Solana wallets found in this browser. On a phone, open the site in the
+// wallet app's own browser (Phantom, Solflare), which shows up here the same way.
 
 function short(addr: string): string {
   return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
@@ -87,10 +88,8 @@ export function WalletButton({ client }: { client: AppClient }) {
               <WalletRow key={w.id} name={w.name} icon={w.icon ? <img src={w.icon} alt="" /> : <SolanaIcon />} onClick={() => go(w.id)} />
             ))
           ) : (
-            <div className="wallet-empty">No browser wallet found</div>
+            <div className="wallet-empty">No Solana wallet found. On a phone, open this page in your wallet app's browser.</div>
           )}
-          <div className="wallet-divider" />
-          <WalletRow icon={<WalletConnectIcon />} name="WalletConnect" sub="Scan with your phone" onClick={() => go(WALLETCONNECT_ID)} />
           {error ? <div className="wallet-error">{error}</div> : null}
         </div>
       ) : null}

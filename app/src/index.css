@@ -308,11 +308,6 @@ header .social {
   font-size: 18px;
   line-height: 1;
 }
-.wallet-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 6px 6px;
-}
 .wallet-empty {
   padding: 8px 12px;
   color: var(--text-muted);

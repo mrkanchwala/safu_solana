@@ -7,7 +7,7 @@ export function XIcon() {
   );
 }
 
-// Chain + WalletConnect marks for the Connect dropdown: simplified one-colour shapes (currentColor),
+// Chain marks for the Connect dropdown: simplified one-colour shapes (currentColor),
 // same treatment as the X / Telegram marks, so they sit quietly in the site's dark palette.
 export function EthereumIcon() {
   return (
@@ -32,14 +32,6 @@ export function StellarIcon() {
       <path d="M18.6 6.2A8 8 0 0 0 4.3 14.6" />
       <path d="M5.4 17.8a8 8 0 0 0 14.3-8.4" />
       <path d="M2.5 15.6 21.5 6.9M2.5 17.3l19-8.7" />
-    </svg>
-  );
-}
-
-export function WalletConnectIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
-      <path d="M6.1 8.6a8.4 8.4 0 0 1 11.8 0l.4.4a.4.4 0 0 1 0 .6l-1.3 1.3a.2.2 0 0 1-.3 0l-.5-.6a5.9 5.9 0 0 0-8.3 0l-.6.6a.2.2 0 0 1-.3 0L5.7 9.6a.4.4 0 0 1 0-.6l.4-.4zm14.5 2.7 1.2 1.2a.4.4 0 0 1 0 .6l-5.3 5.2a.4.4 0 0 1-.6 0L12.2 14.6a.1.1 0 0 0-.2 0l-3.7 3.7a.4.4 0 0 1-.6 0L2.2 13.1a.4.4 0 0 1 0-.6l1.2-1.2a.4.4 0 0 1 .6 0l3.7 3.7a.1.1 0 0 0 .2 0l3.7-3.7a.4.4 0 0 1 .6 0l3.7 3.7a.1.1 0 0 0 .2 0l3.7-3.7a.4.4 0 0 1 .6 0z" />
     </svg>
   );
 }
