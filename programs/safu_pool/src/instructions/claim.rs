@@ -16,7 +16,9 @@ use crate::constants::{SEED_CLAIM, SEED_OVERRIDE, SEED_POOL, SEED_STAKE, SEED_VA
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::*;
 use crate::state::{Claim, ClaimStatus, OverrideRequest, Pool, RevokedApproval, StakeRecord};
-use crate::vault;
+use crate::leg;
+// Glob: `#[derive(Accounts)]` on a struct holding `MarinadeLeg` needs its generated client modules.
+use crate::marinade::*;
 
 // ------------------------------------------------------------------ shared steps
 
@@ -333,11 +335,14 @@ pub struct ClaimStream<'info> {
     #[account(mut)]
     pub beneficiary: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+    pub leg: MarinadeLeg<'info>,
 }
 
 /// Pays what has vested, up to today's payout cap, to the beneficiary.
 pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
     let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
@@ -356,7 +361,6 @@ pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
     let cap = rules::payout_cap(base, pool.total_allocated).core()?;
     let amount = claimable.min(cap.saturating_sub(pool.day_outflow));
     require!(amount > 0, PoolError::DailyOutflowCapReached);
-    vault::require_free_liquid(pool, &ctx.accounts.vault.to_account_info(), amount)?;
 
     claim.streamed += amount;
     claim.last_collected = now;
@@ -367,8 +371,10 @@ pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
     pool.day_outflow = add(pool.day_outflow, amount).core()?;
     emit!(ClaimStreamed { claim: claim_key, amount });
 
-    let pool_key = pool.key();
-    vault::pay(&pool_key, pool.vault_bump, &ctx.accounts.vault.to_account_info(), &ctx.accounts.beneficiary.to_account_info(), amount)
+    // If cash is short, Marinade unstakes the rest; the beneficiary pays that unstake's fee.
+    let to = ctx.accounts.beneficiary.to_account_info();
+    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, amount)?;
+    Ok(())
 }
 
 // ------------------------------------------------------------------ admin: cancel, suspend, revoke
@@ -382,12 +388,17 @@ pub struct CancelClaim<'info> {
     pub claim: Box<Account<'info, Claim>>,
     #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), claim.staker.as_ref()], bump = stake_record.bump)]
     pub stake_record: Box<Account<'info, StakeRecord>>,
+    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    pub leg: MarinadeLeg<'info>,
 }
 
 /// False-positive reversal. An approved (forfeited) stake is restored under the penalty lock;
 /// before approval nothing was forfeited, so there is no penalty.
 pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
@@ -398,6 +409,8 @@ pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     release_allocation(pool, claim.entitlement - claim.streamed);
     let stake = &mut ctx.accounts.stake_record;
     if claim.status == ClaimStatus::Active {
+        // Growth so far belongs to the stakes in before this one returns (multichain call site).
+        leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
         stake.forfeited = false;
         stake.penalty_locked_until = secs_after(now, PENALTY_LOCK_SECS)?;
         // Out of total_staked while forfeited, so it earns again only from now.

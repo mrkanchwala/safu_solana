@@ -515,8 +515,12 @@ fn stream_refused_when_liquid_sol_is_short() {
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
+    // All liquid SOL is set-aside yield and nothing is in Marinade to unstake.
     let liquid = env.vault_liquid();
-    env.edit::<Pool>(&env.pool(), |p| p.backer_yield_reserved = liquid);
+    env.edit::<Pool>(&env.pool(), |p| {
+        p.backer_yield_reserved = liquid;
+        p.deployed_msol = 0;
+    });
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
 }

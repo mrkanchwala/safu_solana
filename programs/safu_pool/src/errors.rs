@@ -167,6 +167,15 @@ pub enum PoolError {
     Insolvent,
     #[msg("Revocation account does not match this approval")]
     WrongRevocationAccount,
+    // B3: Marinade leg and yield.
+    #[msg("Marinade's unstake fee is above the pool's limit")]
+    UnstakeFeeTooHigh,
+    #[msg("Liquid SOL is already at target and nothing is idle")]
+    NothingToRebalance,
+    #[msg("No yield to claim")]
+    NothingToClaim,
+    #[msg("Amount is above the protocol's revenue or the pool's surplus")]
+    ExceedsYieldBalance,
 }
 
 impl From<CoreError> for PoolError {

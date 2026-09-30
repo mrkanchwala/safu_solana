@@ -148,7 +148,11 @@ fn stake_moves_sol_into_the_vault_and_books_it() {
     assert_eq!((r.amount, r.beneficiary, r.staked_at, r.forfeited), (max, s.pubkey(), START, false));
     let p = env.pool_state();
     assert_eq!((p.total_staked, p.total_stakers), (max, 1));
-    assert_eq!(env.vault_liquid(), max);
+    // `DEPLOY_BPS` of it is staked through Marinade, the rest stays liquid.
+    let deployed = pool_core::liquidity::push_amount(max, 0, max, 0).unwrap();
+    assert!(deployed > 0);
+    assert_eq!((p.deployed_book, env.vault_liquid()), (deployed, max - deployed));
+    assert!(p.deployed_msol > 0);
 }
 
 #[test]
@@ -240,6 +244,7 @@ fn set_beneficiary_blocked_while_a_claim_is_open_or_queued() {
 #[test]
 fn withdraw_pays_the_beneficiary_and_closes_the_record() {
     let mut env = Env::new();
+    env.marinade_liquidity_at_target();
     let (_, max) = bounds();
     // Enough for two stakes: the first withdrawal goes to the beneficiary, not back here.
     let s = env.funded(2 * max + SOL);
@@ -251,13 +256,13 @@ fn withdraw_pays_the_beneficiary_and_closes_the_record() {
     let before = env.lamports(&s.pubkey());
     let ix = env.withdraw_ix(&s.pubkey(), &ben);
     env.ok(&[ix], &[&s]);
-    assert_eq!(env.lamports(&ben), max);
+    // The staked part came back through Marinade; the beneficiary paid that unstake's fee.
+    assert!(env.lamports(&ben) <= max && env.lamports(&ben) + Env::max_unstake_fee(max) >= max);
     assert!(!env.exists(&rec));
     // Rent comes back to the staker (the fee is paid by the staker too).
     assert!(env.lamports(&s.pubkey()) > before + rent - SOL / 1_000);
     let p = env.pool_state();
-    assert_eq!((p.total_staked, p.total_stakers), (0, 0));
-    assert_eq!(env.vault_liquid(), 0);
+    assert_eq!((p.total_staked, p.total_stakers, p.deployed_msol, p.deployed_book), (0, 0, 0, 0));
     // The address can stake again: the record is re-created.
     let ix = env.stake_ix(&s.pubkey(), max, s.pubkey());
     env.ok(&[ix], &[&s]);
@@ -287,6 +292,7 @@ fn withdraw_refused_while_paused() {
 #[test]
 fn withdraw_refused_when_forfeited_claimed_queued_or_penalty_locked() {
     let mut env = Env::new();
+    env.marinade_liquidity_at_target();
     let (min, _) = bounds();
     let s = env.staker(min);
     let rec = env.stake_record(&s.pubkey());
@@ -319,15 +325,33 @@ fn withdraw_refused_when_liquid_sol_is_short() {
     let mut env = Env::new();
     let (min, _) = bounds();
     let s = env.staker(min);
-    // Set-aside yield is not the stake's to take.
-    env.edit::<Pool>(&env.pool(), |p| p.staker_yield_reserved = 1);
+    // Nothing in Marinade to unstake, and the set-aside yield is not the stake's to take.
+    env.edit::<Pool>(&env.pool(), |p| {
+        p.deployed_msol = 0;
+        p.staker_yield_reserved = 1;
+    });
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
 }
 
 #[test]
+fn withdraw_unstakes_the_shortfall_and_leaves_the_set_aside() {
+    let mut env = Env::new();
+    env.marinade_liquidity_at_target();
+    let (min, _) = bounds();
+    let s = env.staker(min);
+    let set_aside = env.vault_liquid();
+    env.edit::<Pool>(&env.pool(), |p| p.staker_yield_reserved = set_aside);
+    let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.pool_state().staker_yield_reserved, set_aside);
+    assert!(env.vault_liquid() >= set_aside);
+}
+
+#[test]
 fn withdraw_pays_unpaid_yield_from_the_set_aside() {
     let mut env = Env::new();
+    env.marinade_liquidity_at_target();
     let (_, max) = bounds();
     let s = env.staker(max);
     // One credit of 1% on the stake: index + set-aside + the SOL behind it.
@@ -341,14 +365,15 @@ fn withdraw_pays_unpaid_yield_from_the_set_aside() {
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
     let before = env.lamports(&s.pubkey());
     env.ok(&[ix], &[&s]);
-    assert!(env.lamports(&s.pubkey()) >= before + max + credit.staker_share);
-    assert_eq!(env.pool_state().staker_yield_reserved, 0);
-    assert_eq!(env.vault_liquid(), 0);
+    assert!(env.lamports(&s.pubkey()) + Env::max_unstake_fee(max) >= before + max + credit.staker_share);
+    let p = env.pool_state();
+    assert_eq!((p.staker_yield_reserved, p.deployed_msol), (0, 0));
 }
 
 #[test]
 fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
     let mut env = Env::new();
+    env.marinade_liquidity_at_target();
     let (min, _) = bounds();
     let s = env.staker(min);
     let ix = env.emergency_exit_ix(&s.pubkey());
@@ -363,7 +388,7 @@ fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
     env.edit::<StakeRecord>(&rec, |r| r.penalty_locked_until = 0);
     let before = env.lamports(&s.pubkey());
     env.ok(&[ix], &[&s]);
-    assert!(env.lamports(&s.pubkey()) > before + min);
+    assert!(env.lamports(&s.pubkey()) + Env::max_unstake_fee(min) > before + min);
     assert!(!env.exists(&rec));
 }
 

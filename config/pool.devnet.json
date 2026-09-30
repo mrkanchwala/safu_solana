@@ -2,6 +2,7 @@
   "cluster": "devnet",
   "rpcUrl": "https://api.devnet.solana.com",
   "poolCapLamports": 50000000000,
+  "computeUnitLimit": 200000,
   "marinade": {
     "program": "MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",
     "state": "8szGkuLTAux9XMgZ2vtY39jVSowEcpBfFfD8hXSEqdGC",

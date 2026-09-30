@@ -3,12 +3,14 @@ pub mod backer;
 pub mod claim;
 pub mod registry;
 pub mod stake;
+pub mod upkeep;
 
 pub use admin::*;
 pub use backer::*;
 pub use claim::*;
 pub use registry::*;
 pub use stake::*;
+pub use upkeep::*;
 
 use anchor_lang::prelude::*;
 

@@ -9,6 +9,7 @@
 #![no_std]
 
 pub mod claim;
+pub mod leg;
 pub mod liquidity;
 pub mod marinade;
 pub mod params;

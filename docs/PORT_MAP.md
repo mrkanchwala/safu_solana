@@ -30,14 +30,14 @@ form differs (reason given). **Left out** = not in this build.
 | `try_release_queued_claim` / `expire_queued_claim` | same | Rules | Permissionless. |
 | `approve_claim` | same | Rules | Staker signs. No points burn (points left out). |
 | `expire_pending_approval` / `expire_stale_claim` | same | Rules | Permissionless. |
-| `claim_stream` | `claim_stream` | Changed | Pays the stored beneficiary. If liquid SOL is short, Marinade `liquid_unstake` of the shortfall; **the unstake fee comes off that payment** (devnet default; roadmap: user chooses instant or delayed). |
+| `claim_stream` | `claim_stream` | Changed | Pays the stored beneficiary. If liquid SOL is short, Marinade `liquid_unstake` of the shortfall; **the unstake fee on that part comes off that payment** (devnet default; roadmap: user chooses instant or delayed). Same for every payout: withdraw, emergency exit, backer withdrawal, yield claims, treasury. |
 | `cancel_claim` | same | Rules | Penalty lock only when the stake was forfeited. |
 | `approve_override` / `cancel_pending_override` | same | Rules | 2-of-2 admin + co-signer. `Override` PDA `[override, claim]`. |
 | `get_stake` / `get_claim` / `is_eligible` / `is_claim_eligible` | account fetch + client helpers | Changed | Eligibility maths lives in `pool-core`, read by clients through the IDL constants. |
 | `get_points_balance` | — | Left out | Points (V8 legacy). Not shown anywhere. |
-| `deploy_to_vault` / `auto_deploy_liquidity` / `provide_liquidity` / `ensure_liquidity` | `rebalance` (permissionless) + in-path push/pull | Changed | Marinade `deposit` / `liquid_unstake`. Target split `DEPLOY_BPS` (80% mSOL). |
-| `harvest` | `harvest` | Changed | Yield = mSOL value growth above book, read from Marinade `State.msol_price`. Growth limit 10 bp/day kept. |
-| `claim_yield` / `claim_backer_yield` | same | Rules | Any time, principal untouched. |
+| `deploy_to_vault` / `auto_deploy_liquidity` / `provide_liquidity` / `ensure_liquidity` | `rebalance` (permissionless) + in-path push (after `stake` / `back`) and pull (every payout) | Changed | Marinade `deposit` / `liquid_unstake`, built by hand. Push = multichain `push_idle` (idle above open claims, up to `DEPLOY_BPS` = 80%, once ≥ `AUTO_PUSH_MIN_BPS`). `rebalance` pull = multichain `ensure_liquidity` target (open claims short of free cash, or deployment above the line); the pool pays that fee. No admin deploy / provide calls. |
+| `harvest` | `harvest` | Changed | Yield = mSOL value growth above book (Marinade `State.msol_price`), unstaked and credited as the SOL that arrives. Growth limit 10 bp/day kept. Also runs first inside `stake`, `back`, `mature_backing`, `withdraw`, `cancel_claim` (approved claims), `claim_yield`, `claim_backer_yield`, `complete_backer_withdrawal` (multichain call sites), so growth goes to the money already in. |
+| `claim_yield` / `claim_backer_yield` | same | Rules | Any time (not while paused), principal untouched. Staker yield goes to the stored beneficiary. |
 | `withdraw_yield` | `withdraw_yield` | Rules | Treasury takes protocol revenue only, capped at the protocol surplus. |
 | `get_liquid_balance` … `get_total_stakers` / `is_paused` (views) | account fields | Changed | Read the `Pool` account. |
 
@@ -62,3 +62,23 @@ form differs (reason given). **Left out** = not in this build.
 - **Stake record reuse:** closed on withdraw / emergency exit and re-created by the next stake. A forfeited record is never closed, so that address can never stake again (multichain H2), enforced by `init` failing.
 - **Positions are records, not tokens.** mSOL never leaves the pool.
 - **No price feed.** The oracle converts the USD loss to lamports off-chain and signs the lamport amount; the program checks it against the tier ceiling in SOL.
+
+## Marinade leg (B3)
+
+- **Solana cannot catch a failed call.** Multichain's best-effort `try_deposit` / `try_withdraw` become
+  pre-checks: push and harvest skip unless Marinade is unpaused, the amount clears Marinade's minimum
+  and (harvest) its liquidity pool can pay. A payout that needs an unstake gets it or fails whole with
+  `InsufficientLiquidity` / `UnstakeFeeTooHigh`, and nothing changes.
+- **Who pays Marinade's fee.** The payee pays the fee on the part of an unstake their payment needed
+  (rounded up). If the whole mSOL position was not worth their shortfall, they take what it returned
+  (in practice one lamport of Marinade rounding). A `rebalance` unstake is the pool's: growth that
+  comes back pays the fee first, any rest is a loss marked off `total_staked` (multichain
+  `DeploymentShortfall`).
+- **Fee limit.** `MAX_REBALANCE_SLIPPAGE_BPS` (5%) caps Marinade's fee on any unstake, else
+  `UnstakeFeeTooHigh`. Marinade's fee is linear from `lp_min_fee` (at or above its liquidity target)
+  to `lp_max_fee` (empty); `pool_core::marinade::unstake_fee_bps` computes it for clients.
+  **Devnet 2026-09-30:** 15,264 SOL in Marinade's liquidity pool against a 160,000 SOL target: fee
+  ~8.2%, so payouts that need an unstake are refused on devnet today. Open decision for the founder.
+- **Compute units** (LiteSVM, Marinade at target liquidity): stake + deposit 77k, harvest 60k,
+  claim_yield + harvest 68k, withdraw + harvest + unstake 117k. Client limit `computeUnitLimit` in
+  `config/pool.devnet.json` (200k); the test suite fails if any path exceeds it.

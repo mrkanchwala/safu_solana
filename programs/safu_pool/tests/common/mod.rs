@@ -34,6 +34,7 @@ const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/pool.dev
 
 pub struct Config {
     pub pool_cap: u64,
+    pub compute_unit_limit: u64,
     pub marinade_program: Pubkey,
     pub marinade_state: Pubkey,
     pub msol_mint: Pubkey,
@@ -44,6 +45,7 @@ pub fn config() -> Config {
     let key = |s: &serde_json::Value| Pubkey::from_str(s.as_str().unwrap()).unwrap();
     Config {
         pool_cap: v["poolCapLamports"].as_u64().unwrap(),
+        compute_unit_limit: v["computeUnitLimit"].as_u64().unwrap(),
         marinade_program: key(&v["marinade"]["program"]),
         marinade_state: key(&v["marinade"]["state"]),
         msol_mint: key(&v["marinade"]["msolMint"]),
@@ -194,6 +196,30 @@ impl Env {
     pub fn vault(&self) -> Pubkey {
         pda(&[SEED_VAULT, self.pool().as_ref()])
     }
+    /// Marinade accounts for the pool's calls: PDAs from the configured state with the seeds in
+    /// `pool_core::marinade`, the mSOL leg and treasury read from the state account itself.
+    pub fn leg(&self) -> safu_pool::accounts::MarinadeLeg {
+        use pool_core::marinade as m;
+        let state = self.cfg.marinade_state;
+        let marinade_pda = |seed: &[u8]| Pubkey::find_program_address(&[state.as_ref(), seed], &self.cfg.marinade_program).0;
+        let data = self.svm.get_account(&state).expect("marinade state").data;
+        let at = |o: usize| Pubkey::try_from(&data[o..o + 32]).unwrap();
+        safu_pool::accounts::MarinadeLeg {
+            marinade_program: self.cfg.marinade_program,
+            marinade_state: state,
+            msol_mint: self.cfg.msol_mint,
+            liq_pool_sol_leg: marinade_pda(m::SEED_LIQ_POOL_SOL_LEG),
+            liq_pool_msol_leg: at(m::STATE_LIQ_POOL_MSOL_LEG),
+            liq_pool_msol_leg_authority: marinade_pda(m::SEED_LIQ_POOL_MSOL_LEG_AUTHORITY),
+            reserve: marinade_pda(m::SEED_RESERVE),
+            msol_mint_authority: marinade_pda(m::SEED_MSOL_MINT_AUTHORITY),
+            treasury_msol: at(m::STATE_TREASURY_MSOL),
+            pool_msol: self.pool_msol(),
+            token_program: TOKEN,
+            system_program: SYSTEM,
+        }
+    }
+
     pub fn pool_msol(&self) -> Pubkey {
         pda(&[SEED_MSOL, self.pool().as_ref()])
     }
@@ -213,9 +239,18 @@ impl Env {
     // ---- sending
 
     pub fn send(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<(), String> {
+        self.send_cu(ixs, signers).map(|_| ())
+    }
+
+    /// Sends and returns the compute units the transaction used.
+    pub fn send_cu(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<u64, String> {
         let msg = Message::new_with_blockhash(ixs, Some(&signers[0].pubkey()), &self.svm.latest_blockhash());
         let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), signers).unwrap();
-        let r = self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?} | logs: {:?}", e.err, e.meta.logs));
+        let r = self
+            .svm
+            .send_transaction(tx)
+            .map(|m| m.compute_units_consumed)
+            .map_err(|e| format!("{:?} | logs: {:?}", e.err, e.meta.logs));
         self.svm.expire_blockhash();
         r
     }
@@ -299,6 +334,7 @@ impl Env {
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
                 system_program: SYSTEM,
+                leg: self.leg(),
             },
             safu_pool::instruction::Stake { amount, beneficiary },
         )
@@ -313,6 +349,7 @@ impl Env {
                 stake_record: self.stake_record(staker),
                 beneficiary: *beneficiary,
                 system_program: SYSTEM,
+                leg: self.leg(),
             },
             safu_pool::instruction::Withdraw {},
         )
@@ -326,6 +363,7 @@ impl Env {
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
                 system_program: SYSTEM,
+                leg: self.leg(),
             },
             safu_pool::instruction::EmergencyExit {},
         )
@@ -346,6 +384,7 @@ impl Env {
                 vault: self.vault(),
                 backer_record: self.backer_record(backer),
                 system_program: SYSTEM,
+                leg: self.leg(),
             },
             safu_pool::instruction::Back { amount },
         )
@@ -353,7 +392,12 @@ impl Env {
 
     pub fn mature_ix(&self, backer: &Pubkey) -> Instruction {
         self.ix(
-            safu_pool::accounts::MatureBacking { pool: self.pool(), backer_record: self.backer_record(backer) },
+            safu_pool::accounts::MatureBacking {
+                pool: self.pool(),
+                vault: self.vault(),
+                backer_record: self.backer_record(backer),
+                leg: self.leg(),
+            },
             safu_pool::instruction::MatureBacking {},
         )
     }
@@ -373,6 +417,7 @@ impl Env {
                 vault: self.vault(),
                 backer_record: self.backer_record(backer),
                 system_program: SYSTEM,
+                leg: self.leg(),
             },
             safu_pool::instruction::CompleteBackerWithdrawal {},
         )
@@ -479,6 +524,7 @@ impl Env {
                 stake_record: self.stake_record(staker),
                 beneficiary: *beneficiary,
                 system_program: SYSTEM,
+                leg: self.leg(),
             },
             safu_pool::instruction::ClaimStream {},
         )
@@ -491,6 +537,8 @@ impl Env {
                 pool: self.pool(),
                 claim: self.claim_addr(staker, tx),
                 stake_record: self.stake_record(staker),
+                vault: self.vault(),
+                leg: self.leg(),
             },
             safu_pool::instruction::CancelClaim {},
         )
@@ -557,6 +605,120 @@ impl Env {
         let m = self.mature_ix(&b.pubkey());
         self.ok(&[m], &[&b]);
         b
+    }
+
+    fn marinade_u64(&self, offset: usize) -> u64 {
+        let d = self.svm.get_account(&self.cfg.marinade_state).unwrap().data;
+        u64::from_le_bytes(d[offset..offset + 8].try_into().unwrap())
+    }
+
+    /// Sets the SOL in Marinade's liquidity pool (above its rent floor).
+    pub fn set_marinade_liquidity(&mut self, lamports: u64) {
+        let leg = self.leg().liq_pool_sol_leg;
+        let mut a = self.svm.get_account(&leg).unwrap();
+        a.lamports = lamports + self.rent_floor();
+        self.svm.set_account(leg, a).unwrap();
+    }
+
+    /// Marinade's liquidity pool filled to its target: the unstake fee is at its minimum (normal
+    /// conditions). The devnet dump sits far below target (fee near the maximum).
+    pub fn marinade_liquidity_at_target(&mut self) {
+        let target = self.marinade_u64(pool_core::marinade::STATE_LP_LIQUIDITY_TARGET);
+        self.set_marinade_liquidity(target);
+    }
+
+    /// Marinade's fee in bps for unstaking `lamports` now, by its own formula.
+    pub fn marinade_fee_bps(&self, lamports: u64) -> u32 {
+        use pool_core::marinade as m;
+        let d = self.svm.get_account(&self.cfg.marinade_state).unwrap().data;
+        let u32_at = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+        let available = self.lamports(&self.leg().liq_pool_sol_leg) - self.rent_floor();
+        m::unstake_fee_bps(
+            available.saturating_sub(lamports),
+            self.marinade_u64(m::STATE_LP_LIQUIDITY_TARGET),
+            u32_at(m::STATE_LP_MIN_FEE_BPS),
+            u32_at(m::STATE_LP_MAX_FEE_BPS),
+        )
+    }
+
+    pub fn msol_price(&self) -> u64 {
+        self.marinade_u64(pool_core::marinade::STATE_MSOL_PRICE)
+    }
+
+    /// Staking rewards of `bps` land, as at a Marinade epoch update: the SOL behind all mSOL grows
+    /// (added to its reserve balance, which Marinade pays unstakes from) and the cached
+    /// `msol_price` is recomputed from it.
+    pub fn marinade_rewards(&mut self, bps: u64) {
+        use pool_core::marinade as m;
+        let supply = self.marinade_u64(m::STATE_MSOL_SUPPLY);
+        let price = self.msol_price();
+        let behind = pool_core::leg::msol_value(supply, price).unwrap();
+        let reward = pool_core::apply_bps(behind, bps).unwrap();
+        let reserve = self.marinade_u64(m::STATE_AVAILABLE_RESERVE_BALANCE) + reward;
+        let new_price = pool_core::mul_div_floor(behind + reward, m::PRICE_DENOMINATOR as u64, supply).unwrap();
+        let key = self.cfg.marinade_state;
+        let mut a = self.svm.get_account(&key).unwrap();
+        for (o, v) in [(m::STATE_AVAILABLE_RESERVE_BALANCE, reserve), (m::STATE_MSOL_PRICE, new_price)] {
+            a.data[o..o + 8].copy_from_slice(&v.to_le_bytes());
+        }
+        self.svm.set_account(key, a).unwrap();
+    }
+
+    /// Most Marinade may keep of `amount` under the pool's unstake fee limit.
+    pub fn max_unstake_fee(amount: u64) -> u64 {
+        pool_core::apply_bps(amount, pool_core::params::MAX_REBALANCE_SLIPPAGE_BPS).unwrap()
+    }
+
+    // ---- B3: Marinade leg and yield
+
+    pub fn upkeep_ix(&self, data: impl InstructionData) -> Instruction {
+        self.ix(safu_pool::accounts::Upkeep { pool: self.pool(), vault: self.vault(), leg: self.leg() }, data)
+    }
+
+    pub fn claim_yield_ix(&self, staker: &Pubkey, beneficiary: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::ClaimYield {
+                staker: *staker,
+                pool: self.pool(),
+                vault: self.vault(),
+                stake_record: self.stake_record(staker),
+                beneficiary: *beneficiary,
+                leg: self.leg(),
+            },
+            safu_pool::instruction::ClaimYield {},
+        )
+    }
+
+    pub fn claim_backer_yield_ix(&self, backer: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::ClaimBackerYield {
+                backer: *backer,
+                pool: self.pool(),
+                vault: self.vault(),
+                backer_record: self.backer_record(backer),
+                leg: self.leg(),
+            },
+            safu_pool::instruction::ClaimBackerYield {},
+        )
+    }
+
+    pub fn withdraw_yield_ix(&self, admin: &Pubkey, treasury: &Pubkey, amount: u64) -> Instruction {
+        self.ix(
+            safu_pool::accounts::WithdrawYield {
+                admin: *admin,
+                pool: self.pool(),
+                vault: self.vault(),
+                treasury: *treasury,
+                leg: self.leg(),
+            },
+            safu_pool::instruction::WithdrawYield { amount },
+        )
+    }
+
+    /// The pool's mSOL, from its token account.
+    pub fn pool_msol_amount(&self) -> u64 {
+        let a = self.svm.get_account(&self.pool_msol()).unwrap();
+        anchor_spl::token::TokenAccount::try_deserialize(&mut &a.data[..]).unwrap().amount
     }
 
     pub fn pause(&mut self) {

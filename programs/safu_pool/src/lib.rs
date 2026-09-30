@@ -10,6 +10,7 @@ pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod instructions;
+pub mod leg;
 pub mod marinade;
 pub mod state;
 pub mod vault;
@@ -50,6 +51,9 @@ pub mod safu_pool {
     pub fn emergency_exit(ctx: Context<EmergencyExit>) -> Result<()> {
         instructions::stake::emergency_exit(ctx)
     }
+    pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
+        instructions::stake::claim_yield(ctx)
+    }
 
     // Backers.
     pub fn back(ctx: Context<Back>, amount: u64) -> Result<()> {
@@ -66,6 +70,20 @@ pub mod safu_pool {
     }
     pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Result<()> {
         instructions::backer::complete_backer_withdrawal(ctx)
+    }
+    pub fn claim_backer_yield(ctx: Context<ClaimBackerYield>) -> Result<()> {
+        instructions::backer::claim_backer_yield(ctx)
+    }
+
+    // Marinade leg and protocol revenue.
+    pub fn harvest(ctx: Context<Upkeep>) -> Result<()> {
+        instructions::upkeep::harvest(ctx)
+    }
+    pub fn rebalance(ctx: Context<Upkeep>) -> Result<()> {
+        instructions::upkeep::rebalance(ctx)
+    }
+    pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
+        instructions::upkeep::withdraw_yield(ctx, amount)
     }
 
     // Covered wallets.

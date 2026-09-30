@@ -5,9 +5,11 @@ use anchor_lang::prelude::*;
 use super::now;
 use crate::constants::{SEED_POOL, SEED_STAKE, SEED_VAULT};
 use crate::errors::{CoreResultExt, PoolError};
-use crate::events::{BeneficiarySet, EmergencyExited, Staked, Withdrawn};
+use crate::events::{BeneficiarySet, EmergencyExited, Staked, Withdrawn, YieldClaimed};
+use crate::leg;
+// Glob: `#[derive(Accounts)]` on a struct holding `MarinadeLeg` needs its generated client modules.
+use crate::marinade::*;
 use crate::state::{Pool, StakeRecord};
-use crate::vault;
 use pool_core::yields;
 
 /// Payouts can never go to a role key (multichain `stake` identity checks).
@@ -28,9 +30,9 @@ fn require_no_claim(record: &StakeRecord) -> Result<()> {
 
 /// Principal plus unpaid yield, taken off the books. Returns `(principal, yield_paid)`.
 /// Yield is capped by the set-aside (which a Marinade loss can leave short of the records' sum).
-fn settle_exit(pool: &mut Pool, vault_info: &AccountInfo, record: &StakeRecord) -> Result<(u64, u64)> {
+/// The payment follows through `leg::pay_out`, which unstakes if cash is short.
+fn settle_exit(pool: &mut Pool, record: &StakeRecord) -> Result<(u64, u64)> {
     let principal = record.amount;
-    vault::require_free_liquid(pool, vault_info, principal)?;
     let owed = yields::owed(principal, pool.staker_yield_index, record.yield_index_at).core()?;
     let yield_paid = owed.min(pool.staker_yield_reserved);
     pool.staker_yield_reserved -= yield_paid;
@@ -59,12 +61,17 @@ pub struct Stake<'info> {
     )]
     pub stake_record: Box<Account<'info, StakeRecord>>,
     pub system_program: Program<'info, System>,
+    pub leg: MarinadeLeg<'info>,
 }
 
 pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()> {
     let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
+    // Growth so far belongs to the stakes already in (multichain call site).
+    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let record = &mut ctx.accounts.stake_record;
     if record.staker != Pubkey::default() {
         require!(!record.forfeited, PoolError::AddressHasApprovedClaim);
@@ -91,7 +98,9 @@ pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()
     pool.total_stakers = pool_core::add(pool.total_stakers, 1).core()?;
     emit!(Staked { staker, amount });
 
-    vault::receive(&ctx.accounts.staker.to_account_info(), &ctx.accounts.vault.to_account_info(), amount)
+    crate::vault::receive(&ctx.accounts.staker.to_account_info(), &vault, amount)?;
+    leg::push_idle(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
+    Ok(())
 }
 
 #[derive(Accounts)]
@@ -141,23 +150,28 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub beneficiary: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+    pub leg: MarinadeLeg<'info>,
 }
 
 /// Principal + unpaid yield to the beneficiary; the record closes (rent back to the staker).
 pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
     let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let record = &ctx.accounts.stake_record;
     require_no_claim(record)?;
     require!(now >= record.penalty_locked_until, PoolError::PenaltyLockActive);
+    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
 
-    let (principal, yield_paid) = settle_exit(pool, &ctx.accounts.vault.to_account_info(), record)?;
+    let (principal, yield_paid) = settle_exit(pool, record)?;
     emit!(Withdrawn { staker: record.staker, principal, yield_paid });
 
-    let pool_key = pool.key();
     let amount = pool_core::add(principal, yield_paid).core()?;
-    vault::pay(&pool_key, pool.vault_bump, &ctx.accounts.vault.to_account_info(), &ctx.accounts.beneficiary.to_account_info(), amount)
+    let to = ctx.accounts.beneficiary.to_account_info();
+    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, amount)?;
+    Ok(())
 }
 
 #[derive(Accounts)]
@@ -177,22 +191,71 @@ pub struct EmergencyExit<'info> {
     )]
     pub stake_record: Box<Account<'info, StakeRecord>>,
     pub system_program: Program<'info, System>,
+    pub leg: MarinadeLeg<'info>,
 }
 
 /// The pause-time escape hatch: only while paused, pays the staker directly. Unlike multichain it
 /// honours the penalty lock, so a pause cannot be used to leave a false-positive penalty early.
 pub fn emergency_exit(ctx: Context<EmergencyExit>) -> Result<()> {
     let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(pool.is_paused(now), PoolError::NotPaused);
     let record = &ctx.accounts.stake_record;
     require_no_claim(record)?;
     require!(now >= record.penalty_locked_until, PoolError::PenaltyLockActive);
 
-    let (principal, yield_paid) = settle_exit(pool, &ctx.accounts.vault.to_account_info(), record)?;
+    let (principal, yield_paid) = settle_exit(pool, record)?;
     emit!(EmergencyExited { staker: record.staker, principal, yield_paid });
 
-    let pool_key = pool.key();
+    // No harvest while paused; the unstake a payment needs still runs.
     let amount = pool_core::add(principal, yield_paid).core()?;
-    vault::pay(&pool_key, pool.vault_bump, &ctx.accounts.vault.to_account_info(), &ctx.accounts.staker.to_account_info(), amount)
+    let to = ctx.accounts.staker.to_account_info();
+    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, amount)?;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct ClaimYield<'info> {
+    pub staker: Signer<'info>,
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    pub pool: Box<Account<'info, Pool>>,
+    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
+    pub vault: SystemAccount<'info>,
+    #[account(
+        mut,
+        seeds = [SEED_STAKE, pool.key().as_ref(), staker.key().as_ref()],
+        bump = stake_record.bump,
+        has_one = staker,
+        has_one = beneficiary @ PoolError::WrongBeneficiary,
+    )]
+    pub stake_record: Box<Account<'info, StakeRecord>>,
+    /// CHECK: must be the stake's beneficiary (`has_one` above); only receives SOL.
+    #[account(mut)]
+    pub beneficiary: UncheckedAccount<'info>,
+    pub leg: MarinadeLeg<'info>,
+}
+
+/// Staker yield to the beneficiary, any time; principal untouched (multichain `claim_yield`).
+pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
+    let now = now()?;
+    let pool_key = ctx.accounts.pool.key();
+    let vault = ctx.accounts.vault.to_account_info();
+    let pool = &mut ctx.accounts.pool;
+    require!(!pool.is_paused(now), PoolError::Paused);
+    let record = &mut ctx.accounts.stake_record;
+    require!(!record.forfeited, PoolError::StakeForfeited);
+    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
+
+    let owed = yields::owed(record.amount, pool.staker_yield_index, record.yield_index_at).core()?;
+    let paid = owed.min(pool.staker_yield_reserved);
+    require!(paid > 0, PoolError::NothingToClaim);
+    record.yield_index_at = pool.staker_yield_index;
+    pool.staker_yield_reserved -= paid;
+    emit!(YieldClaimed { owner: record.staker, amount: paid, backer: false });
+
+    let to = ctx.accounts.beneficiary.to_account_info();
+    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, paid)?;
+    Ok(())
 }
