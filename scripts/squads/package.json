@@ -1,0 +1,10 @@
+{
+  "name": "safu-solana-squads",
+  "private": true,
+  "type": "module",
+  "description": "Create the pool's Squads v4 multisig (upgrade authority) and read it back. Run from /ship.",
+  "dependencies": {
+    "@solana/web3.js": "1.99.0",
+    "@sqds/multisig": "2.1.4"
+  }
+}
