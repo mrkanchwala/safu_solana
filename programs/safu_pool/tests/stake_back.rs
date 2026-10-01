@@ -597,6 +597,24 @@ fn backer_withdrawal_works_while_paused() {
     assert_eq!(env.pool_state().total_backed, 0);
 }
 
+#[test]
+fn anyone_can_count_matured_backing() {
+    let mut env = Env::new();
+    let b = env.funded(10 * SOL);
+    let crank = env.funded(SOL);
+    let back = env.back_ix(&b.pubkey(), SOL);
+    env.ok(&[back], &[&b]);
+    let mature = env.mature_ix(&b.pubkey());
+    assert_err(
+        env.send(std::slice::from_ref(&mature), &[&crank]),
+        PoolError::BackingNotMature,
+    );
+    env.warp(BACKER_MATURITY_SECS);
+    env.ok(&[mature], &[&crank]);
+    assert_eq!(env.backer_state(&b.pubkey()).amount, SOL);
+    assert_eq!(env.pool_state().total_backed, SOL);
+}
+
 // ------------------------------------------------------------------ covered wallets
 
 fn hash(n: u8) -> [u8; 32] {

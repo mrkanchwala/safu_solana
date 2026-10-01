@@ -8,7 +8,7 @@ import {
   matureBacking,
   requestBackerWithdrawal,
 } from "../lib/actions";
-import { setting } from "../lib/pool";
+import { POOL, setting } from "../lib/pool";
 import { fmtDuration, fmtSol, parseSol, readMyBacking, refreshSoon } from "../lib/reads";
 import type { MyBacking } from "../lib/reads";
 import { usePool } from "../lib/usePool";
@@ -16,6 +16,11 @@ import { TxStatus } from "./TxStatus";
 
 // Back the pool tab: like Stake, without covered wallets. Backing adds capacity for claims; it
 // earns yield, no coverage. New backing matures before it counts; taking it out needs notice.
+// Backing is one click: our server counts it once it has matured (`mature_backing` is
+// permissionless). If the server is late, or the amount is under its minimum, a button appears.
+
+// How late the server may be before the backer gets the button (it checks every minute).
+const SERVER_LATE_SECS = 15n * 60n;
 
 function when(ts: bigint, now: bigint): string {
   if (!ts) return "--";
@@ -54,7 +59,10 @@ export function BackPanel() {
   const takeYieldAction = useAction(() => done(claimBackerYield(client, pool)));
 
   const now = BigInt(chainTime);
-  const canMature = !!backing && backing.pending_amount > 0n && backing.pending_matures_at <= now;
+  // Below the server's minimum the backer presses, as soon as the wait is over.
+  const tiny = (lamports: bigint) => lamports < BigInt(POOL.crankMinLamports);
+  const maturing = !!backing && backing.pending_amount > 0n;
+  const matureLate = maturing && backing.pending_matures_at + (tiny(backing.pending_amount) ? 0n : SERVER_LATE_SECS) <= now;
   const canRequest = !!backing && backing.amount > 0n && backing.withdraw_amount === 0n;
   const hasRequest = !!backing && backing.withdraw_amount > 0n;
   const canComplete = hasRequest && backing.withdraw_ready_at <= now;
@@ -77,8 +85,7 @@ export function BackPanel() {
         </button>
         <TxStatus action={backAction} />
         <div className="ramp-disclosure" style={{ marginTop: 8 }}>
-          <b>1. Back.</b> New backing waits {fmtDuration(MATURITY)} before it can pay claims. When it's
-          ready, press "Count my matured backing".
+          <b>1. Back.</b> New backing starts counting by itself after {fmtDuration(MATURITY)}.
           <br />
           <b>2. Take it out.</b> Press "Request withdrawal", wait {fmtDuration(NOTICE)}, then press
           "Complete withdrawal".
@@ -106,7 +113,9 @@ export function BackPanel() {
               {backing.pending_amount > 0n ? (
                 <div className="side-stat">
                   <div className="k">Maturing</div>
-                  <div className="v">{fmtSol(backing.pending_amount)} SOL · ready {when(backing.pending_matures_at, now)}</div>
+                  <div className="v">
+                    {fmtSol(backing.pending_amount)} SOL · {backing.pending_matures_at <= now ? "counting now" : `counts by itself ${when(backing.pending_matures_at, now)}`}
+                  </div>
                 </div>
               ) : null}
               {backing.yieldOwed > 0n ? (
@@ -125,9 +134,10 @@ export function BackPanel() {
           )}
         </div>
 
-        {canMature ? (
+        {/* Fallback only: the server normally does this within a minute. */}
+        {matureLate ? (
           <button className="secondary-action" style={{ width: "100%" }} disabled={matureAction.isRunning} onClick={() => matureAction.dispatch()}>
-            {matureAction.isRunning ? "Updating..." : "Count my matured backing"}
+            {matureAction.isRunning ? "Updating..." : tiny(backing.pending_amount) ? "Count it now" : "Taking long? Count it now"}
           </button>
         ) : null}
         {/* Results sit outside the conditional blocks: each step hides its own button once done. */}

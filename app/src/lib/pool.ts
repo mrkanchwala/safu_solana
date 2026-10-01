@@ -10,6 +10,8 @@ export interface PoolConfig {
   siteRpcPath?: string;
   poolCapLamports: number;
   computeUnitLimit: number;
+  /** The server counts matured backing of at least this many lamports; smaller amounts the backer presses. */
+  crankMinLamports: number;
   marinade: { program: string; state: string; msolMint: string };
 }
 
