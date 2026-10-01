@@ -28,6 +28,11 @@ describe("toFriendlyError", () => {
     expect(toFriendlyError({ code: -1, message: "The user closed the modal." }).cancelled).toBe(true);
   });
 
+  it("blames our side, not the connection, when the API answers 5xx", () => {
+    expect(toFriendlyError(new Error("Request failed (500)")).message).toContain("on our side");
+    expect(toFriendlyError(new Error("Failed to fetch")).message).toContain("Check your connection");
+  });
+
   it("shows the app's own plain messages as written", () => {
     expect(toFriendlyError(new Error("Connect a wallet first.")).message).toBe("Connect a wallet first.");
   });

@@ -95,7 +95,9 @@ const PATTERNS: [RegExp, string][] = [
   [/user rejected|reject.*request|declined|denied/i, "Request was declined in the wallet."],
   [/insufficient lamports|no record of a prior credit|insufficient funds/i, "Not enough SOL in this wallet."],
   [/blockhash not found|block height exceeded/i, "This took too long to sign. Try again."],
-  [/failed to fetch|networkerror|load failed|request failed \(5\d\d\)/i, "We couldn't reach SAFU. Check your connection and try again."],
+  [/failed to fetch|networkerror|load failed/i, "We couldn't reach SAFU. Check your connection and try again."],
+  // The API answered, so the connection is fine: a 5xx is a fault on SAFU's side.
+  [/request failed \(5\d\d\)/i, OUR_SIDE],
 ];
 
 // Messages this app throws itself, already written for a user: shown as-is.

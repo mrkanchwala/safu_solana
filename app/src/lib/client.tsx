@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getWallets } from "@wallet-standard/app";
 import type { Wallet, WalletAccount } from "@wallet-standard/base";
@@ -18,11 +18,31 @@ export function solanaWallets(): SolanaWalletOption[] {
     .map((w) => ({ id: w.name, name: w.name, icon: w.icon, wallet: w }));
 }
 
-async function connectExtension(opt: SolanaWalletOption): Promise<WalletAccount> {
+// The last wallet connected here, so a reload reconnects to it without a popup (silent connect).
+const LAST_WALLET_KEY = "safu-solana:last-wallet";
+
+function rememberWallet(id: string | null) {
+  try {
+    if (id) localStorage.setItem(LAST_WALLET_KEY, id);
+    else localStorage.removeItem(LAST_WALLET_KEY);
+  } catch {
+    // storage blocked (private window): the user just reconnects by hand
+  }
+}
+
+function lastWallet(): string | null {
+  try {
+    return localStorage.getItem(LAST_WALLET_KEY);
+  } catch {
+    return null;
+  }
+}
+
+async function connectExtension(opt: SolanaWalletOption, silent = false): Promise<WalletAccount> {
   const feature = opt.wallet.features["standard:connect"] as {
-    connect: () => Promise<{ accounts: readonly WalletAccount[] }>;
+    connect: (input?: { silent?: boolean }) => Promise<{ accounts: readonly WalletAccount[] }>;
   };
-  const { accounts } = await feature.connect();
+  const { accounts } = await feature.connect(silent ? { silent: true } : undefined);
   const acct = accounts.find((a) => a.chains.some((c) => c.startsWith("solana:"))) ?? accounts[0];
   if (!acct) throw new Error("The wallet returned no account.");
   return acct;
@@ -60,14 +80,43 @@ export function ClientProvider({ children }: { children: ReactNode }) {
       solRef.current = { opt, account };
       setAddress(account.address);
       setWalletName(opt.name);
+      rememberWallet(opt.id);
     } finally {
       setConnecting(false);
     }
   }, []);
 
+  // After a reload: reconnect to the remembered wallet silently once its extension registers.
+  // A wallet that no longer trusts this site returns no account; then the user connects by hand.
+  useEffect(() => {
+    const id = lastWallet();
+    if (!id) return;
+    let done = false;
+    const tryReconnect = () => {
+      const opt = solanaWallets().find((w) => w.id === id);
+      if (!opt || done) return;
+      done = true;
+      connectExtension(opt, true)
+        .then((account) => {
+          if (solRef.current) return; // the user connected by hand meanwhile
+          solRef.current = { opt, account };
+          setAddress(account.address);
+          setWalletName(opt.name);
+        })
+        .catch(() => rememberWallet(null));
+    };
+    tryReconnect();
+    const off = getWallets().on("register", tryReconnect);
+    return () => {
+      done = true;
+      off();
+    };
+  }, []);
+
   const disconnect = useCallback(() => {
     const dis = solRef.current?.opt.wallet.features["standard:disconnect"] as { disconnect?: () => Promise<void> } | undefined;
     if (dis?.disconnect) void dis.disconnect();
+    rememberWallet(null);
     solRef.current = null;
     setAddress(null);
     setWalletName(null);

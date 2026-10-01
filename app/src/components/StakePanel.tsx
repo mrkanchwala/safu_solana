@@ -72,12 +72,13 @@ export function StakePanel() {
   const live = !!myStake && !myStake.forfeited;
   const done = () => setRefreshKey((k) => k + 1);
 
-  const stakeAction = useAction(() => stake(client, pool, lamports ?? 0n).finally(() => (setStakeAmount(""), done())));
+  // Clear the amount only once it went through: a declined or failed send keeps it for a retry.
+  const stakeAction = useAction(() => stake(client, pool, lamports ?? 0n).then((r) => (setStakeAmount(""), r)).finally(done));
   // Blank = the whole stake. A part must leave at least the min stake (checked here and on-chain).
   const withdrawLamports = withdrawAmount.trim() === "" ? (myStake?.amount ?? 0n) : parseSol(withdrawAmount);
   const withdrawProblem =
     live && pool ? (withdrawLamports === null ? "Enter an amount in SOL." : withdrawCheck(pool, myStake.amount, withdrawLamports)) : null;
-  const withdrawAction = useAction(() => withdraw(client, pool, withdrawLamports ?? 0n).finally(() => (setWithdrawAmount(""), done())));
+  const withdrawAction = useAction(() => withdraw(client, pool, withdrawLamports ?? 0n).then((r) => (setWithdrawAmount(""), r)).finally(done));
   const takeYieldAction = useAction(() => claimYield(client, pool).finally(done));
 
   function registered(r: CoveredWalletResponse) {
