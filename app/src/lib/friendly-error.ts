@@ -77,6 +77,7 @@ const ACTION_HINTS: Record<string, string> = {
   PRICE_UNAVAILABLE: "We couldn't get a reliable price right now. Try again shortly.",
   HACK_TIME_UNAVAILABLE: "We couldn't read when this transaction happened. Check the transaction ID and try again.",
   TIER_UNASSESSABLE: "We couldn't check this wallet's history right now. Try again shortly.",
+  WALLET_INELIGIBLE: "This wallet didn't have enough history before the hack to be covered, so this loss can't be paid.",
   "Signature expired": "The request took too long, or your device's clock is off. Try again.",
   "Signature does not match": "That signature doesn't match your staking wallet. Connect the wallet you staked with.",
   TooManyWallets: "You've already added the most wallets you can cover.",
@@ -143,6 +144,22 @@ export function toFriendlyError(error: unknown): FriendlyError {
     return { message: "Wallet window closed.", raw, cancelled: true };
   }
   if (OWN_MESSAGES.some((m) => raw.startsWith(m))) return { message: raw, raw };
+
+  // The covered wallet fails the history floors (backend tier_common.check_eligible); keep its numbers.
+  const txs = /WALLET_INELIGIBLE: covered wallet had (\d+) transactions at the hack; at least (\d+)/.exec(raw);
+  if (txs) {
+    return {
+      message: `This wallet had only ${txs[1]} transactions before the hack. A covered wallet needs at least ${txs[2]}, so this loss can't be paid.`,
+      raw,
+    };
+  }
+  const age = /WALLET_INELIGIBLE: covered wallet was (\d+)d old at the hack; at least (\d+) days/.exec(raw);
+  if (age) {
+    return {
+      message: `This wallet was only ${age[1]} days old at the hack. A covered wallet must be at least ${age[2]} days old, so this loss can't be paid.`,
+      raw,
+    };
+  }
 
   const program = /PROGRAM_ERROR:(\w+)/.exec(raw);
   if (program) return { message: PROGRAM_ERRORS[program[1]] ?? OUR_SIDE, raw };

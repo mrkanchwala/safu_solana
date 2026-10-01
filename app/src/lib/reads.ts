@@ -5,6 +5,14 @@ import type { PoolRecord } from "./program";
 
 export type { PoolRecord };
 
+/** Re-read after a confirmed send: now, then at 2 s and 5 s. The RPC node answering a read can be a
+ *  moment behind the one that confirmed, so one read could still show the old state (B8 run 6). */
+export function refreshSoon(bump: () => void): void {
+  bump();
+  setTimeout(bump, 2000);
+  setTimeout(bump, 5000);
+}
+
 export type StakeRecord = {
   staker: string; beneficiary: string; amount: bigint; yield_index_at: bigint; staked_at: bigint;
   penalty_locked_until: bigint; forfeited: boolean; suspended: boolean;

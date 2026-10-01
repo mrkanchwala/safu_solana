@@ -5,7 +5,7 @@ import { addCoveredWallet, confirmCoveredWallet } from "../lib/claimApi";
 import type { CoveredWalletResponse } from "../lib/claimApi";
 import { num, setting } from "../lib/pool";
 import { unstakeFeeBps } from "../lib/program";
-import { fmtSol, parseSol, readCoveredWallets, readMyStake, rememberCoveredWallet, stakeBounds, withdrawCheck } from "../lib/reads";
+import { fmtSol, parseSol, readCoveredWallets, readMyStake, refreshSoon, rememberCoveredWallet, stakeBounds, withdrawCheck } from "../lib/reads";
 import type { CoveredWallet, MyStake } from "../lib/reads";
 import { usePool } from "../lib/usePool";
 import { toFriendlyError } from "../lib/friendly-error";
@@ -70,7 +70,7 @@ export function StakePanel() {
   const lamports = parseSol(stakeAmount);
   const amountValid = !!bounds && lamports !== null && lamports >= bounds.min && lamports <= bounds.max;
   const live = !!myStake && !myStake.forfeited;
-  const done = () => setRefreshKey((k) => k + 1);
+  const done = () => refreshSoon(() => setRefreshKey((k) => k + 1));
 
   // Clear the amount only once it went through: a declined or failed send keeps it for a retry.
   const stakeAction = useAction(() => stake(client, pool, lamports ?? 0n).then((r) => (setStakeAmount(""), r)).finally(done));

@@ -28,6 +28,15 @@ describe("toFriendlyError", () => {
     expect(toFriendlyError({ code: -1, message: "The user closed the modal." }).cancelled).toBe(true);
   });
 
+  it("explains a covered wallet that fails the history floors, with its numbers", () => {
+    const tx = toFriendlyError(new Error("WALLET_INELIGIBLE: covered wallet had 8 transactions at the hack; at least 10 are required"));
+    expect(tx.message).toContain("only 8 transactions");
+    expect(tx.message).toContain("at least 10");
+    const age = toFriendlyError(new Error("WALLET_INELIGIBLE: covered wallet was 3d old at the hack; at least 60 days are required"));
+    expect(age.message).toContain("only 3 days old");
+    expect(toFriendlyError(new Error("WALLET_INELIGIBLE: something new")).message).toContain("enough history");
+  });
+
   it("blames our side, not the connection, when the API answers 5xx", () => {
     expect(toFriendlyError(new Error("Request failed (500)")).message).toContain("on our side");
     expect(toFriendlyError(new Error("Failed to fetch")).message).toContain("Check your connection");

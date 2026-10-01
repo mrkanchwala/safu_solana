@@ -3,7 +3,7 @@ import { useAction, useClient } from "../lib/client";
 import { approveClaim, collectClaim, releaseQueuedClaim, unlockPendingClaim } from "../lib/actions";
 import { num, setting } from "../lib/pool";
 import { unstakeFeeBps } from "../lib/program";
-import { fmtDuration, fmtSol, readMyClaim, readMyStake, vested } from "../lib/reads";
+import { fmtDuration, fmtSol, readMyClaim, readMyStake, refreshSoon, vested } from "../lib/reads";
 import type { ClaimStatus, MyClaim, MyStake } from "../lib/reads";
 import { usePool } from "../lib/usePool";
 import { FeeNote } from "./StakePanel";
@@ -77,7 +77,7 @@ export function ClaimsPanel() {
     };
   }, [pool, staker]);
 
-  const done = <T,>(p: Promise<T>) => p.finally(() => setRefreshKey((k) => k + 1));
+  const done = <T,>(p: Promise<T>) => p.finally(() => refreshSoon(() => setRefreshKey((k) => k + 1)));
   const need = () => {
     if (!staker || !claim) throw new Error("You don't have a claim open.");
     return { staker, claim: claim.address };

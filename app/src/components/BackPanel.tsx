@@ -9,7 +9,7 @@ import {
   requestBackerWithdrawal,
 } from "../lib/actions";
 import { setting } from "../lib/pool";
-import { fmtDuration, fmtSol, parseSol, readMyBacking } from "../lib/reads";
+import { fmtDuration, fmtSol, parseSol, readMyBacking, refreshSoon } from "../lib/reads";
 import type { MyBacking } from "../lib/reads";
 import { usePool } from "../lib/usePool";
 import { TxStatus } from "./TxStatus";
@@ -44,7 +44,7 @@ export function BackPanel() {
     };
   }, [pool, backer]);
 
-  const done = <T,>(p: Promise<T>) => p.finally(() => setRefreshKey((k) => k + 1));
+  const done = <T,>(p: Promise<T>) => p.finally(() => refreshSoon(() => setRefreshKey((k) => k + 1)));
   const lamports = parseSol(amount);
   const backAction = useAction(() => done(back(client, pool, lamports ?? 0n).finally(() => setAmount(""))));
   const matureAction = useAction(() => done(matureBacking(client, pool)));
