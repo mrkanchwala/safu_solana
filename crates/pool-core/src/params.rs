@@ -52,9 +52,12 @@ pub const CLAIM_WINDOW_SECS: i64 = 30 * SECONDS_PER_DAY;
 pub const MAX_APPROVAL_WINDOW_SECS: i64 = 24 * SECONDS_PER_HOUR;
 /// Longest pause. Real time in both builds (multichain `PAUSE_MAX_SECONDS`). (setting default)
 pub const PAUSE_MAX_SECS: i64 = 30 * SECONDS_PER_DAY;
-/// Least time between the end of one pause and the start of the next (audit X2: back-to-back
-/// pauses would otherwise freeze claims without limit). (setting default)
-pub const PAUSE_GAP_SECS: i64 = clock(30 * SECONDS_PER_DAY, SECONDS_PER_HOUR);
+/// A new pause may start only more than this long after the last one ended (audit X2: back-to-back
+/// pauses would otherwise freeze claims without limit). Real time in both builds and never below
+/// `CLAIM_WINDOW_SECS` (audit L1/L2): the pool is paused at most half the time, and a claim can
+/// still be filed across one pause only, which the stored pause record credits exactly.
+/// (setting default)
+pub const PAUSE_GAP_SECS: i64 = CLAIM_WINDOW_SECS;
 /// Wait between a setting change's co-signer approval and its execution. Fixed: a setting could
 /// otherwise shorten its own notice.
 pub const SETTINGS_TIMELOCK_SECS: i64 = clock(7 * SECONDS_PER_DAY, 5 * SECONDS_PER_MINUTE);

@@ -57,7 +57,7 @@ pub enum SettingKey {
     BackerMaturitySecs = 13,
     /// Longest single pause.
     PauseMaxSecs = 14,
-    /// Least time between the end of one pause and the start of the next.
+    /// A new pause may start only more than this long after the last one ended.
     PauseGapSecs = 15,
     /// Once the time gate is met, the staker has this long to approve the claim.
     ApproveWindowSecs = 16,
@@ -126,7 +126,8 @@ impl SettingKey {
             SettingKey::BackerNoticeSecs => (0, clock(90 * DAY, SECONDS_PER_HOUR)),
             SettingKey::BackerMaturitySecs => (clock(DAY, MIN), clock(30 * DAY, SECONDS_PER_HOUR)),
             SettingKey::PauseMaxSecs => (clock(DAY, MIN), 30 * DAY),
-            SettingKey::PauseGapSecs => (clock(DAY, MIN), 90 * DAY),
+            // Never below the filing window: see `PAUSE_GAP_SECS` (audit L2).
+            SettingKey::PauseGapSecs => (CLAIM_WINDOW_SECS, 90 * DAY),
             SettingKey::ApproveWindowSecs => (clock(7 * DAY, MIN), 180 * DAY),
             SettingKey::InactivitySecs => (clock(30 * DAY, MIN), 365 * DAY),
             SettingKey::PoolCap => (1, i64::MAX),
@@ -214,7 +215,8 @@ impl Settings {
 
     /// `value` may replace `key` now: inside the hard bounds, and consistent with every other live
     /// setting (min stake <= max stake, a non-zero min stake, each rate band no looser than the band
-    /// below it in utilisation). Checked at proposal and again at execution.
+    /// below it in utilisation, a pause no longer than the gap after it). Checked at proposal and
+    /// again at execution.
     pub fn check_value(&self, key: SettingKey, value: i64) -> Result<()> {
         let (min, max) = key.bounds();
         if value < min || value > max {
@@ -241,6 +243,10 @@ impl Settings {
                 value <= g(SettingKey::PayoutLowBps) && value >= g(SettingKey::PayoutHighBps)
             }
             SettingKey::PayoutHighBps => value <= g(SettingKey::PayoutMidBps),
+            // Paused at most half the time (audit L1). The hard bounds already imply it; kept as
+            // a rule so a later change to either range cannot loosen it.
+            SettingKey::PauseMaxSecs => value <= g(SettingKey::PauseGapSecs),
+            SettingKey::PauseGapSecs => value >= g(SettingKey::PauseMaxSecs),
             _ => true,
         };
         if !ok {
@@ -256,8 +262,10 @@ impl Settings {
 
 /// Seconds the pool had spent paused by time `t`, from the stored pause record:
 /// `paused_before` (every pause before the last one), and the last pause `[started_at, until)`.
-/// For a `t` before the last pause this returns `paused_before`, which can include earlier pauses
-/// after `t`: the error only ever lengthens a claim window, never shortens it.
+/// For a `t` before the last pause this returns `paused_before`, which is exact only if no earlier
+/// pause ended after `t`; otherwise it overstates the mark and shortens the window. The pause gap
+/// (never below `CLAIM_WINDOW_SECS`) rules that out for every claim still inside its filing window
+/// (audit L2): a hack before an earlier pause is past the window before the next pause starts.
 pub fn paused_secs_at(paused_before: i64, started_at: i64, until: i64, t: i64) -> i64 {
     if started_at == 0 || t <= started_at {
         return paused_before;
@@ -271,8 +279,10 @@ pub fn claim_clock(now: i64, paused_now: i64, mark: i64) -> i64 {
     now.saturating_sub(paused_now.saturating_sub(mark).max(0))
 }
 
-/// After an earlier pause, the gap has passed since it ended (the first pause needs no gap).
+/// After an earlier pause, more than the gap has passed since it ended (the first pause needs no
+/// gap). Strictly more: with the gap at the filing window, a hack during one pause is then always
+/// past its window before the next pause starts, so `paused_secs_at` is exact (audit L2).
 /// The caller checks separately that the pool is not paused now.
 pub fn pause_gap_passed(now: i64, started_at: i64, until: i64, gap: i64) -> bool {
-    started_at == 0 || now >= until.saturating_add(gap)
+    started_at == 0 || now > until.saturating_add(gap)
 }

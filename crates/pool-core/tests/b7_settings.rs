@@ -30,12 +30,12 @@ fn defaults_are_the_params_values_and_all_in_bounds() {
 }
 
 #[test]
-fn pause_gap_default_is_30_days_or_1_hour_on_the_fast_build() {
+fn pause_gap_default_is_the_filing_window_on_both_builds() {
+    assert_eq!(PAUSE_GAP_SECS, CLAIM_WINDOW_SECS);
+    assert_eq!(PAUSE_GAP_SECS, 30 * SECONDS_PER_DAY);
     if DEMO_BUILD {
-        assert_eq!(PAUSE_GAP_SECS, SECONDS_PER_HOUR);
         assert_eq!(SETTINGS_TIMELOCK_SECS, 5 * SECONDS_PER_MINUTE);
     } else {
-        assert_eq!(PAUSE_GAP_SECS, 30 * SECONDS_PER_DAY);
         assert_eq!(SETTINGS_TIMELOCK_SECS, 7 * SECONDS_PER_DAY);
     }
 }
@@ -125,6 +125,41 @@ fn settings_keep_their_order() {
     );
     assert_eq!(
         s.check_value(SettingKey::PauseGapSecs, PAUSE_GAP_SECS * 2),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_pause_is_never_longer_than_the_gap_after_it() {
+    // Audit L1/L2: the gap is never below the filing window, and the ranges keep every pause
+    // no longer than the gap.
+    let (_, pause_max) = SettingKey::PauseMaxSecs.bounds();
+    let (gap_min, _) = SettingKey::PauseGapSecs.bounds();
+    assert_eq!(gap_min, CLAIM_WINDOW_SECS);
+    assert!(pause_max <= gap_min);
+    let s = Settings::defaults(100 * SOL).unwrap();
+    assert_eq!(
+        s.check_value(SettingKey::PauseGapSecs, CLAIM_WINDOW_SECS - 1),
+        Err(CoreError::SettingOutOfBounds)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::PauseGapSecs, CLAIM_WINDOW_SECS),
+        Ok(())
+    );
+    // The order rule itself, should a later upgrade widen either range.
+    let mut loose = s;
+    loose.values[SettingKey::PauseGapSecs.index()] = 2 * SECONDS_PER_DAY;
+    assert_eq!(
+        loose.check_value(SettingKey::PauseMaxSecs, 3 * SECONDS_PER_DAY),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        loose.check_value(SettingKey::PauseMaxSecs, 2 * SECONDS_PER_DAY),
+        Ok(())
+    );
+    loose.values[SettingKey::PauseMaxSecs.index()] = 30 * SECONDS_PER_DAY;
+    assert_eq!(
+        loose.check_value(SettingKey::PauseGapSecs, 30 * SECONDS_PER_DAY),
         Ok(())
     );
 }
@@ -233,10 +268,58 @@ fn a_new_pause_waits_for_the_gap() {
     assert!(pause_gap_passed(10, 0, 0, 3_600));
     // Last pause ended at 1_000; gap 3_600.
     assert!(!pause_gap_passed(4_599, 500, 1_000, 3_600));
-    assert!(pause_gap_passed(4_600, 500, 1_000, 3_600));
+    assert!(!pause_gap_passed(4_600, 500, 1_000, 3_600));
+    assert!(pause_gap_passed(4_601, 500, 1_000, 3_600));
+}
+
+/// Paused seconds in `[0, t)`, from the full list of pauses (what the pool does not store).
+fn true_paused_at(pauses: &[(i64, i64)], t: i64) -> i64 {
+    pauses.iter().map(|&(s, u)| (t.min(u) - s).max(0)).sum()
 }
 
 proptest! {
+    // Audit L2: with the gap at its minimum (the filing window) and pauses spaced only as the gap
+    // rule allows, the stored pause record decides every filing exactly as the full history would.
+    #[test]
+    fn the_stored_pause_record_files_claims_exactly(
+        first in 0i64..10 * SECONDS_PER_DAY,
+        lens in proptest::collection::vec(0i64..=PAUSE_MAX_SECS, 1..4),
+        // Zero half the time: the next pause starts at the first second the gap rule allows.
+        extra in proptest::collection::vec(prop_oneof![Just(0i64), 0i64..3 * SECONDS_PER_DAY], 4),
+        // The hack lands near one of the pauses, before, inside or after it.
+        hack_near in 0usize..4,
+        hack_off in -CLAIM_WINDOW_SECS..2 * CLAIM_WINDOW_SECS,
+        // Zero half the time: filed the second the last pause ends.
+        after in prop_oneof![Just(0i64), 0i64..40 * SECONDS_PER_DAY],
+    ) {
+        let gap = CLAIM_WINDOW_SECS;
+        let mut pauses: Vec<(i64, i64)> = Vec::new();
+        let (mut before, mut started, mut until) = (0i64, 0i64, 0i64);
+        let mut next = first;
+        for (i, len) in lens.iter().enumerate() {
+            prop_assert!(pause_gap_passed(next, started, until, gap));
+            if started != 0 {
+                prop_assert!(!pause_gap_passed(until + gap, started, until, gap));
+                before += until - started;
+            }
+            started = next.max(1);
+            until = started + len;
+            pauses.push((started, until));
+            next = until + gap + 1 + extra[i];
+        }
+        // Filed while not paused (submit refuses during a pause), any time after the last pause.
+        let now = until + after;
+        let hack = (pauses[hack_near % pauses.len()].0 + hack_off).clamp(0, now);
+        let paused_now = true_paused_at(&pauses, now);
+        prop_assert_eq!(paused_secs_at(before, started, until, now), paused_now);
+        let exact = claim_clock(now, paused_now, true_paused_at(&pauses, hack));
+        let stored = claim_clock(now, paused_now, paused_secs_at(before, started, until, hack));
+        prop_assert_eq!(
+            exact > hack + CLAIM_WINDOW_SECS,
+            stored > hack + CLAIM_WINDOW_SECS
+        );
+    }
+
     #[test]
     fn no_value_outside_the_bounds_is_ever_accepted(idx in 0u8..SETTING_COUNT as u8, value in any::<i64>()) {
         let s = defaults();

@@ -567,8 +567,8 @@ pub struct CancelClaim<'info> {
     pub leg: MarinadeLeg<'info>,
 }
 
-/// False-positive reversal. An approved (forfeited) stake is restored under the penalty lock;
-/// before approval nothing was forfeited, so there is no penalty.
+/// False-positive reversal. An approved (forfeited) stake is restored under the penalty lock, less
+/// what the claim already paid out; before approval nothing was forfeited, so there is no penalty.
 pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     let now = now()?;
     let pool_key = ctx.accounts.pool.key();
@@ -588,13 +588,21 @@ pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     if claim.status == ClaimStatus::Active {
         // Growth so far belongs to the stakes in before this one returns (multichain call site).
         leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
-        stake.forfeited = false;
+        // What the claim already paid out stays paid and comes off the stake (audit X6). The
+        // rest may sit below the min stake; it can still leave in full.
+        let restored = claim.stake.saturating_sub(claim.streamed);
         stake.forfeited_by = None;
-        stake.penalty_locked_until = secs_after(now, PENALTY_LOCK_SECS)?;
-        // Out of total_staked while forfeited, so it earns again only from now.
-        stake.yield_index_at = pool.staker_yield_index;
-        pool.total_staked = add(pool.total_staked, claim.stake).core()?;
-        pool.total_stakers = add(pool.total_stakers, 1).core()?;
+        if restored > 0 {
+            stake.forfeited = false;
+            stake.amount = restored;
+            stake.penalty_locked_until = secs_after(now, PENALTY_LOCK_SECS)?;
+            // Out of total_staked while forfeited, so it earns again only from now.
+            stake.yield_index_at = pool.staker_yield_index;
+            pool.total_staked = add(pool.total_staked, restored).core()?;
+            pool.total_stakers = add(pool.total_stakers, 1).core()?;
+        }
+        // Paid in full: the stake stays forfeited, as on a completed claim, and is earmarked for
+        // no claim, so an override cannot count it as capacity again.
     }
     stake.active_claim = None;
     claim.status = ClaimStatus::Cancelled;

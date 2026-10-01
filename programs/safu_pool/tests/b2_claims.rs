@@ -782,6 +782,56 @@ fn cancel_of_an_approved_claim_restores_the_stake_under_penalty() {
 }
 
 #[test]
+fn cancel_of_a_partly_paid_claim_restores_only_the_unpaid_stake() {
+    let (mut env, s) = setup();
+    active(&mut env, &s);
+    env.warp(COOLDOWN_SECS + VESTING_SECS / 2);
+    let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    let paid = env.claim_state(&s.pubkey(), &TX).streamed;
+    assert!(paid > 0 && paid < entitlement());
+    let admin = env.admin.insecure_clone();
+    let ix = env.cancel_claim_ix(&admin.pubkey(), &s.pubkey(), &TX);
+    env.ok(&[ix], &[&admin]);
+    // Audit X6: what was paid stays paid and comes off the stake.
+    let r = env.stake_state(&s.pubkey());
+    assert!(!r.forfeited && r.forfeited_by.is_none());
+    assert_eq!(r.amount, entitlement() - paid);
+    let p = env.pool_state();
+    assert_eq!(
+        (p.total_staked, p.total_stakers, p.total_allocated),
+        (entitlement() - paid, 1, 0)
+    );
+    // The rest leaves in full once the penalty lock has passed, even below the min stake.
+    env.warp(PENALTY_LOCK_SECS);
+    let w = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    env.ok(&[w], &[&s]);
+    assert_eq!(env.pool_state().total_staked, 0);
+}
+
+#[test]
+fn cancel_of_a_claim_that_paid_the_whole_stake_leaves_it_spent() {
+    let (mut env, s) = setup();
+    active(&mut env, &s);
+    let claim = env.claim_addr(&s.pubkey(), &TX);
+    env.edit::<safu_pool::state::Claim>(&claim, |c| c.streamed = c.stake);
+    let admin = env.admin.insecure_clone();
+    let ix = env.cancel_claim_ix(&admin.pubkey(), &s.pubkey(), &TX);
+    env.ok(&[ix], &[&admin]);
+    let r = env.stake_state(&s.pubkey());
+    assert!(r.forfeited && r.forfeited_by.is_none() && r.active_claim.is_none());
+    let p = env.pool_state();
+    assert_eq!((p.total_staked, p.total_stakers), (0, 0));
+    // Nothing to withdraw, and no override may count the spent principal as capacity again.
+    let w = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    assert_err(env.send(&[w], &[&s]), PoolError::StakeForfeited);
+    assert_err(
+        both_approve(&mut env, &s.pubkey(), TX, entitlement(), TIER_A),
+        PoolError::StakeForfeited,
+    );
+}
+
+#[test]
 fn cancel_before_approval_has_no_penalty() {
     let (mut env, s) = setup();
     pending(&mut env, &s);

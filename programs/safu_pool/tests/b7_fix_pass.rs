@@ -431,7 +431,7 @@ fn no_pause_on_top_of_a_pause_and_a_gap_before_the_next() {
     let ended = env.now;
     assert_eq!(env.pool_state().paused_until, ended);
     assert_err(try_pause(&mut env), PoolError::PauseGapNotPassed);
-    env.warp(PAUSE_GAP_SECS - 1);
+    env.warp(PAUSE_GAP_SECS);
     assert_err(try_pause(&mut env), PoolError::PauseGapNotPassed);
     env.warp(1);
     try_pause(&mut env).unwrap();
@@ -445,6 +445,8 @@ fn a_pause_that_runs_out_also_needs_the_gap() {
     assert!(!env.pool_state().is_paused(env.now));
     assert_err(try_pause(&mut env), PoolError::PauseGapNotPassed);
     env.warp(PAUSE_GAP_SECS);
+    assert_err(try_pause(&mut env), PoolError::PauseGapNotPassed);
+    env.warp(1);
     try_pause(&mut env).unwrap();
 }
 
@@ -458,6 +460,8 @@ fn pause_length_and_gap_follow_the_live_settings() {
     env.pause();
     assert_eq!(env.pool_state().paused_until, env.now + pause_min);
     env.warp(pause_min + gap_min);
+    assert_err(try_pause(&mut env), PoolError::PauseGapNotPassed);
+    env.warp(1);
     try_pause(&mut env).unwrap();
 }
 
@@ -467,7 +471,7 @@ fn the_pause_clock_adds_up_every_pause() {
     env.pause();
     env.warp(100);
     env.unpause();
-    env.warp(PAUSE_GAP_SECS);
+    env.warp(PAUSE_GAP_SECS + 1);
     env.pause();
     env.warp(50);
     let p = env.pool_state();
