@@ -28,9 +28,9 @@ import { decodeAccount, encodeIx, programErrorName } from "./idl";
 
 export const rpc = createSolanaRpc(POOL.rpcUrl);
 
-const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
-const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"; // hardcode-ok: Solana built-in program id, same on every cluster
+const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // hardcode-ok: Solana built-in program id, same on every cluster
+const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"; // hardcode-ok: Solana built-in program id, same on every cluster
 const addrEnc = getAddressEncoder();
 const addrDec = getAddressDecoder();
 
