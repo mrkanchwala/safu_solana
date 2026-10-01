@@ -50,8 +50,15 @@ export function WalletButton({ client }: { client: AppClient }) {
   if (client.address) {
     return (
       <div className="wallet-menu">
-        <button className="connect-btn" onClick={() => client.disconnect()}>
-          {short(client.address)} · Disconnect
+        <button
+          className="connect-btn"
+          onClick={() => client.disconnect()}
+          aria-label={`Disconnect wallet ${client.address}`}
+          title="Disconnect"
+        >
+          {short(client.address)}
+          <span className="disc-word"> · Disconnect</span>
+          <span className="disc-x" aria-hidden="true"> ✕</span>
         </button>
       </div>
     );

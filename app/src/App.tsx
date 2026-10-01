@@ -6,7 +6,7 @@ import { ClaimsPanel } from "./components/ClaimsPanel";
 import { ClaimFilePanel } from "./components/ClaimFilePanel";
 import { BackPanel } from "./components/BackPanel";
 import { useClient } from "./lib/client";
-import { IDL, POOL } from "./lib/pool";
+import { POOL } from "./lib/pool";
 import { fmtSol, stakeBounds } from "./lib/reads";
 import { usePool } from "./lib/usePool";
 
@@ -19,7 +19,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "collect", label: "Collect payout" },
 ];
 
-const DEMO = IDL.constants.find((c) => c.name === "DEMO_BUILD")?.value === "true";
 const NET = POOL.cluster === "devnet" ? "Solana devnet" : "a local Solana test chain";
 
 export default function App() {
@@ -27,11 +26,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("stake");
   const { pool, error } = usePool();
 
-  const badge = error ? (
-    <div className="devnet-badge">The pool isn't reachable on {NET} right now</div>
-  ) : DEMO ? (
-    <div className="devnet-badge">Demo on {NET}: every wait is minutes, not days</div>
-  ) : null;
+  // Shown only when the pool can't be read (founder, 2026-10-01: no standing devnet/demo banner).
+  const badge = error ? <div className="devnet-badge">The pool isn't reachable on {NET} right now</div> : null;
 
   return (
     <>

@@ -195,6 +195,22 @@ header .social {
   opacity: 0.6;
   cursor: default;
 }
+/* Connected label: "address · Disconnect" on wide screens; on a phone the full label pushed the
+   header past the screen edge (B8 run 6, 390px), so it becomes "address ✕". */
+.connect-btn .disc-x {
+  display: none;
+}
+@media (max-width: 560px) {
+  .connect-btn {
+    padding: 10px 12px;
+  }
+  .connect-btn .disc-word {
+    display: none;
+  }
+  .connect-btn .disc-x {
+    display: inline;
+  }
+}
 
 .wallet-menu {
   position: relative;
@@ -403,6 +419,21 @@ header .social {
 .tab.active {
   color: var(--text);
   border-bottom-color: var(--brand-primary);
+}
+/* Small phones (B8 run 6, 320px): the four tabs share the width and wrap their label, instead of
+   "Collect payout" being cut off; the header's social icons (also in the footer) make room. */
+@media (max-width: 400px) {
+  .tab {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 12px 4px;
+    font-size: 12.5px;
+  }
+}
+@media (max-width: 360px) {
+  header .social {
+    display: none;
+  }
 }
 .panel {
   padding: 24px;
