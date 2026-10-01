@@ -27,6 +27,10 @@ import type { IdlAccountItem } from "./pool";
 import { decodeAccount, encodeIx, programErrorName } from "./idl";
 
 export const rpc = createSolanaRpc(POOL.rpcUrl);
+
+const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const addrEnc = getAddressEncoder();
 const addrDec = getAddressDecoder();
 
@@ -206,7 +210,15 @@ function explain(e: unknown): Error {
   };
   collect(e);
   const failed = texts.map((t) => /Program (\w+) failed: custom program error: 0x([0-9a-f]+)/i.exec(t)).find(Boolean);
-  if (failed && failed[1] !== PROGRAM_ID) return new Error(`MARINADE_REFUSED: ${failed[0]}`);
+  if (failed && failed[1] !== PROGRAM_ID) {
+    // System / Token program error 0x1 is "not enough funds" in the signer's wallet; it read as a
+    // Marinade refusal before (founder's Solflare test, 2026-10-01). Only Marinade gets that message.
+    if (failed[2] === "1" && [SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].includes(failed[1])) {
+      return new Error(`insufficient funds: ${failed[0]}`);
+    }
+    if (failed[1] === POOL.marinade.program) return new Error(`MARINADE_REFUSED: ${failed[0]}`);
+    return new Error(`OTHER_PROGRAM_REFUSED: ${failed[0]}`);
+  }
   for (const t of texts) {
     const m = /Program log: AnchorError .*Error Code: (\w+)\./.exec(t);
     if (m && (!failed || failed[1] === PROGRAM_ID) && IDL.errors?.some((x) => x.name === m[1])) return new Error(`PROGRAM_ERROR:${m[1]}`);

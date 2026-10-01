@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { toFriendlyError } from "./friendly-error";
 
 describe("toFriendlyError", () => {
+  it("says 'not enough SOL' for a System program 0x1, not a Marinade refusal", () => {
+    const r = toFriendlyError(new Error("insufficient funds: Program 11111111111111111111111111111111 failed: custom program error: 0x1"));
+    expect(r.message).toBe("Not enough SOL in this wallet.");
+  });
+
   it("matches a known backend rejection reason", () => {
     const result = toFriendlyError(new Error("WALLET_NOT_COVERED: wallet not registered"));
     expect(result.message).toContain("isn't one of your covered wallets");
