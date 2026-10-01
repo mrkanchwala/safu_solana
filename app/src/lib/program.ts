@@ -26,7 +26,10 @@ import { IDL, POOL, PROGRAM_ID, bytes, num } from "./pool";
 import type { IdlAccountItem } from "./pool";
 import { decodeAccount, encodeIx, programErrorName } from "./idl";
 
-export const rpc = createSolanaRpc(POOL.rpcUrl);
+// The deployed site reads through its own /rpc (keys and failover stay on the server; the public
+// devnet RPC limits each IP). Local dev, tests and localnet use rpcUrl directly.
+const siteRpc = POOL.siteRpcPath && typeof window !== "undefined" && !import.meta.env.DEV ? new URL(POOL.siteRpcPath, window.location.origin).href : null;
+export const rpc = createSolanaRpc(siteRpc ?? POOL.rpcUrl);
 
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"; // hardcode-ok: Solana built-in program id, same on every cluster
 const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // hardcode-ok: Solana built-in program id, same on every cluster

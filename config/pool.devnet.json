@@ -1,6 +1,7 @@
 {
   "cluster": "devnet",
   "rpcUrl": "https://api.devnet.solana.com",
+  "siteRpcPath": "/rpc",
   "poolCapLamports": 50000000000,
   "computeUnitLimit": 200000,
   "marinade": {
@@ -11,5 +12,5 @@
   "drainTestMints": {
     "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   },
-  "_note": "Deploy values only. Program id comes from the IDL (target/idl/safu_pool.json `address`); every rule number comes from the IDL constants. Marinade PDAs are derived from `marinade.state` with the seeds in pool-core/src/marinade.rs."
+  "_note": "Deploy values only. Program id comes from the IDL (target/idl/safu_pool.json `address`); every rule number comes from the IDL constants. `siteRpcPath`: the deployed site reads the chain through the claim API (/rpc, server-side provider failover); `rpcUrl` is for tools and local dev. Marinade PDAs are derived from `marinade.state` with the seeds in pool-core/src/marinade.rs."
 }

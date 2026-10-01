@@ -6,6 +6,8 @@ declare const __IDL__: Idl;
 export interface PoolConfig {
   cluster: "localnet" | "devnet";
   rpcUrl: string;
+  /** Same-origin chain-read path on the deployed site (the claim API relays it); unset = rpcUrl. */
+  siteRpcPath?: string;
   poolCapLamports: number;
   computeUnitLimit: number;
   marinade: { program: string; state: string; msolMint: string };
