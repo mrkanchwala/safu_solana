@@ -1,4 +1,4 @@
-//! B3: Marinade leg maths.
+//! Marinade leg maths.
 
 use pool_core::leg::*;
 use pool_core::marinade::PRICE_DENOMINATOR;

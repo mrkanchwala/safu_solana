@@ -1,0 +1,122 @@
+# CI: every check the program is released with, on every push and pull request.
+#   program: fmt, the SBF build (devnet demo build and normal build), clippy and the LiteSVM + property
+#            suites against each build, and the one-source check for addresses and rule numbers
+#   app:     lint and unit tests for the site
+#   audit:   dependency advisories, with the two known ones proven to reach only the test harness
+# `--locked` everywhere: a stale Cargo.lock fails instead of resolving something untested.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  program:
+    name: program (SBF + LiteSVM, both builds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust 1.96.0
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.96.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Official Anza installer, pinned to the version the program is built and deployed with.
+      - name: Install Solana CLI 3.1.10
+        run: |
+          curl -sSfL https://release.anza.xyz/v3.1.10/install -o solana-install.sh
+          sh solana-install.sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain in use
+        run: rustc --version && solana --version && cargo build-sbf --version
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: One source for addresses and rule numbers
+        run: bash scripts/check_no_hardcodes.sh
+
+      # The devnet program is the demo build (fast clocks). The tests embed the built program,
+      # so each build is followed by its own test and clippy run.
+      - name: Build (demo)
+        run: cargo build-sbf --manifest-path programs/safu_pool/Cargo.toml --features demo -- --locked
+
+      - name: Program is not empty (demo)
+        run: test "$(stat -c %s target/deploy/safu_pool.so)" -gt 100000
+
+      - name: Clippy (demo)
+        run: cargo clippy --all-targets --locked --features demo -p safu_pool -p pool-core -- -D warnings
+
+      - name: Tests (demo)
+        run: cargo test --locked --features demo -p safu_pool -p pool-core
+
+      - name: Build (normal)
+        run: cargo build-sbf --manifest-path programs/safu_pool/Cargo.toml -- --locked
+
+      - name: Program is not empty (normal)
+        run: test "$(stat -c %s target/deploy/safu_pool.so)" -gt 100000
+
+      - name: Clippy (normal)
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Tests (normal)
+        run: cargo test --locked
+
+  app:
+    name: site (lint + unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npx oxlint src
+
+      - name: Unit tests
+        run: npx vitest run
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit 0.22.2
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      # RUSTSEC-2024-0344 (curve25519-dalek 3.2.0) and RUSTSEC-2022-0093 (ed25519-dalek 1.0.1) come in
+      # through litesvm, the test harness. Proven here on every run, so the ignore cannot outlive it.
+      - name: Known advisories reach only dev-dependencies
+        run: |
+          for c in curve25519-dalek@3.2.0 ed25519-dalek@1.0.1; do
+            out=$(cargo tree --locked -e normal -i "$c" 2>&1 || true)
+            if [ -n "$out" ] && ! echo "$out" | grep -q -e "nothing to print" -e "did not match any packages"; then
+              echo "::error::$c is in the program's normal dependency tree"; echo "$out"; exit 1
+            fi
+            echo "$c: dev-only"
+          done
+
+      - name: Audit
+        run: cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093

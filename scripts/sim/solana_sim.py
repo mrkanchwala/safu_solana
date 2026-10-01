@@ -12,7 +12,7 @@ What is different on Solana (pool-core params.rs defaults):
 - 80% of capacity in mSOL (DEPLOY_BPS), the rest liquid; Marinade yield ~6%/yr
 - Marinade's unstake fee: a payout larger than the liquid SOL unstakes the shortfall and the
   payee pays the fee on that part; the pool's own refill of its liquid 20% pays the fee itself
-  (a loss, finding F1: by design, part of the same hidden gap as claims paid beyond a stake)
+  (a loss, by design, part of the same hidden gap as claims paid beyond a stake)
 - gate 90 d, cooldown 7 d, vesting 45 d, tiers A 15x / B 10x / C 5x (same as multichain)
 
 Units: fractions of the pool cap (cap = 1.0), so results read as "% of cap" at any SOL size.

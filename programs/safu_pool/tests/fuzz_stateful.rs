@@ -76,7 +76,7 @@ struct World {
     next_tx: u64,
     /// Claim money paid out (entitlement streamed), the one thing allowed to leave the books short.
     paid: u64,
-    /// Marinade loss marked off `total_staked` but left in the stake records (finding F1): it
+    /// Marinade loss marked off `total_staked` but left in the stake records: it
     /// lets the books run short as well, so it is counted and allowed, not failed.
     unassigned_loss: u64,
     last_unassigned: u64,
@@ -788,7 +788,7 @@ fn fuzz_pool() {
         "episodes {n}, steps {}, largest books-over-holdings gap {max_gap} lamports",
         n * STEPS as u64
     );
-    println!("F1 Marinade loss booked in {loss_eps} episodes (first seed {first_loss:?})");
+    println!("Marinade loss booked in {loss_eps} episodes (first seed {first_loss:?})");
     for (name, (tried, went)) in &stats {
         println!("  {name:<28} tried {tried:>7}  went through {went:>7}");
     }

@@ -36,7 +36,7 @@ pub fn check_entitlement(entitlement: u64, stake: u64, tier: u8) -> Result<()> {
 
 /// The hack is not in the future, not before the stake, and inside the claim window.
 /// `window_now` is the claim clock since the hack (`settings::claim_clock`): time the pool spent
-/// paused does not count against the window (audit X1). Pass `now` when nothing was paused.
+/// paused does not count against the window. Pass `now` when nothing was paused.
 pub fn check_hack_time(hack_ts: i64, staked_at: i64, now: i64, window_now: i64) -> Result<()> {
     if hack_ts > now {
         return Err(CoreError::HackTimestampInFuture);

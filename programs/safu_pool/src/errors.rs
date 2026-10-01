@@ -76,7 +76,7 @@ pub enum PoolError {
     WalletTakenByOtherStaker,
     #[msg("Staker already has the maximum number of covered wallets")]
     StakerLimitReached,
-    // ---- claims (B2)
+    // ---- claims
     #[msg("Signer is not the oracle")]
     NotOracle,
     #[msg("Signer is neither the admin nor the co-signer")]
@@ -165,7 +165,7 @@ pub enum PoolError {
     Insolvent,
     #[msg("Revocation account does not match this approval")]
     WrongRevocationAccount,
-    // B3: Marinade leg and yield.
+    // Marinade leg and yield.
     #[msg("Marinade's unstake fee is above the pool's limit")]
     UnstakeFeeTooHigh,
     #[msg("Liquid SOL is already at target and nothing is idle")]
@@ -174,7 +174,7 @@ pub enum PoolError {
     NothingToClaim,
     #[msg("Amount is above the protocol's revenue or the pool's surplus")]
     ExceedsYieldBalance,
-    // B7 fix pass: settings, pause gap, partial withdrawal.
+    // settings, pause gap, partial withdrawal.
     #[msg("A new pause must wait for the gap after the last one")]
     PauseGapNotPassed,
     #[msg("What stays in the stake would be below the min stake; take it all out instead")]

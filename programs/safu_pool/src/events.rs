@@ -165,7 +165,7 @@ pub struct StakeUnsuspended {
     pub staker: Pubkey,
 }
 
-// B3: Marinade leg and yield.
+// Marinade leg and yield.
 #[event]
 pub struct Deployed {
     pub lamports: u64,

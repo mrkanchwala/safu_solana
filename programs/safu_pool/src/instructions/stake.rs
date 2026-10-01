@@ -46,7 +46,7 @@ fn require_no_claim(record: &StakeRecord) -> Result<()> {
     Ok(())
 }
 
-/// The one rule for every staker exit, withdraw or emergency exit, all or part (audit X3, the same
+/// The one rule for every staker exit, withdraw or emergency exit, all or part (the same
 /// rule backers follow): no claim open, queued or forfeited on the stake, the penalty lock passed,
 /// what stays is zero or at least the min stake, and only free capital leaves (open claims still
 /// fit in capacity afterwards). Takes `amount` of principal plus ALL unpaid yield off the books;
@@ -172,7 +172,7 @@ pub struct SetBeneficiary<'info> {
     pub stake_record: Box<Account<'info, StakeRecord>>,
 }
 
-/// Blocked while a claim is open or queued (eng review D1): a drained wallet may still hold the stake
+/// Blocked while a claim is open or queued: a drained wallet may still hold the stake
 /// key, and the payout must keep going to the beneficiary set before the claim.
 pub fn set_beneficiary(ctx: Context<SetBeneficiary>, beneficiary: Pubkey) -> Result<()> {
     require!(!ctx.accounts.pool.is_paused(now()?), PoolError::Paused);

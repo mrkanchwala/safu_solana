@@ -1,11 +1,11 @@
 // The pool's Squads v4 multisig: becomes the program's upgrade authority after `initialize`.
-// Members: the pool admin and the co-signer (AWS KMS), all permissions, threshold 2 (founder,
+// Members: the pool admin and the co-signer (AWS KMS), all permissions, threshold 2 (set
 // 2026-10-01). Creating it needs only the admin's signature; members do not sign creation.
 //
 //   node multisig.mjs create   --rpc <url> --admin <key.json> --co-signer <pubkey>
 //   node multisig.mjs readback --rpc <url> --multisig <pda> --admin <pubkey> --co-signer <pubkey>
 //
-// Operator tool, run by hand from /ship on the Mac. Never shipped to the site or the server.
+// Operator tool, run by hand on the operator's machine. Never shipped to the site or the server.
 import { readFileSync } from "node:fs";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as multisig from "@sqds/multisig";

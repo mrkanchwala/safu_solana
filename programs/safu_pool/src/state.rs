@@ -61,7 +61,7 @@ pub struct Pool {
     /// Start of the last pause (0 = never paused).
     pub pause_started_at: i64,
     /// Seconds paused in every pause before the last one. With the two above, the pause clock that
-    /// stops claim windows during a pause (audit X1).
+    /// stops claim windows during a pause.
     pub paused_before: i64,
 
     pub total_staked: u64,
@@ -249,7 +249,7 @@ pub struct Claim {
     pub inactivity_window: i64,
     /// Paused total (`Pool::paused_secs_at`) when the claim's current window started: the hack
     /// window while queued, the approve window, then the collection window. Pause time after it
-    /// does not count against the window (audit X1).
+    /// does not count against the window.
     pub pause_mark: i64,
     /// Room for fields a later upgrade adds.
     pub reserved: [u8; 64],

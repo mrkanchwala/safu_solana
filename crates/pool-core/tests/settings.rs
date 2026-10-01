@@ -1,4 +1,4 @@
-//! B7 fix pass: adjustable settings, partial stake withdrawal, one free-capital rule, pause clock.
+//! adjustable settings, partial stake withdrawal, one free-capital rule, pause clock.
 
 use pool_core::params::*;
 use pool_core::settings::*;
@@ -131,7 +131,7 @@ fn settings_keep_their_order() {
 
 #[test]
 fn a_pause_is_never_longer_than_the_gap_after_it() {
-    // Audit L1/L2: the gap is never below the filing window, and the ranges keep every pause
+    // The gap is never below the filing window, and the ranges keep every pause
     // no longer than the gap.
     let (_, pause_max) = SettingKey::PauseMaxSecs.bounds();
     let (gap_min, _) = SettingKey::PauseGapSecs.bounds();
@@ -278,7 +278,7 @@ fn true_paused_at(pauses: &[(i64, i64)], t: i64) -> i64 {
 }
 
 proptest! {
-    // Audit L2: with the gap at its minimum (the filing window) and pauses spaced only as the gap
+    // With the gap at its minimum (the filing window) and pauses spaced only as the gap
     // rule allows, the stored pause record decides every filing exactly as the full history would.
     #[test]
     fn the_stored_pause_record_files_claims_exactly(

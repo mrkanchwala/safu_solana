@@ -1,4 +1,4 @@
-//! B2: the claim path. Oracle approvals are really signed and verified by the Ed25519 precompile.
+//! the claim path. Oracle approvals are really signed and verified by the Ed25519 precompile.
 //! One test per error path, plus the full stake → claim → approve → cooldown → vest → paid flow.
 
 mod common;
@@ -793,7 +793,7 @@ fn cancel_of_a_partly_paid_claim_restores_only_the_unpaid_stake() {
     let admin = env.admin.insecure_clone();
     let ix = env.cancel_claim_ix(&admin.pubkey(), &s.pubkey(), &TX);
     env.ok(&[ix], &[&admin]);
-    // Audit X6: what was paid stays paid and comes off the stake.
+    // What was paid stays paid and comes off the stake.
     let r = env.stake_state(&s.pubkey());
     assert!(!r.forfeited && r.forfeited_by.is_none());
     assert_eq!(r.amount, entitlement() - paid);

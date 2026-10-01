@@ -79,7 +79,7 @@ pub fn push_idle<'info>(
     let before = leg.pool_msol_amount()?;
     leg.deposit(pool, pool_key, vault, amount)?;
     let msol = sub(leg.pool_msol_amount()?, before).core()?;
-    // CSO M2: the harvest growth limit's clock starts with the first money deployed.
+    // The harvest growth limit's clock starts with the first money deployed.
     if pool.last_harvest_at == 0 {
         pool.last_harvest_at = now;
     }

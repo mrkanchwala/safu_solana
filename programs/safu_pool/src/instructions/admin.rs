@@ -147,7 +147,7 @@ pub struct AdminOnly<'info> {
 }
 
 /// Pauses for at most the `PauseMaxSecs` setting. Never while already paused, and after an earlier
-/// pause only once the `PauseGapSecs` setting has passed since it ended (audit X2: back-to-back
+/// pause only once the `PauseGapSecs` setting has passed since it ended (back-to-back
 /// pauses would otherwise freeze claims without limit).
 pub fn pause(ctx: Context<AdminOnly>) -> Result<()> {
     let now = now()?;

@@ -1,6 +1,6 @@
-//! B7 fix pass: adjustable settings (timelock), pause gap (X2), pause-proof claim windows (X1), one
-//! free-capital rule for every exit with partial stake withdrawal (X3), no admin yield while paused
-//! (X4), beneficiary never a pool account, and the room left for upgrades (versions, spare bytes,
+//! adjustable settings (timelock), pause gap, pause-proof claim windows, one
+//! free-capital rule for every exit with partial stake withdrawal, no admin yield while paused
+//! either, beneficiary never a pool account, and the room left for upgrades (versions, spare bytes,
 //! asset field).
 //!
 //! Every clock is read from the live settings, so each test holds in both the normal and the demo
@@ -90,7 +90,7 @@ fn active_claim() -> (Env, Keypair) {
     (env, s)
 }
 
-/// The founder's example, scaled to the stake bounds. Ten max stakes (capacity 10M) and a claim of
+/// A worked example, scaled to the stake bounds. Ten max stakes (capacity 10M) and a claim of
 /// 2.4M admitted on the first (time gate not met, so it stays allocated): 7.6M is free capital.
 /// Returns the pool, the claimant, and the nine other stakers.
 fn tight_pool() -> (Env, Keypair, Vec<Keypair>) {
@@ -419,7 +419,7 @@ fn running_claims_keep_the_clocks_they_started_with() {
     );
 }
 
-// ================================================================== X2: pause gap
+// ================================================================== pause gap
 
 #[test]
 fn no_pause_on_top_of_a_pause_and_a_gap_before_the_next() {
@@ -479,7 +479,7 @@ fn the_pause_clock_adds_up_every_pause() {
     assert_eq!(p.paused_secs_at(env.now), 150);
 }
 
-// ================================================================== X1: a pause never uses up a claim window
+// ================================================================== a pause never uses up a claim window
 
 #[test]
 fn a_pause_does_not_use_up_the_approve_window() {
@@ -592,7 +592,7 @@ fn a_window_already_closed_before_a_pause_stays_closed() {
     assert_err(env.submit(&a), PoolError::ClaimWindowExpired);
 }
 
-// ================================================================== X3: one rule for every exit, partial withdrawal
+// ================================================================== one rule for every exit, partial withdrawal
 
 #[test]
 fn a_part_of_a_stake_can_be_withdrawn_and_coverage_follows_it() {
@@ -777,7 +777,7 @@ fn stakers_and_backers_follow_the_same_free_capital_line() {
     );
 }
 
-// ================================================================== X4, beneficiary, upgrade room
+// ================================================================== No admin yield while paused, beneficiary, upgrade room
 
 #[test]
 fn protocol_yield_cannot_move_while_paused() {

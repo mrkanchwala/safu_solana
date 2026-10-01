@@ -1,4 +1,4 @@
-//! B1: initialize, pause, pool cap, stake / withdraw / emergency exit / beneficiary, backers,
+//! initialize, pause, pool cap, stake / withdraw / emergency exit / beneficiary, backers,
 //! covered wallets. One test per error path.
 
 mod common;
@@ -646,7 +646,7 @@ fn only_the_registry_writer_registers() {
 
 #[test]
 fn a_donation_to_the_vault_changes_no_stake() {
-    // Eng review D2: extra SOL only ever looks like surplus.
+    // Extra SOL only ever looks like surplus.
     let mut env = Env::new();
     let (min, _) = bounds();
     env.staker(min);

@@ -89,8 +89,8 @@ pub struct WithdrawYield<'info> {
 
 /// Protocol revenue to the treasury. Within the protocol's balance AND the pool's surplus over
 /// everything it owes (stakes, backing, set-aside yield, open claims), because claims may have spent
-/// protocol revenue that the balance still counts (multichain code review W2). Not while paused
-/// (audit X4): stakers and backers cannot claim yield then either.
+/// protocol revenue that the balance still counts (as multichain). Not while paused
+/// for the same reason: stakers and backers cannot claim yield then.
 pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
     let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();

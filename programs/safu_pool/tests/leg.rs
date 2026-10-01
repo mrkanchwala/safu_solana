@@ -1,4 +1,4 @@
-//! B3: the Marinade leg and yield, against the real Marinade program and its devnet accounts.
+//! the Marinade leg and yield, against the real Marinade program and its devnet accounts.
 //! Deposit, harvest, payout unstakes, rebalance, yield claims, protocol revenue, compute units.
 
 mod common;

@@ -849,7 +849,7 @@ impl Env {
         pool_core::apply_bps(amount, pool_core::params::MAX_REBALANCE_SLIPPAGE_BPS).unwrap()
     }
 
-    // ---- B3: Marinade leg and yield
+    // ---- Marinade leg and yield
 
     pub fn upkeep_ix(&self, data: impl InstructionData) -> Instruction {
         self.ix(

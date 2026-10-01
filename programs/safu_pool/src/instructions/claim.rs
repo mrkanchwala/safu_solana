@@ -2,7 +2,7 @@
 //! stake) → cooldown → vesting stream under a daily payout cap → completed. Plus cancel (false
 //! positive), the 2-of-2 override, approval revocation, and the permissionless expiry sweeps.
 //!
-//! Pause and the claim windows (audit X1): every window (hack → submit, approve, collection) runs on
+//! Pause and the claim windows: every window (hack → submit, approve, collection) runs on
 //! the claim clock, `Pool::claim_clock(now, claim.pause_mark)`, which does not count time the pool
 //! spent paused. The expiry sweeps are also refused while paused. A pause therefore never uses up a
 //! claimant's window while they cannot act.
@@ -372,7 +372,7 @@ pub fn unlock_pending_claim(ctx: Context<ClaimTransition>) -> Result<()> {
 }
 
 /// The staker did not approve in time (on the claim clock): the reservation returns to the pool.
-/// Never while suspended or paused (audit X1: the staker cannot approve then).
+/// Never while suspended or paused (the staker cannot approve then).
 pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
     require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
@@ -400,7 +400,7 @@ pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
 }
 
 /// An approved claim left uncollected too long (on the claim clock): the unpaid rest returns to the
-/// pool. Never while suspended or paused (audit X1: the staker cannot collect then).
+/// pool. Never while suspended or paused (the staker cannot collect then).
 pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
     require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
@@ -588,7 +588,7 @@ pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     if claim.status == ClaimStatus::Active {
         // Growth so far belongs to the stakes in before this one returns (multichain call site).
         leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
-        // What the claim already paid out stays paid and comes off the stake (audit X6). The
+        // What the claim already paid out stays paid and comes off the stake. The
         // rest may sit below the min stake; it can still leave in full.
         let restored = claim.stake.saturating_sub(claim.streamed);
         stake.forfeited_by = None;

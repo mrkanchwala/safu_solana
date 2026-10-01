@@ -14,8 +14,8 @@ fn settings(cap: u64) -> Settings {
 }
 
 #[test]
-fn stake_bounds_are_the_founder_values_at_a_50_sol_cap() {
-    // 0.05 - 0.5 SOL (founder default 2026-09-30).
+fn stake_bounds_are_the_default_values_at_a_50_sol_cap() {
+    // 0.05 - 0.5 SOL (default).
     assert_eq!(stake::bounds(&settings(CAP)), Ok((SOL / 20, SOL / 2)));
 }
 

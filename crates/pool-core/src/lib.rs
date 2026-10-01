@@ -72,7 +72,7 @@ pub fn capacity(total_staked: u64, total_backed: u64) -> Result<u64> {
 }
 
 /// Only free capital can leave, whoever takes it (staker withdraw, emergency exit, backer
-/// withdrawal; audit X3). After taking `amount` of principal out, open claims (`total_allocated`)
+/// withdrawal). After taking `amount` of principal out, open claims (`total_allocated`)
 /// must still fit in capacity. Yield is never capital and is not checked.
 /// Saturating: a Marinade loss can mark `total_staked` below the principal a stake still owes, and
 /// the capacity left is then zero, not an error (the last staker out can still leave with no open

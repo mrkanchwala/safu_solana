@@ -126,7 +126,7 @@ impl SettingKey {
             SettingKey::BackerNoticeSecs => (0, clock(90 * DAY, SECONDS_PER_HOUR)),
             SettingKey::BackerMaturitySecs => (clock(DAY, MIN), clock(30 * DAY, SECONDS_PER_HOUR)),
             SettingKey::PauseMaxSecs => (clock(DAY, MIN), 30 * DAY),
-            // Never below the filing window: see `PAUSE_GAP_SECS` (audit L2).
+            // Never below the filing window: see `PAUSE_GAP_SECS`.
             SettingKey::PauseGapSecs => (CLAIM_WINDOW_SECS, 90 * DAY),
             SettingKey::ApproveWindowSecs => (clock(7 * DAY, MIN), 180 * DAY),
             SettingKey::InactivitySecs => (clock(30 * DAY, MIN), 365 * DAY),
@@ -243,7 +243,7 @@ impl Settings {
                 value <= g(SettingKey::PayoutLowBps) && value >= g(SettingKey::PayoutHighBps)
             }
             SettingKey::PayoutHighBps => value <= g(SettingKey::PayoutMidBps),
-            // Paused at most half the time (audit L1). The hard bounds already imply it; kept as
+            // Paused at most half the time. The hard bounds already imply it; kept as
             // a rule so a later change to either range cannot loosen it.
             SettingKey::PauseMaxSecs => value <= g(SettingKey::PauseGapSecs),
             SettingKey::PauseGapSecs => value >= g(SettingKey::PauseMaxSecs),
@@ -257,7 +257,7 @@ impl Settings {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Pause clock (X1 / X2)
+// Pause clock
 // ---------------------------------------------------------------------------------------------
 
 /// Seconds the pool had spent paused by time `t`, from the stored pause record:
@@ -265,7 +265,7 @@ impl Settings {
 /// For a `t` before the last pause this returns `paused_before`, which is exact only if no earlier
 /// pause ended after `t`; otherwise it overstates the mark and shortens the window. The pause gap
 /// (never below `CLAIM_WINDOW_SECS`) rules that out for every claim still inside its filing window
-/// (audit L2): a hack before an earlier pause is past the window before the next pause starts.
+/// for this reason: a hack before an earlier pause is past the window before the next pause starts.
 pub fn paused_secs_at(paused_before: i64, started_at: i64, until: i64, t: i64) -> i64 {
     if started_at == 0 || t <= started_at {
         return paused_before;
@@ -281,7 +281,7 @@ pub fn claim_clock(now: i64, paused_now: i64, mark: i64) -> i64 {
 
 /// After an earlier pause, more than the gap has passed since it ended (the first pause needs no
 /// gap). Strictly more: with the gap at the filing window, a hack during one pause is then always
-/// past its window before the next pause starts, so `paused_secs_at` is exact (audit L2).
+/// past its window before the next pause starts, so `paused_secs_at` is exact.
 /// The caller checks separately that the pool is not paused now.
 pub fn pause_gap_passed(now: i64, started_at: i64, until: i64, gap: i64) -> bool {
     started_at == 0 || now > until.saturating_add(gap)

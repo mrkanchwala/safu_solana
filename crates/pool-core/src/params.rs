@@ -52,9 +52,9 @@ pub const CLAIM_WINDOW_SECS: i64 = 30 * SECONDS_PER_DAY;
 pub const MAX_APPROVAL_WINDOW_SECS: i64 = 24 * SECONDS_PER_HOUR;
 /// Longest pause. Real time in both builds (multichain `PAUSE_MAX_SECONDS`). (setting default)
 pub const PAUSE_MAX_SECS: i64 = 30 * SECONDS_PER_DAY;
-/// A new pause may start only more than this long after the last one ended (audit X2: back-to-back
+/// A new pause may start only more than this long after the last one ended (back-to-back
 /// pauses would otherwise freeze claims without limit). Real time in both builds and never below
-/// `CLAIM_WINDOW_SECS` (audit L1/L2): the pool is paused at most half the time, and a claim can
+/// `CLAIM_WINDOW_SECS`: the pool is paused at most half the time, and a claim can
 /// still be filed across one pause only, which the stored pause record credits exactly.
 /// (setting default)
 pub const PAUSE_GAP_SECS: i64 = CLAIM_WINDOW_SECS;
@@ -74,17 +74,17 @@ pub const BACKER_NOTICE_SECS: i64 = clock(30 * SECONDS_PER_DAY, SECONDS_PER_MINU
 // -----------------------------------------------------------------------
 // Stake bounds, as bps of the pool cap (setting defaults; the cap starts at the deploy value in
 // `config/` and is a setting too).
-// Solana values: 0.05-0.5 SOL at a 50 SOL cap (founder default, 2026-09-30). Multichain: 1 / 10.
+// Solana values: 0.05-0.5 SOL at a 50 SOL cap. Multichain: 1 / 10.
 // -----------------------------------------------------------------------
 
 pub const MIN_STAKE_BPS: u64 = 10;
 pub const MAX_STAKE_BPS: u64 = 100;
 
-/// Covered wallets per staker, forever. Solana pool: 1 (founder, 2026-09-30). Multichain: 3.
+/// Covered wallets per staker, forever. Solana pool: 1. Multichain: 3.
 pub const MAX_COVERED_WALLETS: u8 = 1;
 
 /// Drain transactions one claim may list. The program sees one claim either way: the claim API checks
-/// this, and the site reads it from the IDL. Solana pool: 5 (founder, 2026-09-30). Multichain: 20.
+/// this, and the site reads it from the IDL. Solana pool: 5. Multichain: 20.
 pub const MAX_TXIDS_PER_CLAIM: u8 = 5;
 
 // -----------------------------------------------------------------------
