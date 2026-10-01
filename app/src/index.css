@@ -17,6 +17,12 @@
   color-scheme: dark;
 }
 
+/* One clear keyboard focus ring everywhere (yellow on near-black, 13.1:1). */
+:focus-visible {
+  outline: 2px solid var(--brand-warn);
+  outline-offset: 2px;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -272,7 +278,6 @@ header .social {
 .wallet-row:hover,
 .wallet-row:focus-visible {
   background: var(--bg-panel-alt);
-  outline: none;
 }
 .wallet-row-icon {
   display: grid;
@@ -483,6 +488,11 @@ header .social {
   font-size: 18px;
   width: 100%;
   outline: none;
+}
+/* The input itself has no outline; its box shows focus instead. */
+.field-input:focus-within {
+  border-color: var(--brand-warn);
+  box-shadow: 0 0 0 1px var(--brand-warn);
 }
 .field-input input::placeholder {
   color: var(--text-muted);
