@@ -184,11 +184,36 @@ pub struct StakerWallets {
     pub version: u8,
     pub staker: Pubkey,
     pub count: u8,
-    pub wallet_hashes: [[u8; 32]; MAX_COVERED_WALLETS as usize],
+    /// Slot 1. Fixed at one entry: the layout before the 2nd slot existed, kept in place so accounts
+    /// written by the 1-wallet build still read correctly.
+    pub wallet_hashes: [[u8; 32]; 1],
     pub bump: u8,
-    /// Room for fields a later upgrade adds (e.g. more covered wallets: 32 bytes each).
-    pub reserved: [u8; 64],
+    /// Slot 2, taken from the old `reserved` (old accounts read zeros here; `count` governs).
+    pub wallet_hash_2: [u8; 32],
+    /// Room for fields a later upgrade adds.
+    pub reserved: [u8; 32],
 }
+
+impl StakerWallets {
+    /// Covered wallet slot `i` (0-based, below `MAX_COVERED_WALLETS`).
+    pub fn slot_mut(&mut self, i: usize) -> &mut [u8; 32] {
+        match i {
+            0 => &mut self.wallet_hashes[0],
+            _ => &mut self.wallet_hash_2,
+        }
+    }
+
+    /// The registered wallet hashes, in order.
+    pub fn hashes(&self) -> Vec<[u8; 32]> {
+        [self.wallet_hashes[0], self.wallet_hash_2]
+            .into_iter()
+            .take(self.count as usize)
+            .collect()
+    }
+}
+
+// Two slots exist; raising the limit past that needs another slot taken from `reserved`.
+const _: () = assert!(MAX_COVERED_WALLETS == 2);
 
 /// One covered wallet, bound to one staker forever. PDA `[SEED_COVERED, pool, wallet_hash]`.
 /// `wallet_hash = sha256(chain_id || normalized address)`, computed by the backend.

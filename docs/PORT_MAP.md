@@ -53,7 +53,7 @@ form differs (reason given). **Left out** = not in this build.
 | `Claim(claim_id)` | `Claim` `[claim, pool, staker, tx_hash]` |
 | `Override(claim_id)` | `Override` `[override, claim]` |
 | Revoked approvals (temporary, TTL) | `RevokedApproval` `[revoked, pool, payload_hash]` (permanent) |
-| `covered-registry` contract (separate) | `CoveredWallet` `[covered, pool, wallet_hash]` (forever) + `StakerWallets` `[staker_wallets, pool, staker]` (max `MAX_COVERED_WALLETS`, 1). Writer = backend key. |
+| `covered-registry` contract (separate) | `CoveredWallet` `[covered, pool, wallet_hash]` (forever) + `StakerWallets` `[staker_wallets, pool, staker]` (max `MAX_COVERED_WALLETS`, 2, Solana or Ethereum in any mix; the 2nd slot sits after `bump`, taken from the old spare bytes). Writer = backend key. |
 | Daily counters keyed by day | Current day only, on `Pool`, reset when the day changes. |
 
 ## Other changes

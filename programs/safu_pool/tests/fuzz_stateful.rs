@@ -1,7 +1,7 @@
 //! Stateful program fuzz: random sequences of every liquidity path (stake, partial and whole
 //! withdraw, emergency exit, backing and its withdrawal, claims end to end, yield, harvest,
-//! rebalance, treasury, pause, settings through the timelock, Marinade rewards and liquidity)
-//! against the real program and Marinade in LiteSVM. Ordinary refusals are expected and ignored;
+//! rebalance, treasury, pause, settings through the timelock, Marinade rewards and liquidity,
+//! covered-wallet registration) against the real program and Marinade in LiteSVM. Ordinary refusals are expected and ignored;
 //! the books are checked after every step, success or not.
 //!
 //! Ignored in normal runs. On the VPS:
@@ -22,7 +22,9 @@ use pool_core::params::{DEMO_BUILD, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use pool_core::settings::SETTING_COUNT;
 use safu_pool::approval::ClaimApproval;
 use safu_pool::constants::*;
-use safu_pool::state::{BackerRecord, Claim, ClaimStatus, Pool, StakeRecord};
+use safu_pool::state::{
+    BackerRecord, Claim, ClaimStatus, CoveredWallet, Pool, StakeRecord, StakerWallets,
+};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use std::collections::BTreeMap;
@@ -31,6 +33,8 @@ use std::time::{Duration, Instant};
 const STEPS: usize = 250;
 const STAKERS: usize = 4;
 const BACKERS: usize = 3;
+/// Covered-wallet hashes drawn from a small set, so repeats, taken wallets and the limit all happen.
+const WALLET_HASHES: u8 = 6;
 
 struct Rng(u64);
 impl Rng {
@@ -495,6 +499,13 @@ impl World {
                 }
                 ("marinade_moves", true, Did::Other)
             }
+            39 => {
+                // The backend's registry write: any staker, a hash from the small set (B9: 2 wallets).
+                let writer = self.env.writer.insecure_clone();
+                let h = [self.rng.below(WALLET_HASHES as u64) as u8 + 1; 32];
+                let ix = self.env.register_ix(&writer.pubkey(), spk, h);
+                ("register_wallet", self.send(&[ix], &writer), Did::Other)
+            }
             _ => {
                 let secs = [
                     60,
@@ -508,6 +519,43 @@ impl World {
                 ("warp", true, Did::Other)
             }
         }
+    }
+
+    /// Covered wallets: at most the limit per staker, spare bytes untouched, and every wallet record
+    /// and staker list agree both ways (a wallet belongs to exactly the staker that lists it).
+    fn check_covered_wallets(&self) -> Result<(), String> {
+        for s in &self.stakers {
+            let pk = s.kp.pubkey();
+            let a = self.env.staker_wallets(&pk);
+            if !self.env.exists(&a) {
+                continue;
+            }
+            let w: StakerWallets = self.env.read(&a);
+            if w.count > MAX_COVERED_WALLETS || w.reserved.iter().any(|b| *b != 0) {
+                return Err(format!("staker wallets out of bounds: count {}", w.count));
+            }
+            for h in w.hashes() {
+                let c: CoveredWallet = self.env.read(&self.env.covered(&h));
+                if c.staker != pk || c.wallet_hash != h {
+                    return Err(format!("listed wallet {:?} belongs to {}", h[0], c.staker));
+                }
+            }
+        }
+        for n in 1..=WALLET_HASHES {
+            let a = self.env.covered(&[n; 32]);
+            if !self.env.exists(&a) {
+                continue;
+            }
+            let c: CoveredWallet = self.env.read(&a);
+            let w: StakerWallets = self.env.read(&self.env.staker_wallets(&c.staker));
+            if !w.hashes().contains(&[n; 32]) {
+                return Err(format!(
+                    "wallet {n} on record for {} but not in its list",
+                    c.staker
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn assets(&self) -> u64 {
@@ -524,6 +572,7 @@ impl World {
         pre_assets: u64,
         pre_msol: u64,
     ) -> Result<(), String> {
+        self.check_covered_wallets()?;
         let p = self.pool();
         let now = self.env.now;
         let liquid = self.env.vault_liquid();

@@ -123,7 +123,8 @@ export function fmtDuration(secs: number): string {
 // The program only stores wallet hashes, so the addresses shown here are kept in this browser, per
 // staker (same as the multichain site). The backend's registry is the real list.
 
-export type CoveredWallet = { wallet: string; registeredAt: number };
+// `chain` is missing on rows saved before B9: those are Solana.
+export type CoveredWallet = { chain?: string; wallet: string; registeredAt: number };
 const storageKey = (owner: string) => `safu_solana_covered_wallets:${owner}`;
 
 export function readCoveredWallets(owner: string): CoveredWallet[] {
@@ -135,8 +136,8 @@ export function readCoveredWallets(owner: string): CoveredWallet[] {
   }
 }
 
-export function rememberCoveredWallet(owner: string, wallet: string, registeredAt: number): CoveredWallet {
-  const row = { wallet, registeredAt: registeredAt * 1000 };
+export function rememberCoveredWallet(owner: string, chain: string, wallet: string, registeredAt: number): CoveredWallet {
+  const row = { chain, wallet, registeredAt: registeredAt * 1000 };
   try {
     const cur = readCoveredWallets(owner);
     if (!cur.some((w) => w.wallet === wallet)) localStorage.setItem(storageKey(owner), JSON.stringify([...cur, row]));

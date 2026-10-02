@@ -59,7 +59,7 @@ pub fn register_wallet(
         PoolError::StakerLimitReached
     );
     let slot = wallets.count as usize;
-    wallets.wallet_hashes[slot] = wallet_hash;
+    *wallets.slot_mut(slot) = wallet_hash;
     wallets.count += 1;
     covered.set_inner(CoveredWallet {
         staker,

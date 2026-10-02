@@ -58,7 +58,7 @@ export function ClaimFilePanel() {
             ) : <span>&nbsp;</span>}
           </div>
           <div className="field-input">
-            <input placeholder="Solana transaction signature" value={r} onChange={(e) => setRow(i, e.target.value)} aria-label={`Drain transaction ${i + 1}`} />
+            <input placeholder="Solana signature or Ethereum tx hash (0x...)" value={r} onChange={(e) => setRow(i, e.target.value)} aria-label={`Drain transaction ${i + 1}`} />
           </div>
         </div>
       ))}

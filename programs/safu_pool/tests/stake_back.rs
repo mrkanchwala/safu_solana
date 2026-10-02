@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use safu_pool::constants::*;
 use safu_pool::errors::PoolError;
-use safu_pool::state::{CoveredWallet, Pool, StakeRecord, StakerWallets};
+use safu_pool::state::{CoveredWallet, Pool, StakeRecord, StakerWallets, ACCOUNT_VERSION};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
@@ -632,10 +632,53 @@ fn register_up_to_the_limit() {
     }
     let w: StakerWallets = env.read(&env.staker_wallets(&staker));
     assert_eq!(w.count, MAX_COVERED_WALLETS);
+    assert_eq!(
+        w.hashes(),
+        (0..MAX_COVERED_WALLETS).map(hash).collect::<Vec<_>>()
+    );
     let c: CoveredWallet = env.read(&env.covered(&hash(0)));
     assert_eq!(c.staker, staker);
     let ix = env.register_ix(&writer.pubkey(), staker, hash(MAX_COVERED_WALLETS));
     assert_err(env.send(&[ix], &[&writer]), PoolError::StakerLimitReached);
+}
+
+/// Accounts written by the 1-wallet build (devnet today) keep working: same size, slot 1 and
+/// `bump` in place, and the 2nd wallet lands in what used to be `reserved`.
+#[test]
+fn a_one_wallet_account_from_the_old_layout_takes_a_second_wallet() {
+    use anchor_lang::Discriminator;
+    let mut env = Env::new();
+    let writer = env.writer.insecure_clone();
+    let staker = Keypair::new().pubkey();
+    let ix = env.register_ix(&writer.pubkey(), staker, hash(1));
+    env.ok(&[ix], &[&writer]);
+    let address = env.staker_wallets(&staker);
+    let bump = env.read::<StakerWallets>(&address).bump;
+    // Old layout: version, staker, count, wallet_hashes[1], bump, reserved[64].
+    let mut old = StakerWallets::DISCRIMINATOR.to_vec();
+    old.push(ACCOUNT_VERSION);
+    old.extend_from_slice(staker.as_ref());
+    old.push(1);
+    old.extend_from_slice(&hash(1));
+    old.push(bump);
+    old.extend_from_slice(&[0u8; 64]);
+    let mut acc = env.svm.get_account(&address).unwrap();
+    assert_eq!(
+        acc.data, old,
+        "a 1-wallet account is byte-identical to the old layout"
+    );
+    acc.data = old;
+    env.svm.set_account(address, acc).unwrap();
+    let ix = env.register_ix(&writer.pubkey(), staker, hash(2));
+    env.ok(&[ix], &[&writer]);
+    let w: StakerWallets = env.read(&address);
+    assert_eq!((w.count, w.bump), (2, bump));
+    assert_eq!(w.hashes(), vec![hash(1), hash(2)]);
+    assert!(w.reserved.iter().all(|b| *b == 0));
+    assert_eq!(
+        env.read::<CoveredWallet>(&env.covered(&hash(2))).staker,
+        staker
+    );
 }
 
 #[test]

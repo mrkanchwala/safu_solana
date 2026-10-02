@@ -1,13 +1,17 @@
 // Talks to backend/colosseum_app.py (the claim API). Message formats MUST stay byte-identical with it:
-//   SAFU_SOLANA_COVERED_WALLET:v1:{staker}:{wallet}:{ts}
+//   SAFU_SOLANA_COVERED_WALLET:v2:{staker}:{chain}:{wallet}:{ts}
 //   SAFU_SOLANA_CLAIM:v1:{staker}:{tx1,tx2,...}:{ts}
 // The staking wallet signs each one (Solana signMessage). Nothing about the payout is typed in: the
 // backend reads the loss, the hack time and the tier from the chain, and the oracle submits the claim.
 import type { AppClient } from "./client";
 
+/** Chains a covered wallet can be on (B9). Ethereum is Sepolia while the pool is on devnet. */
+export type CoverChain = "solana" | "sepolia";
+
 export type CoveredWalletResponse = {
   staker: string;
   wallet: string;
+  chain: CoverChain;
   status: "registered" | "send_required" | "not_found_yet";
   registered_at?: number | null;
   method?: string | null;
@@ -47,14 +51,19 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 const now = () => Math.floor(Date.now() / 1000);
 
-export async function addCoveredWallet(client: AppClient, staker: string, wallet: string): Promise<CoveredWalletResponse> {
+export async function addCoveredWallet(
+  client: AppClient,
+  staker: string,
+  chain: CoverChain,
+  wallet: string,
+): Promise<CoveredWalletResponse> {
   const timestamp = now();
-  const signature = await client.signMessage(`SAFU_SOLANA_COVERED_WALLET:v1:${staker}:${wallet}:${timestamp}`);
-  return postJson("/covered-wallets", { staker, wallet, timestamp, signature });
+  const signature = await client.signMessage(`SAFU_SOLANA_COVERED_WALLET:v2:${staker}:${chain}:${wallet}:${timestamp}`);
+  return postJson("/covered-wallets", { staker, chain, wallet, timestamp, signature });
 }
 
-export function confirmCoveredWallet(staker: string, wallet: string): Promise<CoveredWalletResponse> {
-  return postJson("/covered-wallets/confirm", { staker, wallet });
+export function confirmCoveredWallet(staker: string, chain: CoverChain, wallet: string): Promise<CoveredWalletResponse> {
+  return postJson("/covered-wallets/confirm", { staker, chain, wallet });
 }
 
 export async function fileClaim(client: AppClient, staker: string, txHashes: string[]): Promise<FileClaimResult> {

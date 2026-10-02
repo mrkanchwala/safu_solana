@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useAction, useClient } from "../lib/client";
 import { claimYield, stake, withdraw } from "../lib/actions";
 import { addCoveredWallet, confirmCoveredWallet } from "../lib/claimApi";
-import type { CoveredWalletResponse } from "../lib/claimApi";
+import type { CoverChain, CoveredWalletResponse } from "../lib/claimApi";
 import { num, setting } from "../lib/pool";
 import { unstakeFeeBps } from "../lib/program";
 import { fmtSol, parseSol, readCoveredWallets, readMyStake, refreshSoon, rememberCoveredWallet, stakeBounds, withdrawCheck } from "../lib/reads";
@@ -17,6 +17,12 @@ import { TxStatus } from "./TxStatus";
 // same rule as the multichain site, enforced by the claim API too).
 const MAX_COVERED_WALLETS = Number(num("MAX_COVERED_WALLETS"));
 const WALLETS_TEXT = MAX_COVERED_WALLETS === 1 ? "1 wallet" : `${MAX_COVERED_WALLETS} wallets`;
+// Covered wallets can be on Solana or Ethereum, any mix (B9). The API checks the same address formats.
+const CHAINS: { id: CoverChain; label: string; placeholder: string; valid: (a: string) => boolean }[] = [
+  { id: "solana", label: "Solana", placeholder: "Solana wallet address", valid: (a) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a) },
+  { id: "sepolia", label: "Ethereum (Sepolia)", placeholder: "Ethereum address (0x...)", valid: (a) => /^0x[0-9a-fA-F]{40}$/.test(a) },
+];
+const chainLabel = (id?: string) => CHAINS.find((c) => c.id === (id ?? "solana"))?.label ?? id ?? "Solana";
 const RATIOS = [num("TIER_A_RATIO"), num("TIER_B_RATIO"), num("TIER_C_RATIO")];
 
 export function FeeNote({ bps }: { bps: number | null }) {
@@ -41,6 +47,7 @@ export function StakePanel() {
   const [stakeAmount, setStakeAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [newWallet, setNewWallet] = useState("");
+  const [newChain, setNewChain] = useState<CoverChain>("solana");
   const [pending, setPending] = useState<CoveredWalletResponse | null>(null);
   const [walletMsg, setWalletMsg] = useState<string | null>(null);
   const [walletBusy, setWalletBusy] = useState(false);
@@ -83,8 +90,8 @@ export function StakePanel() {
 
   function registered(r: CoveredWalletResponse) {
     if (!staker) return;
-    const row = rememberCoveredWallet(staker, r.wallet, r.registered_at ?? Math.floor(Date.now() / 1000));
-    setCoveredWallets((cur) => (cur.some((w) => w.wallet === row.wallet) ? cur : [...cur, row]));
+    const row = rememberCoveredWallet(staker, r.chain, r.wallet, r.registered_at ?? Math.floor(Date.now() / 1000));
+    setCoveredWallets((cur) => (cur.some((w) => (w.chain ?? "solana") === row.chain && w.wallet === row.wallet) ? cur : [...cur, row]));
     setPending(null);
     setNewWallet("");
     setWalletMsg(r.onchain && r.onchain !== "written" ? "Registered. The on-chain copy will follow shortly." : "Registered.");
@@ -97,10 +104,12 @@ export function StakePanel() {
     if (coveredWallets.length >= MAX_COVERED_WALLETS) return setWalletMsg(`You can cover at most ${WALLETS_TEXT}.`);
     const w = newWallet.trim();
     if (!w) return setWalletMsg("Enter a wallet address.");
+    const chain = CHAINS.find((c) => c.id === newChain)!;
+    if (!chain.valid(w)) return setWalletMsg(`That isn't a valid ${chain.label} address. Check it and try again.`);
     if (w === staker) return setWalletMsg("A covered wallet can't be your staking wallet. Cover the wallets that hold your money.");
     setWalletBusy(true);
     try {
-      const r = await addCoveredWallet(client, staker, w);
+      const r = await addCoveredWallet(client, staker, newChain, w);
       if (r.status === "registered") registered(r);
       else setPending(r);
     } catch (e) {
@@ -115,7 +124,7 @@ export function StakePanel() {
     setWalletBusy(true);
     setWalletMsg(null);
     try {
-      const r = await confirmCoveredWallet(staker, pending.wallet);
+      const r = await confirmCoveredWallet(staker, pending.chain, pending.wallet);
       if (r.status === "registered") registered(r);
       else setWalletMsg("Not on-chain yet. Give it a few seconds after sending, then press Sent again.");
     } catch (e) {
@@ -214,19 +223,20 @@ export function StakePanel() {
           </div>
           <div className="ramp-disclosure">
             Register a wallet before it's drained, because a claim can only name a wallet already on this list.
-            You can cover {WALLETS_TEXT}, not your staking wallet. To prove a wallet is yours, it sends a tiny
-            amount of SOL to itself.
+            You can cover {WALLETS_TEXT}, Solana or Ethereum in any mix, not your staking wallet. To prove a
+            wallet is yours, it sends a tiny amount to itself on its own chain. A covered wallet can't be removed
+            later, and a loss on Ethereum is paid in SOL at the SOL price when the drain was detected.
           </div>
           {coveredWallets.map((w) => (
-            <div className="side-stat" key={w.wallet}>
-              <div className="k">Solana</div>
+            <div className="side-stat" key={`${w.chain ?? "solana"}-${w.wallet}`}>
+              <div className="k">{chainLabel(w.chain)}</div>
               <div className="v" style={{ fontFamily: "var(--font-body)", fontSize: 13 }}>{w.wallet}</div>
             </div>
           ))}
 
           {pending ? (
             <div className="side-stat" style={{ marginTop: 10 }}>
-              <div className="k">Prove you own this wallet</div>
+              <div className="k">Prove you own this {chainLabel(pending.chain)} wallet</div>
               <div className="v" style={{ fontFamily: "var(--font-body)", fontSize: 13 }}>
                 From <b>{pending.wallet}</b>, send exactly <b>{pending.amount} {pending.asset}</b> to the same
                 address (to itself). Then press Sent.
@@ -241,8 +251,17 @@ export function StakePanel() {
             </div>
           ) : coveredWallets.length < MAX_COVERED_WALLETS ? (
             <>
-              <div className="field-input" style={{ marginTop: 10 }}>
-                <input placeholder="Solana wallet address" value={newWallet} onChange={(e) => setNewWallet(e.target.value)} aria-label="Wallet to cover" />
+              <div className="ramp-toggle" role="group" aria-label="Chain of the wallet to cover" style={{ marginTop: 10, marginBottom: 8 }}>
+                {CHAINS.map((c) => (
+                  <button key={c.id} className={`ramp-toggle-btn${newChain === c.id ? " active" : ""}`} aria-pressed={newChain === c.id}
+                    onClick={() => (setNewChain(c.id), setWalletMsg(null))}>
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              <div className="field-input">
+                <input placeholder={CHAINS.find((c) => c.id === newChain)!.placeholder} value={newWallet}
+                  onChange={(e) => setNewWallet(e.target.value)} aria-label="Wallet to cover" />
               </div>
               <button className="secondary-action" style={{ width: "100%" }} disabled={walletBusy} onClick={addWallet}>
                 {walletBusy ? "Checking..." : "Add covered wallet"}

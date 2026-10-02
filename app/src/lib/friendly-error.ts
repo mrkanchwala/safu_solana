@@ -68,7 +68,8 @@ const ACTION_HINTS: Record<string, string> = {
   // Marinade refused the unstake a payout needed (lib/program.ts explain).
   MARINADE_REFUSED: "Marinade couldn't turn the pool's mSOL back into SOL for this right now. Nothing was lost. Try again later, or try a smaller amount.",
   STAKER_WALLET: "A covered wallet can't be your staking wallet. Stake from a separate wallet and cover the ones that hold your money.",
-  WALLET_INVALID: "That isn't a Solana address. Check it and try again.",
+  WALLET_INVALID: "That isn't a valid address for the chain you picked. Check it and try again.",
+  CHAIN_UNSUPPORTED: "Covered wallets can be on Solana or Ethereum only.",
   WALLET_NOT_COVERED:
     "That wallet isn't one of your covered wallets, or wasn't added before this happened. Covered wallets have to be added before anything happens to them.",
   SCAN_FAILED: "We couldn't check that transaction right now. Try again in a moment.",
