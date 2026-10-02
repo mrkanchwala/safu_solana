@@ -500,7 +500,7 @@ impl World {
                 ("marinade_moves", true, Did::Other)
             }
             39 => {
-                // The backend's registry write: any staker, a hash from the small set (B9: 2 wallets).
+                // The backend's registry write: any staker, a hash from the small set.
                 let writer = self.env.writer.insecure_clone();
                 let h = [self.rng.below(WALLET_HASHES as u64) as u8 + 1; 32];
                 let ix = self.env.register_ix(&writer.pubkey(), spk, h);

@@ -123,7 +123,7 @@ export function fmtDuration(secs: number): string {
 // The program only stores wallet hashes, so the addresses shown here are kept in this browser, per
 // staker (same as the multichain site). The backend's registry is the real list.
 
-// `chain` is missing on rows saved before B9: those are Solana.
+// `chain` is missing on rows saved before Ethereum wallets were added: those are Solana.
 export type CoveredWallet = { chain?: string; wallet: string; registeredAt: number };
 const storageKey = (owner: string) => `safu_solana_covered_wallets:${owner}`;
 

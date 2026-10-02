@@ -17,7 +17,7 @@ import { TxStatus } from "./TxStatus";
 // same rule as the multichain site, enforced by the claim API too).
 const MAX_COVERED_WALLETS = Number(num("MAX_COVERED_WALLETS"));
 const WALLETS_TEXT = MAX_COVERED_WALLETS === 1 ? "1 wallet" : `${MAX_COVERED_WALLETS} wallets`;
-// Covered wallets can be on Solana or Ethereum, any mix (B9). The API checks the same address formats.
+// Covered wallets can be on Solana or Ethereum, any mix. The API checks the same address formats.
 const CHAINS: { id: CoverChain; label: string; placeholder: string; valid: (a: string) => boolean }[] = [
   { id: "solana", label: "Solana", placeholder: "Solana wallet address", valid: (a) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a) },
   { id: "sepolia", label: "Ethereum (Sepolia)", placeholder: "Ethereum address (0x...)", valid: (a) => /^0x[0-9a-fA-F]{40}$/.test(a) },

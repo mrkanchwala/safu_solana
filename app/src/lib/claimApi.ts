@@ -5,7 +5,7 @@
 // backend reads the loss, the hack time and the tier from the chain, and the oracle submits the claim.
 import type { AppClient } from "./client";
 
-/** Chains a covered wallet can be on (B9). Ethereum is Sepolia while the pool is on devnet. */
+/** Chains a covered wallet can be on. Ethereum is Sepolia while the pool is on devnet. */
 export type CoverChain = "solana" | "sepolia";
 
 export type CoveredWalletResponse = {
