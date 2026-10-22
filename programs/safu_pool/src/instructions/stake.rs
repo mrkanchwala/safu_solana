@@ -139,8 +139,8 @@ pub struct Stake<'info> {
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
-    /// Created on the first stake and after a full withdraw (the record is closed then). An existing
-    /// record is a live or forfeited stake: both refuse a new one in the handler.
+    /// Created on the first stake and kept after a full withdraw (at zero, reused by the next stake).
+    /// A live or forfeited stake refuses a new one in the handler.
     #[account(
         init_if_needed,
         payer = payer,
