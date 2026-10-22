@@ -300,3 +300,34 @@ pub struct CashShortDay {
     pub day: i64,
     pub days_total: u64,
 }
+
+/// USDC arrived over CCTP into a CCTP owner's account (`to_deploy` waits to be staked or backed).
+#[event]
+pub struct CctpReceived {
+    pub account: Pubkey,
+    pub identity: Pubkey,
+    pub home_domain: u32,
+    pub mode: u8,
+    pub amount: u64,
+}
+/// Waiting USDC was staked or backed, as the owner's burn asked.
+#[event]
+pub struct CctpDeployed {
+    pub identity: Pubkey,
+    pub mode: u8,
+    pub amount: u64,
+}
+/// The owner's signed call ran (`call` = the pool instruction's discriminator).
+#[event]
+pub struct CctpActed {
+    pub identity: Pubkey,
+    pub nonce: u64,
+    pub call: [u8; 8],
+}
+/// USDC burned home to the owner over CCTP.
+#[event]
+pub struct CctpSentHome {
+    pub identity: Pubkey,
+    pub home_domain: u32,
+    pub amount: u64,
+}

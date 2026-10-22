@@ -250,7 +250,9 @@ fn clear_request(record: &mut BackerRecord) {
 
 #[derive(Accounts)]
 pub struct Back<'info> {
+    /// Pays rent for a new record (see `Stake::payer`).
     #[account(mut)]
+    pub payer: Signer<'info>,
     pub backer: Signer<'info>,
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
@@ -258,7 +260,7 @@ pub struct Back<'info> {
     pub vault: Box<Account<'info, TokenAccount>>,
     #[account(
         init_if_needed,
-        payer = backer,
+        payer = payer,
         space = 8 + BackerRecord::INIT_SPACE,
         seeds = [SEED_BACKER, pool.key().as_ref(), backer.key().as_ref()],
         bump,

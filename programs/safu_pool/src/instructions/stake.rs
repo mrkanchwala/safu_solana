@@ -130,7 +130,10 @@ fn recheck_capital(pool: &Pool) -> Result<()> {
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
+    /// Pays rent for new records. Usually the staker; a CCTP owner's account has no SOL, so its
+    /// relayer pays.
     #[account(mut)]
+    pub payer: Signer<'info>,
     pub staker: Signer<'info>,
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
@@ -140,7 +143,7 @@ pub struct Stake<'info> {
     /// record is a live or forfeited stake: both refuse a new one in the handler.
     #[account(
         init_if_needed,
-        payer = staker,
+        payer = payer,
         space = 8 + StakeRecord::INIT_SPACE,
         seeds = [SEED_STAKE, pool.key().as_ref(), staker.key().as_ref()],
         bump,
@@ -157,7 +160,7 @@ pub struct Stake<'info> {
     /// Leave it out when the deposit is within the max.
     #[account(
         init_if_needed,
-        payer = staker,
+        payer = payer,
         space = 8 + BackerRecord::INIT_SPACE,
         seeds = [SEED_BACKER, pool.key().as_ref(), staker.key().as_ref()],
         bump,

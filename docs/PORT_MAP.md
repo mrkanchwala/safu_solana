@@ -93,3 +93,23 @@ form differs (reason given). **Left out** = not in this build.
   largest money call, `stake`, is 1,143 bytes, under the 1,232-byte limit with room for compute-budget
   instructions; no lookup table needed. Deposit by CPI ~42k CU. Client limit `computeUnitLimit` in
   `config/pool.devnet.json` (200k); the test suite fails if a withdraw with a pull exceeds it.
+
+## CCTP (stake and back from Ethereum and Stellar)
+
+Multichain `cctp-adapter` + `safu-account` + `cctp-common`, as one part of this program
+(`instructions/cctp.rs`, rules and Circle's layout in `pool-core/src/cctp.rs`).
+
+| Multichain | Solana | Note |
+|---|---|---|
+| Two adapters (stake, back) | Two inboxes `[cctp_inbox, pool, mode]` | The burn's `mintRecipient` picks the mode, so the owner's own burn sets the intent. `destinationCaller` = `[cctp_authority, pool]`. |
+| `mint_and_stake` (receive + stake, or hold) | `cctp_receive` then `cctp_deploy` | Solana cannot catch a failed call, so receiving never depends on the pool: the USDC lands in `held` and `cctp_deploy` (anyone) stakes or backs it. A refused deploy leaves it held, never lost. |
+| Per-user contract account | Identity PDA (staker/backer key) + `CctpAccount` + `held` token account | The program signs for the identity only after the owner's signature checks out. |
+| `__check_auth` + allowed calls | `cctp_act` | Runs one allowed pool call as the identity. The owner signs the call's data and its own accounts; upkeep accounts after them are not signed (they change as the pool moves and move no money). `set_beneficiary` is not allowed, and a stake's beneficiary must be the identity. |
+| `send_home` | `cctp_send_home` | Ethereum: burn to the owner's address. Stellar: burn to Circle's CctpForwarder with the owner's `G...` strkey in hook data (Circle: a Stellar `mintRecipient` is always a contract). Standard finality, max fee 0 (Circle's Solana minimum, 2026-10-22). |
+| Owner signatures (EVM, Solana) | EVM `personal_sign` of the 32-byte digest; Stellar SEP-53 `signMessage` of the digest as hex text | Each signature carries a nonce (works once) and an expiry (at most `MAX_ACTION_TTL_SECS`). |
+| Decimals from Circle's config | `bridge_scale` refuses a mint with fewer decimals than canonical (KupiaSec #4) | Solana USDC is 6 = canonical, scale 1. |
+| Solana as a home chain | not applicable | Solana users stake directly. |
+
+Tests run against Circle's real devnet programs (`tests/fixtures/cctp_*`), with Circle's two attester
+keys swapped for test keys. Compute: receive about 240k (mostly Circle), owner-signed call about 50k
+on top of the call it runs.

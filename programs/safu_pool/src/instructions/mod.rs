@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod backer;
+pub mod cctp;
 pub mod claim;
 pub mod governance;
 pub mod registry;
@@ -11,6 +12,7 @@ pub mod yield_leg;
 
 pub use admin::*;
 pub use backer::*;
+pub use cctp::*;
 pub use claim::*;
 pub use governance::*;
 pub use registry::*;

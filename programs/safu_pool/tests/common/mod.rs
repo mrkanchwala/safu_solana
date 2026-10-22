@@ -49,6 +49,25 @@ const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/pool.dev
 pub struct Config {
     pub pool_cap: u64,
     pub compute_unit_limit: u64,
+    /// Circle's CctpForwarder on Stellar, as its contract id.
+    pub stellar_forwarder: [u8; 32],
+}
+
+/// The 32-byte payload of a Stellar strkey (`G...` or `C...`): base32, version byte, payload, CRC.
+pub fn strkey_payload(strkey: &str) -> [u8; 32] {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let (mut acc, mut bits, mut raw) = (0u64, 0u32, Vec::new());
+    for ch in strkey.bytes() {
+        let v = ALPHABET.iter().position(|a| *a == ch).expect("base32") as u64;
+        acc = (acc << 5) | v;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            raw.push((acc >> bits) as u8);
+        }
+    }
+    assert_eq!(raw.len(), 35, "strkey length");
+    raw[1..33].try_into().unwrap()
 }
 
 pub fn config() -> Config {
@@ -57,6 +76,7 @@ pub fn config() -> Config {
     Config {
         pool_cap: v["poolCapUsdc"].as_u64().unwrap(),
         compute_unit_limit: v["computeUnitLimit"].as_u64().unwrap(),
+        stellar_forwarder: strkey_payload(v["stellarForwarder"].as_str().unwrap()),
     }
 }
 
@@ -208,6 +228,7 @@ impl Env {
             treasury: self.treasury.pubkey(),
             cluster: CLUSTER_LOCALNET,
             pool_cap: self.cfg.pool_cap,
+            stellar_forwarder: self.cfg.stellar_forwarder,
         }
     }
 
@@ -524,6 +545,7 @@ impl Env {
     ) -> Instruction {
         self.ix(
             safu_pool::accounts::Stake {
+                payer: *staker,
                 staker: *staker,
                 pool: self.pool(),
                 vault: self.vault(),
@@ -597,6 +619,7 @@ impl Env {
     pub fn back_ix(&self, backer: &Pubkey, amount: u64) -> Instruction {
         self.ix(
             safu_pool::accounts::Back {
+                payer: *backer,
                 backer: *backer,
                 pool: self.pool(),
                 vault: self.vault(),

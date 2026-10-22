@@ -125,6 +125,42 @@ pub mod safu_pool {
         upkept!(ctx, instructions::backer::claim_backer_yield)
     }
 
+    // CCTP: stake and back from Ethereum and Stellar.
+    pub fn cctp_open_inbox(ctx: Context<CctpOpenInbox>, mode: u8) -> Result<()> {
+        instructions::cctp::cctp_open_inbox(ctx, mode)
+    }
+    pub fn cctp_receive(
+        ctx: Context<CctpReceive>,
+        mode: u8,
+        home_domain: u32,
+        home_owner: [u8; 32],
+        message: Vec<u8>,
+        attestation: Vec<u8>,
+    ) -> Result<()> {
+        instructions::cctp::cctp_receive(ctx, mode, home_domain, home_owner, message, attestation)
+    }
+    pub fn cctp_deploy<'info>(ctx: Context<'info, CctpCall<'info>>) -> Result<()> {
+        instructions::cctp::cctp_deploy(ctx)
+    }
+    pub fn cctp_act<'info>(
+        ctx: Context<'info, CctpCall<'info>>,
+        nonce: u64,
+        expires_at: i64,
+        signature: OwnerSignature,
+        signed_accounts: u8,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        instructions::cctp::cctp_act(ctx, nonce, expires_at, signature, signed_accounts, data)
+    }
+    pub fn cctp_send_home(
+        ctx: Context<CctpSendHome>,
+        nonce: u64,
+        expires_at: i64,
+        signature: OwnerSignature,
+    ) -> Result<()> {
+        instructions::cctp::cctp_send_home(ctx, nonce, expires_at, signature)
+    }
+
     // Protocol revenue.
     pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
         instructions::upkeep::withdraw_yield(ctx, amount)

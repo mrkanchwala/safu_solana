@@ -263,6 +263,32 @@ pub enum PoolError {
     ApproverNotSecondRole,
     #[msg("The bridged mint has fewer decimals than Circle's canonical ones")]
     DecimalsMismatch,
+    #[msg("Not a CCTP v2 burn message")]
+    CctpMalformedMessage,
+    #[msg("The burn's destinationCaller is not this pool")]
+    CctpWrongCaller,
+    #[msg("The burn's mintRecipient is not this inbox")]
+    CctpWrongRecipient,
+    #[msg("The burn is not from a supported home chain to Solana")]
+    CctpUnsupportedDomain,
+    #[msg("The burner is not this account's owner")]
+    CctpWrongOwner,
+    #[msg("Circle's receive minted nothing to the inbox")]
+    CctpNothingMinted,
+    #[msg("Nothing waiting to be staked or backed")]
+    CctpNothingToDeploy,
+    #[msg("A CCTP owner cannot make that call")]
+    CctpCallNotAllowed,
+    #[msg("Signed with a different nonce: sign again")]
+    CctpBadNonce,
+    #[msg("Not the owner's signature")]
+    CctpBadSignature,
+    #[msg("Not the owner's kind of signature (Ethereum or Stellar)")]
+    CctpWrongSignatureKind,
+    #[msg("A CCTP owner's payouts go only to their own account")]
+    CctpBeneficiaryNotOwn,
+    #[msg("Nothing bridgeable to send home")]
+    CctpNothingToSend,
 }
 
 impl From<CoreError> for PoolError {

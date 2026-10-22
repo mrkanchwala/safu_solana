@@ -241,8 +241,11 @@ pub struct Pool {
     /// Days a claim payout found the pool short of cash (rule 18), and the last one counted.
     pub cash_short_days: u64,
     pub last_cash_short_day: i64,
+    /// Circle's CctpForwarder on Stellar (contract id): payouts to a Stellar CCTP owner go through it
+    /// (`pool_core::cctp::forward_hook`). Deploy config, fixed at `initialize`.
+    pub stellar_forwarder: [u8; 32],
     /// Room for fields a later upgrade adds.
-    pub reserved: [u8; 232], // hardcode-ok: spare layout bytes, not a rule
+    pub reserved: [u8; 200], // hardcode-ok: spare layout bytes, not a rule
 }
 
 impl Pool {
@@ -565,4 +568,32 @@ pub struct OverrideRequest {
 pub struct RevokedApproval {
     pub hash: [u8; 32],
     pub bump: u8,
+}
+
+/// A CCTP owner's account: someone who staked or backed from Ethereum or Stellar with USDC over
+/// Circle CCTP and holds no Solana key. PDA `[SEED_CCTP_ACCOUNT, identity]`.
+///
+/// `identity` (PDA `[SEED_CCTP_IDENTITY, pool, mode, home domain, owner]`, no data) is the staker or
+/// backer the pool sees; only this program signs for it, after checking the owner's home-wallet
+/// signature (`instructions::cctp`). Its USDC waits in `held` (PDA `[SEED_CCTP_HELD, identity]`)
+/// and only ever leaves into the pool or home to the owner.
+#[account]
+#[derive(InitSpace)]
+pub struct CctpAccount {
+    pub version: u8,
+    /// `pool_core::cctp::MODE_STAKE` or `MODE_BACK`: what deposits through this account are for.
+    pub mode: u8,
+    /// Circle domain of the owner's home chain.
+    pub home_domain: u32,
+    /// The owner as a CCTP `bytes32` (Ethereum addresses left-padded).
+    pub home_owner: [u8; 32],
+    /// The next owner signature must carry this nonce; each one is used once.
+    pub nonce: u64,
+    /// Arrived by CCTP and not yet staked or backed: anyone may deploy it (`cctp_deploy`), as the
+    /// owner's burn asked. Sending home clears it.
+    pub to_deploy: u64,
+    pub bump: u8,
+    pub identity_bump: u8,
+    /// Room for fields a later upgrade adds.
+    pub reserved: [u8; 64],
 }

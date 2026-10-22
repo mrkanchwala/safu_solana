@@ -3,10 +3,11 @@
   "rpcUrl": "https://api.devnet.solana.com",
   "siteRpcPath": "/rpc",
   "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "stellarForwarder": "CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ",
   "poolCapUsdc": 100000000000,
   "computeUnitLimit": 400000,
   "drainTestMints": {
     "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   },
-  "_note": "Deploy values only. Program id comes from the IDL (target/idl/safu_pool.json `address`); every rule number comes from the IDL constants. `usdcMint`: Circle's USDC on this cluster (classic SPL Token, 6 decimals; `initialize` refuses anything else). `poolCapUsdc`: USDC base units, same cap as the Stellar pool ($100,000). `siteRpcPath`: the deployed site reads the chain through the claim API (/rpc, server-side provider failover); `rpcUrl` is for tools and local dev."
+  "_note": "Deploy values only. Program id comes from the IDL (target/idl/safu_pool.json `address`); every rule number comes from the IDL constants. `usdcMint`: Circle's USDC on this cluster (classic SPL Token, 6 decimals; `initialize` refuses anything else). `poolCapUsdc`: USDC base units, same cap as the Stellar pool ($100,000). `siteRpcPath`: the deployed site reads the chain through the claim API (/rpc, server-side provider failover); `rpcUrl` is for tools and local dev. `stellarForwarder`: Circle's CctpForwarder contract on Stellar for this cluster (testnet for devnet/localnet; mainnet CBZL2IH7F6BIDAA3WBNXYKIXSATJGMSW7K5P5MJ6STX5RXN47TZJDF5T), from developers.circle.com/cctp/references/stellar-contracts."
 }

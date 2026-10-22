@@ -21,12 +21,36 @@ pub mod domain {
 /// Home chains a CCTP staker or backer can come from.
 pub const SUPPORTED_HOME_DOMAINS: [u32; 2] = [domain::ETHEREUM, domain::STELLAR];
 
+/// What a CCTP deposit is for. The owner's burn picks it by naming the stake inbox or the back
+/// inbox as `mintRecipient`, so a relayer cannot switch it.
+pub const MODE_STAKE: u8 = 0;
+pub const MODE_BACK: u8 = 1;
+
 /// `MessageV2.version` and `BurnMessageV2.version`.
 pub const MESSAGE_VERSION: u32 = 1;
 pub const BURN_MESSAGE_VERSION: u32 = 1;
 
 /// Standard (finalized) transfer: outbound burns always use it.
 pub const FINALITY_STANDARD: u32 = 2000;
+
+/// Circle's MessageTransmitterV2 on Solana (`CCTPV2Sm4AdWt5296sk4P66VBZ7bEhcARwFaaS9YPbeC`, same on
+/// devnet and mainnet).
+pub const MESSAGE_TRANSMITTER_ID: [u8; 32] = [
+    166, 95, 200, 28, 225, 158, 220, 210, 210, 195, 64, 176, 47, 166, 27, 225, 213, 186, 221, 225,
+    89, 40, 51, 221, 249, 32, 9, 216, 207, 104, 84, 85,
+];
+/// Circle's TokenMessengerMinterV2 on Solana (`CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe`).
+pub const TOKEN_MESSENGER_MINTER_ID: [u8; 32] = [
+    166, 95, 200, 29, 15, 239, 168, 134, 12, 179, 184, 63, 8, 155, 2, 36, 190, 138, 102, 135, 183,
+    174, 73, 245, 148, 192, 185, 180, 215, 233, 56, 147,
+];
+/// Anchor discriminators of the Circle calls the pool makes (`sha256("global:<name>")[..8]`).
+pub const DISC_RECEIVE_MESSAGE: [u8; 8] = [38, 144, 127, 225, 31, 225, 238, 25];
+pub const DISC_DEPOSIT_FOR_BURN: [u8; 8] = [215, 60, 61, 46, 114, 55, 128, 176];
+pub const DISC_DEPOSIT_FOR_BURN_WITH_HOOK: [u8; 8] = [111, 245, 62, 131, 204, 108, 223, 155];
+/// Circle's minimum fee for a standard burn from Solana, read from devnet's TokenMessenger
+/// (2026-10-22): zero. If Circle raises it, an outbound burn refuses and the USDC stays held.
+pub const OUTBOUND_MAX_FEE: u64 = 0;
 
 /// Circle's canonical USDC decimals: every CCTP amount is in these units.
 pub const CANONICAL_DECIMALS: u8 = 6;

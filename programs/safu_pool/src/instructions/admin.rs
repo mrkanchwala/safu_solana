@@ -22,6 +22,8 @@ pub struct InitArgs {
     pub treasury: Pubkey,
     pub cluster: u8,
     pub pool_cap: u64,
+    /// Circle's CctpForwarder contract id on Stellar for this cluster (deploy config).
+    pub stellar_forwarder: [u8; 32],
 }
 
 #[derive(Accounts)]
@@ -88,6 +90,7 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
     pool.registry_writer = args.registry_writer;
     pool.treasury = args.treasury;
     pool.cluster = args.cluster;
+    pool.stellar_forwarder = args.stellar_forwarder;
     pool.bump = ctx.bumps.pool;
     pool.vault_bump = ctx.bumps.vault;
     pool.settings = settings.values;

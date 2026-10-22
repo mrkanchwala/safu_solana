@@ -175,6 +175,43 @@ pub const SEED_LEG: &[u8] = b"leg";
 /// Kamino Lend (klend), the only yield venue program the pool calls.
 #[constant]
 pub const KLEND_PROGRAM_ID: Pubkey = Pubkey::new_from_array(pool_core::kamino::PROGRAM_ID);
+/// Circle CCTP v2 (`pool_core::cctp`): stake and back from Ethereum and Stellar.
+#[constant]
+pub const CCTP_MESSAGE_TRANSMITTER_ID: Pubkey =
+    Pubkey::new_from_array(pool_core::cctp::MESSAGE_TRANSMITTER_ID);
+#[constant]
+pub const CCTP_TOKEN_MESSENGER_MINTER_ID: Pubkey =
+    Pubkey::new_from_array(pool_core::cctp::TOKEN_MESSENGER_MINTER_ID);
+/// Signs Circle's `receive_message` as the burn's `destinationCaller`: `[SEED_CCTP_AUTHORITY, pool]`.
+#[constant]
+pub const SEED_CCTP_AUTHORITY: &[u8] = b"cctp_authority";
+/// Where Circle mints, one per mode: `[SEED_CCTP_INBOX, pool, mode]`, authority `SEED_CCTP_AUTHORITY`.
+#[constant]
+pub const SEED_CCTP_INBOX: &[u8] = b"cctp_inbox";
+/// A CCTP owner's staker/backer key: `[SEED_CCTP_IDENTITY, pool, mode, home domain (u32 BE), owner]`.
+#[constant]
+pub const SEED_CCTP_IDENTITY: &[u8] = b"cctp_identity";
+/// Its record: `[SEED_CCTP_ACCOUNT, identity]` (`CctpAccount`).
+#[constant]
+pub const SEED_CCTP_ACCOUNT: &[u8] = b"cctp_account";
+/// Its USDC: `[SEED_CCTP_HELD, identity]`, authority the identity.
+#[constant]
+pub const SEED_CCTP_HELD: &[u8] = b"cctp_held";
+#[constant]
+pub const CCTP_DOMAIN_ETHEREUM: u32 = pool_core::cctp::domain::ETHEREUM;
+#[constant]
+pub const CCTP_DOMAIN_SOLANA: u32 = pool_core::cctp::domain::SOLANA;
+#[constant]
+pub const CCTP_DOMAIN_STELLAR: u32 = pool_core::cctp::domain::STELLAR;
+#[constant]
+pub const CCTP_MODE_STAKE: u8 = pool_core::cctp::MODE_STAKE;
+#[constant]
+pub const CCTP_MODE_BACK: u8 = pool_core::cctp::MODE_BACK;
+/// The domain tag at the start of what a CCTP owner signs (`pool_core::cctp::action_preimage`).
+#[constant]
+pub const CCTP_ACTION_DOMAIN: &[u8] = pool_core::cctp::ACTION_DOMAIN;
+#[constant]
+pub const MAX_ACTION_TTL_SECS: i64 = p::MAX_ACTION_TTL_SECS;
 /// Watch-list places each upkeep checks.
 #[constant]
 pub const UPKEEP_WATCH_PER_CALL: u64 = p::UPKEEP_WATCH_PER_CALL as u64;
