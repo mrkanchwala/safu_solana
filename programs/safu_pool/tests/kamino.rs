@@ -451,6 +451,83 @@ fn heavy_calls_harvest_at_the_site_limit_and_never_fail_at_the_default() {
     }
 }
 
+/// The busiest a user call gets: harvest on a stale price, the push of new cash into klend, then a
+/// full upkeep (the head of the line released, both watch places expiring their claims). It still
+/// fits the site's compute limit.
+#[test]
+fn a_backing_with_harvest_push_and_full_upkeep_fits_the_site_limit() {
+    use safu_pool::constants::TIER_A;
+    use safu_pool::state::ClaimStatus;
+    let mut env = setup(5_000);
+    env.matured_backer(160 * unit());
+    let (_, max) = bounds();
+    // Two admitted claims (watch places 0 and 1), a day apart for the oracle's daily limit.
+    let txs = [[21u8; 32], [22u8; 32]];
+    let claimants: Vec<_> = txs.iter().map(|_| env.staker(max)).collect();
+    for (i, (s, tx)) in claimants.iter().zip(&txs).enumerate() {
+        if i > 0 {
+            warp(&mut env, 86_400);
+        }
+        let a = env.approval(&s.pubkey(), *tx, max, TIER_A);
+        env.submit(&a).unwrap();
+    }
+    // One claim in line: too big for the pool as it is.
+    let q = env.staker(max);
+    let a = env.approval(&q.pubkey(), TX, env.tier_cap(max, TIER_A), TIER_A);
+    env.submit(&a).unwrap();
+    assert_eq!(
+        env.claim_state(&q.pubkey(), &TX).status,
+        ClaimStatus::Reserved
+    );
+    // Turn the watch cursor so this call's two watch places are the two admitted claims (places
+    // 0 and 1); the calls that turn it run before any window ends, so they change nothing else.
+    for _ in 0..3 {
+        let pool = env.pool_state();
+        let places =
+            pool_core::upkeep::watch_places(pool.watch_head, pool.watch_tail, pool.watch_cursor);
+        if places[..2] == [Some(0), Some(1)] {
+            break;
+        }
+        let s = &claimants[0];
+        let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
+        env.send(&[ix], &[s]).unwrap();
+    }
+    // Past both watched claims' approve deadlines, a new day, no Scope update.
+    let deadline = claimants
+        .iter()
+        .zip(&txs)
+        .map(|(c, tx)| {
+            let r = env.stake_state(&c.pubkey());
+            r.staked_at + r.time_gate_secs + env.claim_state(&c.pubkey(), tx).approve_window
+        })
+        .max()
+        .unwrap();
+    let wait = (deadline + 86_400 - env.now).max(86_400);
+    warp(&mut env, wait);
+    let harvested_at = env.pool_state().last_harvest_at;
+    // A large backing makes room for the claim in line.
+    let b = env.funded(100_000 * USDC);
+    let ix = env.back_ix(&b.pubkey(), 100_000 * USDC);
+    let cu = env.send_cu(&[ix], &[&b]).unwrap();
+    println!("backing with harvest, push and full upkeep: {cu} compute units");
+    assert_ne!(
+        env.pool_state().last_harvest_at,
+        harvested_at,
+        "harvest ran"
+    );
+    assert_ne!(
+        env.claim_state(&q.pubkey(), &TX).status,
+        ClaimStatus::Reserved,
+        "line released"
+    );
+    for (s, tx) in claimants.iter().zip(&txs) {
+        assert_eq!(
+            env.claim_state(&s.pubkey(), tx).status,
+            ClaimStatus::Expired
+        );
+    }
+}
+
 #[test]
 fn the_venue_is_checked_before_any_call() {
     let mut env = setup(5_000);
