@@ -224,7 +224,8 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
         points_index_at: pool.points_index[STAKER],
         claim_approved: false,
         bump: ctx.bumps.stake_record,
-        reserved: [0; 64],
+        suspended_until: 0,
+        reserved: [0; 56],
     });
     pool.total_staked = pool_core::add(pool.total_staked, staked).core()?;
     pool.total_stakers = pool_core::add(pool.total_stakers, 1).core()?;

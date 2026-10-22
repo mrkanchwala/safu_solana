@@ -205,6 +205,9 @@ pub mod safu_pool {
     pub fn suspend_stake(ctx: Context<AdminStake>, staker: Pubkey) -> Result<()> {
         instructions::claim::suspend_stake(ctx, staker)
     }
+    pub fn renew_suspension(ctx: Context<RenewSuspension>, staker: Pubkey) -> Result<()> {
+        instructions::claim::renew_suspension(ctx, staker)
+    }
     pub fn unsuspend_stake(ctx: Context<AdminStake>, staker: Pubkey) -> Result<()> {
         instructions::claim::unsuspend_stake(ctx, staker)
     }

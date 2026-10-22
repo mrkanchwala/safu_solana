@@ -345,7 +345,8 @@ pub struct StakeRecord {
     /// The claim whose approval forfeited this stake. Only that claim may re-use the forfeited
     /// principal (a 2-of-2 override correcting it); any other claim on this stake is refused.
     pub forfeited_by: Option<Pubkey>,
-    /// Admin hold on payouts. Does not block principal withdrawal.
+    /// Admin hold on payouts, in force until `suspended_until` (`is_suspended`). Does not block
+    /// principal withdrawal.
     pub suspended: bool,
     /// Settings fixed when this stake was made, part of the promise to this staker. Tier ratios:
     /// the higher of these and the live setting applies (a cut never reaches this stake, a raise
@@ -370,11 +371,18 @@ pub struct StakeRecord {
     /// restored the stake and it was then withdrawn.
     pub claim_approved: bool,
     pub bump: u8,
+    /// End of the last suspension (0 = never suspended). Claim windows never start before it.
+    pub suspended_until: i64,
     /// Room for fields a later upgrade adds.
-    pub reserved: [u8; 64],
+    pub reserved: [u8; 56],
 }
 
 impl StakeRecord {
+    /// Payouts held: suspended, and the suspension has not lapsed.
+    pub fn is_suspended(&self, now: i64) -> bool {
+        self.suspended && now < self.suspended_until
+    }
+
     /// This stake's tier ratios against the live ones: the higher of each.
     pub fn tier_ratios(&self, live: TierRatios) -> TierRatios {
         TierRatios {

@@ -936,6 +936,19 @@ impl Env {
         }
     }
 
+    /// The admin plus `approver` (co-signer or guardian) start or extend a suspension.
+    pub fn renew_suspension_ix(&self, staker: &Pubkey, approver: &Pubkey) -> Instruction {
+        self.ix(
+            safu_pool::accounts::RenewSuspension {
+                admin: self.admin.pubkey(),
+                approver: *approver,
+                pool: self.pool(),
+                stake_record: self.stake_record(staker),
+            },
+            safu_pool::instruction::RenewSuspension { staker: *staker },
+        )
+    }
+
     pub fn revoke_ix(&self, admin: &Pubkey, a: &ClaimApproval, hash: [u8; 32]) -> Instruction {
         self.ix(
             safu_pool::accounts::RevokeApproval {
@@ -1236,6 +1249,13 @@ pub fn ed25519_ix(signer: &Keypair, message: &[u8], indexes: [u16; 3]) -> Instru
         accounts: vec![],
         data,
     }
+}
+
+/// An admin hold on a stake, in force (`on`) or lifted, as `suspend_stake` / `unsuspend_stake`
+/// leave it, without the clocks those set.
+pub fn hold(r: &mut StakeRecord, on: bool) {
+    r.suspended = on;
+    r.suspended_until = if on { i64::MAX } else { 0 };
 }
 
 pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolError) {

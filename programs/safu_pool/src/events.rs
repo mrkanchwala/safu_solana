@@ -175,6 +175,14 @@ pub struct ApprovalRevoked {
 #[event]
 pub struct StakeSuspended {
     pub staker: Pubkey,
+    pub until: i64,
+}
+/// A suspension started or extended by the admin plus a second role.
+#[event]
+pub struct SuspensionRenewed {
+    pub staker: Pubkey,
+    pub approver: Pubkey,
+    pub until: i64,
 }
 #[event]
 pub struct StakeUnsuspended {

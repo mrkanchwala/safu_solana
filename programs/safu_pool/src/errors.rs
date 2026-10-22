@@ -257,6 +257,10 @@ pub enum PoolError {
     MinAmountNotMet,
     #[msg("Pool data is from an older version: run migrate first")]
     NotMigrated,
+    #[msg("Suspending again this soon after a suspension needs a second role")]
+    SuspendNeedsSecondRole,
+    #[msg("The second approver must be the co-signer or the guardian")]
+    ApproverNotSecondRole,
 }
 
 impl From<CoreError> for PoolError {

@@ -47,6 +47,10 @@ pub const APPROVE_WINDOW_SECS: i64 = clock(100 * SECONDS_PER_DAY, SECONDS_PER_HO
 pub const COLLECTION_INACTIVITY_SECS: i64 = clock(100 * SECONDS_PER_DAY, SECONDS_PER_HOUR);
 /// Withdraw lock after a false-positive cancel of an approved claim.
 pub const PENALTY_LOCK_SECS: i64 = clock(365 * SECONDS_PER_DAY, 10 * SECONDS_PER_MINUTE);
+/// An admin's suspension lapses after this long, and suspending the same stake again within this
+/// long after one ends needs a second role (multichain `SUSPEND_MAX_SECONDS`): one key alone can
+/// never hold a claimant for good.
+pub const SUSPEND_MAX_SECS: i64 = clock(30 * SECONDS_PER_DAY, 10 * SECONDS_PER_MINUTE);
 /// A claim must be filed within this long of the hack. Real time in both builds. (setting default;
 /// each stake keeps the value it staked under)
 pub const CLAIM_WINDOW_SECS: i64 = 30 * SECONDS_PER_DAY;

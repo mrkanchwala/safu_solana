@@ -224,9 +224,9 @@ fn a_place_whose_accounts_the_transaction_holds_waits_for_the_next_one() {
     let mut env = Env::new();
     let s = queued(&mut env);
     let rec = env.stake_record(&s.pubkey());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, true));
     env.matured_backer(backing());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = false);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, false));
     // The claimant's own yield claim holds its stake record: the head is left alone.
     env.edit::<safu_pool::state::Pool>(&env.pool(), |p| p.staker_yield_reserved = 1);
     env.edit::<StakeRecord>(&rec, |r| r.yield_owed = 1);

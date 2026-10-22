@@ -296,7 +296,7 @@ fn stake_state_checks_on_submit() {
     ] {
         env.edit::<StakeRecord>(&rec, |r| {
             r.forfeited = edit == 0;
-            r.suspended = edit == 1;
+            hold(r, edit == 1);
             r.active_claim = (edit == 2).then_some(marker);
             r.reserved_claim = (edit == 3).then_some(marker);
         });
@@ -410,7 +410,7 @@ fn a_new_claim_joins_the_back_while_anyone_waits() {
     let s = queued_stakers(&mut env, &[TX]).remove(0);
     // The head cannot go yet (suspended), though there is room now.
     let rec = env.stake_record(&s.pubkey());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, true));
     env.matured_backer(4 * backing());
     // There is room for a small claim, but someone is in line: it queues behind.
     let (_, max) = bounds();
@@ -420,7 +420,7 @@ fn a_new_claim_joins_the_back_while_anyone_waits() {
     env.submit(&a).unwrap();
     let c = env.claim_state(&late.pubkey(), &TX2);
     assert_eq!((c.status, c.queue_seq), (ClaimStatus::Reserved, 1));
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = false);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, false));
     env.release(&s.pubkey(), &TX).unwrap();
     env.release(&late.pubkey(), &TX2).unwrap();
     // Line empty again: the next claim is admitted directly.
@@ -599,7 +599,7 @@ fn release_refused_when_the_stake_changed_or_is_suspended() {
     );
     env.edit::<StakeRecord>(&rec, |r| {
         r.forfeited = false;
-        r.suspended = true;
+        hold(r, true);
     });
     assert_err(env.release(&s.pubkey(), &TX), PoolError::StakeSuspended);
 }
@@ -649,13 +649,13 @@ fn approve_rules() {
     );
     env.ok(&[unlock], &[&s]);
     let rec = env.stake_record(&s.pubkey());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, true));
     assert_err(
         env.send(std::slice::from_ref(&approve), &[&s]),
         PoolError::StakeSuspended,
     );
     env.edit::<StakeRecord>(&rec, |r| {
-        r.suspended = false;
+        hold(r, false);
         r.active_claim = None;
     });
     assert_err(
@@ -744,12 +744,12 @@ fn unapproved_claim_expires_and_releases_its_reservation() {
     );
     env.warp(APPROVE_WINDOW_SECS + 1);
     let rec = env.stake_record(&s.pubkey());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, true));
     assert_err(
         env.send(std::slice::from_ref(&expire), &[&anyone]),
         PoolError::StakeSuspended,
     );
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = false);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, false));
     env.ok(std::slice::from_ref(&expire), &[&anyone]);
     assert_eq!(env.pool_state().total_allocated, 0);
     assert_eq!(env.stake_state(&s.pubkey()).active_claim, None);
@@ -797,7 +797,7 @@ fn stream_goes_only_to_the_beneficiary_and_not_while_suspended() {
     let ix = env.stream_ix(&s.pubkey(), &TX, &other);
     assert_err(env.send(&[ix], &[&s]), PoolError::WrongBeneficiary);
     let rec = env.stake_record(&s.pubkey());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, true));
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::StakeSuspended);
 }
@@ -939,12 +939,12 @@ fn stale_claim_returns_the_unpaid_rest() {
     );
     env.warp(1);
     let rec = env.stake_record(&s.pubkey());
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, true));
     assert_err(
         env.send(std::slice::from_ref(&expire), &[&anyone]),
         PoolError::StakeSuspended,
     );
-    env.edit::<StakeRecord>(&rec, |r| r.suspended = false);
+    env.edit::<StakeRecord>(&rec, |r| hold(r, false));
     env.ok(std::slice::from_ref(&expire), &[&anyone]);
     assert_eq!(
         env.claim_state(&s.pubkey(), &TX).status,
@@ -1094,6 +1094,82 @@ fn suspend_refused_on_a_forfeited_stake_without_a_claim() {
     let admin = env.admin.insecure_clone();
     let ix = env.suspend_ix(&s.pubkey(), None, true);
     assert_err(env.send(&[ix], &[&admin]), PoolError::StakeForfeited);
+}
+
+/// The admin's suspension lapses on its own, and the claim's window then runs from its end: a hold
+/// that ran out never costs the staker the claim.
+#[test]
+fn a_suspension_lapses_and_the_window_runs_from_its_end() {
+    let (mut env, s) = setup();
+    awaiting(&mut env, &s);
+    let admin = env.admin.insecure_clone();
+    let deadline = env.claim_state(&s.pubkey(), &TX).approve_deadline;
+    env.warp(deadline - env.now - SUSPEND_MAX_SECS / 2);
+    let ix = env.suspend_ix(&s.pubkey(), None, true);
+    env.ok(&[ix], &[&admin]);
+    let until = env.now + SUSPEND_MAX_SECS;
+    assert_eq!(env.stake_state(&s.pubkey()).suspended_until, until);
+    let approve = env.approve_claim_ix(&s.pubkey(), &TX);
+    assert_err(
+        env.send(std::slice::from_ref(&approve), &[&s]),
+        PoolError::StakeSuspended,
+    );
+    // Lapsed, past the old deadline: the window counts from the end of the suspension.
+    env.warp(SUSPEND_MAX_SECS);
+    assert!(env.now > deadline);
+    let expire = env.transition_ix(
+        &s.pubkey(),
+        &TX,
+        safu_pool::instruction::ExpirePendingApproval {},
+    );
+    let anyone = env.funded(unit());
+    assert_err(
+        env.send(&[expire], &[&anyone]),
+        PoolError::ApprovalWindowNotExpired,
+    );
+    env.ok(&[approve], &[&s]);
+}
+
+/// One key cannot hold a claimant for good: the admin alone suspends once per term and its end;
+/// the admin plus the co-signer or guardian renew it.
+#[test]
+fn suspending_again_soon_needs_a_second_role() {
+    let (mut env, s) = setup();
+    let (admin, co, guardian) = (
+        env.admin.insecure_clone(),
+        env.co_signer.insecure_clone(),
+        env.guardian.insecure_clone(),
+    );
+    let alone = |env: &mut Env| {
+        let ix = env.suspend_ix(&s.pubkey(), None, true);
+        env.send(&[ix], &[&admin])
+    };
+    alone(&mut env).unwrap();
+    assert_err(alone(&mut env), PoolError::SuspendNeedsSecondRole);
+    env.warp(SUSPEND_MAX_SECS);
+    assert!(!env.stake_state(&s.pubkey()).is_suspended(env.now));
+    assert_err(alone(&mut env), PoolError::SuspendNeedsSecondRole);
+    let other = env.funded(0);
+    let ix = env.renew_suspension_ix(&s.pubkey(), &other.pubkey());
+    assert_err(
+        env.send(&[ix], &[&admin, &other]),
+        PoolError::ApproverNotSecondRole,
+    );
+    for second in [&co, &guardian] {
+        let ix = env.renew_suspension_ix(&s.pubkey(), &second.pubkey());
+        env.ok(&[ix], &[&admin, second]);
+        let r = env.stake_state(&s.pubkey());
+        assert!(r.is_suspended(env.now));
+        assert_eq!(r.suspended_until, env.now + SUSPEND_MAX_SECS);
+        env.warp(SUSPEND_MAX_SECS / 2);
+    }
+    // A full term after the last one ended, the admin alone may again.
+    env.warp(2 * SUSPEND_MAX_SECS);
+    alone(&mut env).unwrap();
+    // Unsuspend ends it now.
+    let ix = env.suspend_ix(&s.pubkey(), None, false);
+    env.ok(&[ix], &[&admin]);
+    assert_eq!(env.stake_state(&s.pubkey()).suspended_until, env.now);
 }
 
 // ------------------------------------------------------------------ override

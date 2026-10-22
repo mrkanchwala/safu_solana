@@ -23,7 +23,7 @@
 
 use anchor_lang::prelude::*;
 use pool_core::claim as rules;
-use pool_core::params::PENALTY_LOCK_SECS;
+use pool_core::params::{PENALTY_LOCK_SECS, SUSPEND_MAX_SECS};
 use pool_core::settings::SettingKey;
 use pool_core::{add, capacity, drip};
 
@@ -125,6 +125,24 @@ fn open_approve_window(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
     claim.approve_deadline = secs_after(now, claim.approve_window)?;
     claim.blocked_mark = pool.blocked_secs(now);
     Ok(())
+}
+
+/// The approve window has run out on the claim clock. It never starts before the stake's last
+/// suspension ended: a suspension that lapsed on its own gave the staker no fresh window otherwise.
+fn approve_window_over(pool: &Pool, claim: &Claim, stake: &StakeRecord, now: i64) -> bool {
+    let deadline = claim
+        .approve_deadline
+        .max(stake.suspended_until.saturating_add(claim.approve_window));
+    pool.claim_clock(now, claim.blocked_mark) > deadline
+}
+
+/// No collection for longer than the inactivity window, on the claim clock, counted from the later
+/// of the last collection and the end of the stake's last suspension.
+fn collection_window_over(pool: &Pool, claim: &Claim, stake: &StakeRecord, now: i64) -> bool {
+    let from = claim.last_collected.max(stake.suspended_until);
+    pool.claim_clock(now, claim.blocked_mark)
+        .saturating_sub(from)
+        > claim.inactivity_window
 }
 
 /// The collection (inactivity) window restarts now, on the claim clock.
@@ -423,7 +441,7 @@ pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<
 
     let stake = &mut ctx.accounts.stake_record;
     require!(!stake.forfeited, PoolError::StakeForfeited);
-    require!(!stake.suspended, PoolError::StakeSuspended);
+    require!(!stake.is_suspended(now), PoolError::StakeSuspended);
     require!(
         stake.active_claim.is_none(),
         PoolError::ClaimAlreadyActiveForStake
@@ -588,7 +606,7 @@ pub(crate) fn release_head(
         !queued_claim_dead(claim, &claim_key, Some(stake)),
         PoolError::QueuedClaimStakeChanged
     );
-    require!(!stake.suspended, PoolError::StakeSuspended);
+    require!(!stake.is_suspended(now), PoolError::StakeSuspended);
 
     roll_day(pool, now);
     let fits = rules::admits(
@@ -733,9 +751,9 @@ pub(crate) fn expire_unapproved(
         claim.status == ClaimStatus::AwaitingApproval,
         PoolError::ClaimNotAwaitingApproval
     );
-    require!(!stake.suspended, PoolError::StakeSuspended);
+    require!(!stake.is_suspended(now), PoolError::StakeSuspended);
     require!(
-        pool.claim_clock(now, claim.blocked_mark) > claim.approve_deadline,
+        approve_window_over(pool, claim, stake, now),
         PoolError::ApprovalWindowNotExpired
     );
     release_allocation(pool, claim.entitlement);
@@ -780,10 +798,9 @@ pub(crate) fn expire_stale(
         claim.streamed < claim.entitlement,
         PoolError::ClaimFullyStreamed
     );
-    require!(!stake.suspended, PoolError::StakeSuspended);
-    let clock = pool.claim_clock(now, claim.blocked_mark);
+    require!(!stake.is_suspended(now), PoolError::StakeSuspended);
     require!(
-        clock.saturating_sub(claim.last_collected) > claim.inactivity_window,
+        collection_window_over(pool, claim, stake, now),
         PoolError::ClaimNotStale
     );
     let remaining = claim.entitlement - claim.streamed;
@@ -839,10 +856,10 @@ pub fn approve_claim(ctx: &mut Context<ApproveClaim>) -> Result<()> {
         PoolError::ClaimNotAwaitingApproval
     );
     require!(
-        pool.claim_clock(now, claim.blocked_mark) <= claim.approve_deadline,
+        !approve_window_over(pool, claim, stake, now),
         PoolError::ApprovalWindowExpired
     );
-    require!(!stake.suspended, PoolError::StakeSuspended);
+    require!(!stake.is_suspended(now), PoolError::StakeSuspended);
     require!(
         !stake.forfeited && stake.active_claim == Some(claim_key),
         PoolError::ClaimStakeMismatch
@@ -905,7 +922,7 @@ pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
         PoolError::ClaimFullyStreamed
     );
     require!(
-        !ctx.accounts.stake_record.suspended,
+        !ctx.accounts.stake_record.is_suspended(now),
         PoolError::StakeSuspended
     );
 
@@ -1040,16 +1057,65 @@ pub struct AdminStake<'info> {
     pub claim: Option<Box<Account<'info, Claim>>>,
 }
 
-/// Holds payouts on a stake. Does not block principal withdrawal.
-pub fn suspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> {
-    let stake = &mut ctx.accounts.stake_record;
+/// A stake that can still be suspended: not forfeited, unless its claim is still open.
+fn suspendable(stake: &StakeRecord) -> Result<()> {
     require!(
         !stake.forfeited || stake.active_claim.is_some(),
         PoolError::StakeForfeited
     );
+    Ok(())
+}
+
+/// The admin alone holds payouts on a stake for `SUSPEND_MAX_SECS`, then the hold lapses. Again
+/// while one is in force, or within the same length after it ends, needs a second role
+/// (`renew_suspension`). Does not block principal withdrawal.
+pub fn suspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> {
+    let now = now()?;
+    let stake = &mut ctx.accounts.stake_record;
+    suspendable(stake)?;
+    require!(
+        stake.suspended_until == 0 || now >= stake.suspended_until.saturating_add(SUSPEND_MAX_SECS),
+        PoolError::SuspendNeedsSecondRole
+    );
     stake.suspended = true;
+    stake.suspended_until = secs_after(now, SUSPEND_MAX_SECS)?;
     emit!(StakeSuspended {
-        staker: stake.staker
+        staker: stake.staker,
+        until: stake.suspended_until
+    });
+    Ok(())
+}
+
+#[derive(Accounts)]
+#[instruction(staker: Pubkey)]
+pub struct RenewSuspension<'info> {
+    pub admin: Signer<'info>,
+    /// The co-signer or the guardian.
+    pub approver: Signer<'info>,
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
+    pub pool: Box<Account<'info, Pool>>,
+    #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), staker.as_ref()], bump = stake_record.bump)]
+    pub stake_record: Box<Account<'info, StakeRecord>>,
+}
+
+/// The admin plus the co-signer or guardian start or extend a suspension: it runs
+/// `SUSPEND_MAX_SECS` from now.
+pub fn renew_suspension(ctx: Context<RenewSuspension>, _staker: Pubkey) -> Result<()> {
+    let now = now()?;
+    let pool = &ctx.accounts.pool;
+    let approver = ctx.accounts.approver.key();
+    require!(
+        approver == pool.co_signer || approver == pool.guardian,
+        PoolError::ApproverNotSecondRole
+    );
+    let stake = &mut ctx.accounts.stake_record;
+    suspendable(stake)?;
+    stake.suspended = true;
+    stake.suspended_until = secs_after(now, SUSPEND_MAX_SECS)?;
+    emit!(SuspensionRenewed {
+        staker: stake.staker,
+        approver,
+        until: stake.suspended_until
     });
     Ok(())
 }
@@ -1059,6 +1125,10 @@ pub fn suspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> {
 pub fn unsuspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> {
     let now = now()?;
     let stake = &mut ctx.accounts.stake_record;
+    if stake.is_suspended(now) {
+        // Ends now; claim windows never start before it.
+        stake.suspended_until = now;
+    }
     stake.suspended = false;
     emit!(StakeUnsuspended {
         staker: stake.staker

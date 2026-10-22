@@ -13,6 +13,8 @@ pub const SECONDS_PER_DAY: i64 = p::SECONDS_PER_DAY;
 #[constant]
 pub const PENALTY_LOCK_SECS: i64 = p::PENALTY_LOCK_SECS;
 #[constant]
+pub const SUSPEND_MAX_SECS: i64 = p::SUSPEND_MAX_SECS;
+#[constant]
 pub const MAX_APPROVAL_WINDOW_SECS: i64 = p::MAX_APPROVAL_WINDOW_SECS;
 #[constant]
 pub const SETTINGS_TIMELOCK_SECS: i64 = p::SETTINGS_TIMELOCK_SECS;
