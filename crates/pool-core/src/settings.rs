@@ -394,3 +394,19 @@ pub fn claim_clock(now: i64, paused_now: i64, mark: i64) -> i64 {
 pub fn pause_gap_passed(now: i64, started_at: i64, until: i64, gap: i64) -> bool {
     started_at == 0 || now > until.saturating_add(gap)
 }
+
+/// Time the pool could not pay, as of now (rule 18, multichain `get_blocked_secs`): seconds paused
+/// plus one whole day for every day a payout found the pool short of cash. Only differences of it are
+/// used (a claim window adds back what it grew by since the window started), so it never resets.
+pub fn blocked_secs(paused_secs: i64, cash_short_days: u64) -> i64 {
+    let days = i64::try_from(cash_short_days).unwrap_or(i64::MAX);
+    paused_secs.saturating_add(days.saturating_mul(crate::params::SECONDS_PER_DAY))
+}
+
+/// Counts `day` as a cash-short day, once: returns the new `(last_day, days)`.
+pub fn mark_cash_short_day(last_day: i64, days: u64, day: i64) -> (i64, u64) {
+    if last_day == day && days > 0 {
+        return (last_day, days);
+    }
+    (day, days.saturating_add(1))
+}

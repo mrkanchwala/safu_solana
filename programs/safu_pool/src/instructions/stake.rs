@@ -10,6 +10,7 @@ use anchor_spl::token::TokenAccount;
 use crate::constants::{SEED_BACKER, SEED_POOL, SEED_STAKE, SEED_VAULT};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::{BeneficiarySet, EmergencyExited, Staked, Withdrawn, YieldClaimed};
+use crate::leg::Money;
 // Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
 use crate::state::{BackerRecord, Pool, StakeRecord, ACCOUNT_VERSION};
 use crate::vault::{self, *};
@@ -172,6 +173,12 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
     let now = now()?;
     let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        vault.clone(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let record = &mut ctx.accounts.stake_record;
@@ -185,6 +192,8 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
         );
     }
     let (yield_owed, points) = (record.yield_owed, record.points);
+    // Growth earned so far goes to the stakers who earned it, before this stake counts.
+    money.harvest(pool, now)?;
     pool.points_checkpoint(STAKER, now).core()?;
     let s = pool.settings();
     let (staked, overflow) =
@@ -245,7 +254,9 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
         &ctx.accounts.staker.to_account_info(),
         &vault,
         amount,
-    )
+    )?;
+    money.push_idle(pool, now)?;
+    Ok(())
 }
 
 #[derive(Accounts)]
@@ -306,10 +317,15 @@ pub struct Withdraw<'info> {
 /// withdrawal (unpaid yield and points live on it).
 pub fn withdraw(ctx: &mut Context<Withdraw>, amount: u64) -> Result<()> {
     let now = now()?;
-    let pool_info = ctx.accounts.pool.to_account_info();
-    let vault = ctx.accounts.vault.to_account_info();
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        ctx.accounts.vault.to_account_info(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
+    money.harvest(pool, now)?;
 
     let record = &mut ctx.accounts.stake_record;
     let (yield_paid, remaining) = settle_exit(pool, record, amount, now)?;
@@ -322,7 +338,7 @@ pub fn withdraw(ctx: &mut Context<Withdraw>, amount: u64) -> Result<()> {
 
     let total = pool_core::add(amount, yield_paid).core()?;
     let to = ctx.accounts.beneficiary_usdc.to_account_info();
-    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, total)?;
+    money.pay(pool, &to, total, now)?;
     recheck_capital(pool)
 }
 
@@ -357,8 +373,12 @@ pub struct EmergencyExit<'info> {
 /// penalty lock, so a pause cannot be used to leave a false-positive penalty early.
 pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
     let now = now()?;
-    let pool_info = ctx.accounts.pool.to_account_info();
-    let vault = ctx.accounts.vault.to_account_info();
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        ctx.accounts.vault.to_account_info(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
     require!(pool.is_paused(now), PoolError::NotPaused);
 
@@ -373,7 +393,7 @@ pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
 
     let total = pool_core::add(amount, yield_paid).core()?;
     let to = ctx.accounts.staker_usdc.to_account_info();
-    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, total)?;
+    money.pay(pool, &to, total, now)?;
     recheck_capital(pool)
 }
 
@@ -405,9 +425,15 @@ pub struct ClaimYield<'info> {
 /// untouched (multichain `claim_yield`). A claim never takes the claimant's yield, so this works with
 /// a claim open or queued, and after one is approved.
 pub fn claim_yield(ctx: &mut Context<ClaimYield>) -> Result<()> {
-    let pool_info = ctx.accounts.pool.to_account_info();
-    let vault = ctx.accounts.vault.to_account_info();
+    let now = now()?;
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        ctx.accounts.vault.to_account_info(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
+    money.harvest(pool, now)?;
     let record = &mut ctx.accounts.stake_record;
     let owed = staker_owed(pool, record)?;
     let paid = take_staker_yield(pool, record, owed);
@@ -419,5 +445,5 @@ pub fn claim_yield(ctx: &mut Context<ClaimYield>) -> Result<()> {
     });
 
     let to = ctx.accounts.beneficiary_usdc.to_account_info();
-    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, paid)
+    money.pay(pool, &to, paid, now)
 }

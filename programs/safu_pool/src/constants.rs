@@ -166,6 +166,13 @@ pub const SEED_GOVERNANCE: &[u8] = b"governance";
 pub const SEED_QUEUE: &[u8] = b"queue";
 #[constant]
 pub const SEED_WATCH: &[u8] = b"watch";
+/// The pool's collateral account in the yield venue: `[SEED_LEG, pool, collateral_mint]`, a token
+/// account whose authority is the pool.
+#[constant]
+pub const SEED_LEG: &[u8] = b"leg";
+/// Kamino Lend (klend), the only yield venue program the pool calls.
+#[constant]
+pub const KLEND_PROGRAM_ID: Pubkey = Pubkey::new_from_array(pool_core::kamino::PROGRAM_ID);
 /// Watch-list places each upkeep checks.
 #[constant]
 pub const UPKEEP_WATCH_PER_CALL: u64 = p::UPKEEP_WATCH_PER_CALL as u64;

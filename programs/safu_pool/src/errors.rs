@@ -240,6 +240,21 @@ pub enum PoolError {
     WrongWatchEntry,
     #[msg("A deposit above the max stake needs the backer record account")]
     BackerRecordRequired,
+    // Yield leg (Kamino Lend).
+    #[msg("Yield venue accounts missing or wrong: pass the leg accounts for the pool's venue")]
+    YieldAccountsMissing,
+    #[msg("Yield venue is not a Kamino Lend USDC reserve on classic SPL Token")]
+    VenueNotKamino,
+    #[msg("No yield venue is set")]
+    VenueNotSet,
+    #[msg("Nothing is deployed in the yield venue")]
+    NothingDeployed,
+    #[msg("Redeem is above what is deployed")]
+    RedeemExceedsDeployed,
+    #[msg("The venue cannot take this deposit or pay this redeem now")]
+    VenueUnavailable,
+    #[msg("Venue returned less than the minimum")]
+    MinAmountNotMet,
 }
 
 impl From<CoreError> for PoolError {
@@ -263,6 +278,7 @@ impl From<CoreError> for PoolError {
             CoreError::ClaimWindowExpired => PoolError::ClaimWindowExpired,
             CoreError::SignatureExpired => PoolError::SignatureExpired,
             CoreError::SignatureDeadlineTooFar => PoolError::SignatureDeadlineTooFar,
+            CoreError::BadAccount => PoolError::YieldAccountsMissing,
         }
     }
 }

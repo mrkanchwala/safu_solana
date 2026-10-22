@@ -240,3 +240,49 @@ pub struct PoolCapLowered {
     pub old_value: i64,
     pub new_value: i64,
 }
+
+// Yield leg (multichain `vault.rs` events). `kind`: what moved the money.
+pub const LEG_PUSH: u8 = 0;
+pub const LEG_PULL: u8 = 1;
+pub const LEG_KEEPER_DEPLOY: u8 = 2;
+pub const LEG_KEEPER_REBALANCE: u8 = 3;
+pub const LEG_ADMIN_PROVIDE: u8 = 4;
+#[event]
+pub struct Deployed {
+    pub kind: u8,
+    pub amount: u64,
+    pub collateral: u64,
+}
+/// A deposit minted less collateral than the reserve's own rate allows (recorded as received).
+#[event]
+pub struct DeployBelowFloor {
+    pub amount: u64,
+    pub collateral: u64,
+    pub min_collateral: u64,
+}
+#[event]
+pub struct Redeemed {
+    pub kind: u8,
+    pub collateral: u64,
+    pub received: u64,
+}
+/// A redeem returned less than the book value that left: the venue lost money. Marked off
+/// `total_staked`.
+#[event]
+pub struct DeploymentShortfall {
+    pub principal_expected: u64,
+    pub received: u64,
+}
+#[event]
+pub struct Harvested {
+    pub collateral: u64,
+    pub received: u64,
+}
+/// A claim payout found the pool short of cash even after the venue: today counts as blocked time
+/// (rule 18), the claim's collection window restarts, nothing is paid.
+#[event]
+pub struct CashShortDay {
+    pub claim: Pubkey,
+    pub day: i64,
+    pub days_total: u64,
+}

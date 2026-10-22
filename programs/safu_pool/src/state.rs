@@ -197,8 +197,7 @@ pub struct Pool {
     pub protocol_yield_balance: u64,
     pub total_extracted_yield: u64,
 
-    /// USDC cost of the yield position (book value, never marked to market). Zero until the yield
-    /// venue is wired.
+    /// USDC cost of the yield position (book value, never marked to market).
     pub deployed_book: u64,
     pub last_harvest_at: i64,
 
@@ -235,8 +234,14 @@ pub struct Pool {
     /// Not pool cash: only a payment short by at most `MAX_ROUNDING_DRAW` reaches it. Funded by
     /// anyone, never withdrawn, never capacity.
     pub rounding_reserve: u64,
+    /// Venue collateral the pool holds, on the books (a donation to the collateral account is not
+    /// counted).
+    pub deployed_collateral: u64,
+    /// Days a claim payout found the pool short of cash (rule 18), and the last one counted.
+    pub cash_short_days: u64,
+    pub last_cash_short_day: i64,
     /// Room for fields a later upgrade adds.
-    pub reserved: [u8; 256], // hardcode-ok: spare layout bytes, not a rule
+    pub reserved: [u8; 232], // hardcode-ok: spare layout bytes, not a rule
 }
 
 impl Pool {
@@ -261,9 +266,23 @@ impl Pool {
         )
     }
 
-    /// Claim clock for a window that started when the paused total was `mark`.
+    /// Time the pool could not pay, as of `now` (rule 18): paused seconds plus cash-short days.
+    pub fn blocked_secs(&self, now: i64) -> i64 {
+        settings::blocked_secs(self.paused_secs_at(now), self.cash_short_days)
+    }
+
+    /// Claim clock for a window that started when the blocked total was `mark`: blocked time since
+    /// then does not count.
     pub fn claim_clock(&self, now: i64, mark: i64) -> i64 {
-        settings::claim_clock(now, self.paused_secs_at(now), mark)
+        settings::claim_clock(now, self.blocked_secs(now), mark)
+    }
+
+    /// Counts the day of `now` as a cash-short day (once per day). Returns the total.
+    pub fn mark_cash_short_day(&mut self, now: i64) -> u64 {
+        let day = pool_core::claim::day_of(now);
+        (self.last_cash_short_day, self.cash_short_days) =
+            settings::mark_cash_short_day(self.last_cash_short_day, self.cash_short_days, day);
+        self.cash_short_days
     }
 
     /// A points side's index at `now`, under its live rate setting.
@@ -476,10 +495,10 @@ pub struct Claim {
     pub approve_window: i64,
     /// Inactivity window this claim started paying with (the setting at approval).
     pub inactivity_window: i64,
-    /// Paused total (`Pool::paused_secs_at`) when the claim's current window started: the hack
-    /// window while queued, the approve window, then the collection window. Pause time after it
-    /// does not count against the window.
-    pub pause_mark: i64,
+    /// Blocked total (`Pool::blocked_secs`) when the claim's current window started: the approve
+    /// window, then the collection window. Blocked time after it (pause, cash-short days) does not
+    /// count against the window.
+    pub blocked_mark: i64,
     /// Place in the claim line while queued (`QueueEntry` seed).
     pub queue_seq: u64,
     /// This claim's share of today's payout cap and the day it was set (`payout_snap_*`).

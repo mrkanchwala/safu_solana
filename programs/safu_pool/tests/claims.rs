@@ -887,15 +887,39 @@ fn claims_share_the_days_cap_pro_rata_whatever_the_order() {
 }
 
 #[test]
-fn stream_refused_when_liquid_usdc_is_short() {
+fn stream_short_of_cash_pays_nothing_and_counts_the_day() {
+    // Rule 18 (multichain `claim_stream`): no payment, the day counts once as blocked time.
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
     // All liquid USDC is rounding reserve: never claim cash.
     let liquid = env.vault_liquid();
     env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = liquid);
-    let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
-    assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
+    let before = env.usdc(&s.pubkey());
+    let stream = |env: &mut Env| {
+        let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
+        env.ok(&[ix], &[&s]);
+    };
+    stream(&mut env);
+    assert_eq!(env.usdc(&s.pubkey()), before);
+    assert_eq!(env.claim_state(&s.pubkey(), &TX).streamed, 0);
+    assert_eq!(env.pool_state().cash_short_days, 1);
+    let blocked = env.pool_state().blocked_secs(env.now);
+    assert_eq!(env.claim_state(&s.pubkey(), &TX).blocked_mark, blocked);
+    // Same day: counted once.
+    env.warp(60);
+    stream(&mut env);
+    assert_eq!(env.pool_state().cash_short_days, 1);
+    // Next day: counted again.
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    stream(&mut env);
+    assert_eq!(env.pool_state().cash_short_days, 2);
+    // Cash back: it pays, and the count stays.
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = 0);
+    env.warp(60);
+    stream(&mut env);
+    assert!(env.usdc(&s.pubkey()) > before);
+    assert_eq!(env.pool_state().cash_short_days, 2);
 }
 
 #[test]

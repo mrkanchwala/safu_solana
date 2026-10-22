@@ -4,13 +4,15 @@
 #                    them from the IDL or the pool's settings)
 #   Deploy values -> config/*.json
 #   Program id    -> declare_id! (clients read the IDL `address`)
+#   Kamino Lend's own layout, ids and discriminators -> crates/pool-core/src/kamino.rs (facts about
+#                    an outside program, read from its IDL; not rule numbers)
 # A line can opt out with the marker `hardcode-ok: <reason>`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SOURCES=(programs/safu_pool/src crates/pool-core/src)
 [ -d app/src ] && SOURCES+=(app/src)
-ALLOWED='crates/pool-core/src/(params|settings)\.rs'
+ALLOWED='crates/pool-core/src/(params|settings|kamino)\.rs'
 fail=0
 
 # 1. Base58 addresses (32-44 chars).

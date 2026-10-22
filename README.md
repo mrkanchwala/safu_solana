@@ -13,7 +13,7 @@ This is a test-network build with no real users.
 
 - **Stakers** stake SOL and register up to two covered wallets, proving they own each one.
 - **Backers** add SOL without cover to make the pool bigger, and share the staking yield with stakers.
-- The pool stakes its SOL through Marinade (mSOL) while it waits for claims.
+- The pool lends its idle USDC on Kamino Lend while it waits for claims, and keeps enough cash for open claims.
 - A claim names up to five drain transactions within 30 days of the drain. The scanner checks each one on
   its own chain, the oracle signs the verdict with a key held in a cloud key vault, and the program
   checks that Ed25519 signature and the tier ceiling before it pays.
@@ -25,7 +25,7 @@ This is a test-network build with no real users.
 ## Tech
 
 Anchor and Rust for the program, with every pool rule written as a pure function in `crates/pool-core`
-and covered by unit and property tests. LiteSVM for program tests, plus fuzzing. Marinade for staking,
+and covered by unit and property tests. LiteSVM for program tests (Kamino Lend's mainnet program loaded for the yield tests), plus fuzzing. Kamino Lend for yield,
 Squads for the upgrade authority, Ed25519 checks on oracle verdicts. The site uses React, Vite and
 @solana/kit. The loss scanner runs in Python on a private backend and reads chain data through Helius
 and Alchemy.
@@ -55,7 +55,7 @@ NO_DNA=1 anchor build -- --features demo && cargo test -p safu_pool --features d
 ./scripts/check_no_hardcodes.sh
 ```
 
-Local chain for the claim backend: `./scripts/localnet.sh` (demo build, Marinade loaded from the
-test fixtures, fresh ledger each start). `config/pool.localnet.json` points clients at it.
+Local chain for the claim backend: `./scripts/localnet.sh` (demo build, a test USDC mint, fresh
+ledger each start). `config/pool.localnet.json` points clients at it.
 
 Licensed under Apache-2.0.

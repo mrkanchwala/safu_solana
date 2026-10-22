@@ -28,6 +28,7 @@ use super::now;
 use crate::constants::{SEED_GOVERNANCE, SEED_POOL};
 use crate::errors::PoolError;
 use crate::events::{GovApproved, GovCancelVote, GovCancelled, GovExecuted, GovProposed};
+use crate::kamino::check_venue;
 use crate::state::{
     GovChange, GovKind, GovProposal, Governance, Pool, ROLES, ROLE_ADMIN, ROLE_CO_SIGNER,
     ROLE_GUARDIAN,
@@ -145,7 +146,10 @@ fn validate(pool: &Pool, change: &GovChange) -> Result<()> {
         GovChange::Guardian(k) => guardian = k,
         GovChange::Oracle(k) => oracle = k,
         GovChange::YieldVenue(_) => {
-            require!(pool.deployed_book == 0, PoolError::VenueChangeWhileDeployed);
+            require!(
+                pool.deployed_book == 0 && pool.deployed_collateral == 0,
+                PoolError::VenueChangeWhileDeployed
+            );
             return Ok(());
         }
         GovChange::DeployBps(bps) => {
@@ -355,7 +359,7 @@ pub fn cancel_change(ctx: Context<GovCall>, kind: u8) -> Result<()> {
 }
 
 /// Anyone, once the wait has passed. Approvals and the change itself are re-checked against live
-/// state.
+/// state. A yield-venue change passes the new reserve as the first remaining account.
 pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
     let kind = kind_from(kind)?;
     let now = now()?;
@@ -379,6 +383,18 @@ pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
     }
     let change = change_of(kind, &p);
     validate(pool, &change)?;
+    if let GovChange::YieldVenue(k) = change {
+        // A new venue must be a klend USDC reserve, passed as the first remaining account; the
+        // default key turns the venue off.
+        if k != Pubkey::default() {
+            let reserve = ctx
+                .remaining_accounts
+                .first()
+                .filter(|a| a.key() == k)
+                .ok_or_else(|| error!(PoolError::YieldAccountsMissing))?;
+            check_venue(pool, reserve)?;
+        }
+    }
     apply(pool, &change, new_key)?;
     gov.pending[kind.index()] = GovProposal::default();
     emit!(GovExecuted {

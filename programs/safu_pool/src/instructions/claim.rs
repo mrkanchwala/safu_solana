@@ -12,10 +12,11 @@
 //! set at its first collection that day from the day's snapshot, so the order of calls does not
 //! matter. What a claim does not take stays vested for later days.
 //!
-//! Pause and the claim windows: every window (hack → submit, approve, collection) runs on
-//! the claim clock, `Pool::claim_clock(now, claim.pause_mark)`, which does not count time the pool
-//! spent paused. The expiry sweeps are also refused while paused. A pause therefore never uses up a
-//! claimant's window while they cannot act.
+//! Blocked time and the claim windows (rule 18): the approve and collection windows run on the claim
+//! clock, `Pool::claim_clock(now, claim.blocked_mark)`, which does not count time the pool could not
+//! pay: paused, or a whole day on which a payout found it short of cash. The hack → submit window
+//! does not count pause time. The expiry sweeps are also refused while paused. So the pool's own
+//! trouble never uses up a claimant's window.
 //!
 //! The claim account address `[SEED_CLAIM, pool, staker, tx_hash]` is the claim id: one claim per
 //! (staker, drain transaction), forever.
@@ -33,6 +34,7 @@ use crate::constants::{
 };
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::*;
+use crate::leg::Money;
 use crate::state::{
     Claim, ClaimStatus, OverrideRequest, Pool, QueueEntry, RevokedApproval, StakeRecord,
     WatchEntry, ACCOUNT_VERSION,
@@ -88,7 +90,7 @@ fn admit(
     } else {
         // Pause time from here on is added back to the approve window that opens at the gate.
         claim.status = ClaimStatus::PendingTime;
-        claim.pause_mark = pool.paused_secs_at(now);
+        claim.blocked_mark = pool.blocked_secs(now);
     }
     Ok(())
 }
@@ -121,14 +123,14 @@ fn settle_staker_yield(pool: &Pool, stake: &mut StakeRecord) -> Result<()> {
 fn open_approve_window(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
     claim.status = ClaimStatus::AwaitingApproval;
     claim.approve_deadline = secs_after(now, claim.approve_window)?;
-    claim.pause_mark = pool.paused_secs_at(now);
+    claim.blocked_mark = pool.blocked_secs(now);
     Ok(())
 }
 
 /// The collection (inactivity) window restarts now, on the claim clock.
 fn restart_collection_window(pool: &Pool, claim: &mut Claim, now: i64) {
     claim.last_collected = now;
-    claim.pause_mark = pool.paused_secs_at(now);
+    claim.blocked_mark = pool.blocked_secs(now);
 }
 
 /// Starts the payout clocks from now, with the capacity snapshot taken first. Cooldown, vesting and
@@ -141,7 +143,7 @@ fn start_clocks(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
     claim.inactivity_window = s.get(SettingKey::InactivitySecs);
     // The inactivity clock starts at cooldown end: the cooldown is never the staker's inactivity.
     claim.last_collected = claim.cooldown_ends;
-    claim.pause_mark = pool.paused_secs_at(now);
+    claim.blocked_mark = pool.blocked_secs(now);
     claim.status = ClaimStatus::Active;
     Ok(())
 }
@@ -432,13 +434,18 @@ pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<
     );
     let ratios = stake.tier_ratios(pool.settings().tier_ratios());
     rules::check_entitlement(a.entitlement, stake.amount, a.tier, ratios).core()?;
-    // The hack window runs on the claim clock from the hack: pause time since then does not count.
-    let hack_mark = pool.paused_secs_at(a.hack_timestamp);
+    // The hack window counts pause time only (multichain `paused_secs_since`): the blocked total
+    // has no record of when its cash-short days fell, so it cannot be read at the hack time.
+    let hack_clock = pool_core::settings::claim_clock(
+        now,
+        pool.paused_secs_at(now),
+        pool.paused_secs_at(a.hack_timestamp),
+    );
     rules::check_hack_time(
         a.hack_timestamp,
         stake.staked_at,
         now,
-        pool.claim_clock(now, hack_mark),
+        hack_clock,
         stake.claim_window_secs,
     )
     .core()?;
@@ -467,7 +474,7 @@ pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<
         bump: ctx.bumps.claim,
         approve_window: 0,
         inactivity_window: 0,
-        pause_mark: hack_mark,
+        blocked_mark: pool.blocked_secs(now),
         queue_seq: 0,
         share_day: 0,
         share_left: 0,
@@ -728,7 +735,7 @@ pub(crate) fn expire_unapproved(
     );
     require!(!stake.suspended, PoolError::StakeSuspended);
     require!(
-        pool.claim_clock(now, claim.pause_mark) > claim.approve_deadline,
+        pool.claim_clock(now, claim.blocked_mark) > claim.approve_deadline,
         PoolError::ApprovalWindowNotExpired
     );
     release_allocation(pool, claim.entitlement);
@@ -774,7 +781,7 @@ pub(crate) fn expire_stale(
         PoolError::ClaimFullyStreamed
     );
     require!(!stake.suspended, PoolError::StakeSuspended);
-    let clock = pool.claim_clock(now, claim.pause_mark);
+    let clock = pool.claim_clock(now, claim.blocked_mark);
     require!(
         clock.saturating_sub(claim.last_collected) > claim.inactivity_window,
         PoolError::ClaimNotStale
@@ -832,7 +839,7 @@ pub fn approve_claim(ctx: &mut Context<ApproveClaim>) -> Result<()> {
         PoolError::ClaimNotAwaitingApproval
     );
     require!(
-        pool.claim_clock(now, claim.pause_mark) <= claim.approve_deadline,
+        pool.claim_clock(now, claim.blocked_mark) <= claim.approve_deadline,
         PoolError::ApprovalWindowExpired
     );
     require!(!stake.suspended, PoolError::StakeSuspended);
@@ -872,11 +879,18 @@ pub struct ClaimStream<'info> {
     pub cash: Cash<'info>,
 }
 
-/// Pays what has vested, up to today's payout cap, to the beneficiary.
+/// Pays what has vested, up to today's payout cap, to the beneficiary. Pulls from the venue first; if
+/// the pool still cannot pay, nothing is paid and today counts as a cash-short day (rule 18): it
+/// is blocked time, so it extends the claim's windows, and the collection window restarts
+/// (multichain `claim_stream`). The staker tries again later.
 pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
     let now = now()?;
-    let pool_info = ctx.accounts.pool.to_account_info();
-    let vault = ctx.accounts.vault.to_account_info();
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        ctx.accounts.vault.to_account_info(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
@@ -914,6 +928,18 @@ pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
     let amount = claimable.min(claim.share_left);
     require!(amount > 0, PoolError::DailyOutflowCapReached);
 
+    money.pull_cash(pool, amount, now)?;
+    if !vault::can_pay(pool, &money.vault, amount)? {
+        let days_total = pool.mark_cash_short_day(now);
+        restart_collection_window(pool, claim, now);
+        emit!(CashShortDay {
+            claim: claim_key,
+            day,
+            days_total
+        });
+        return Ok(());
+    }
+
     claim.streamed += amount;
     claim.share_left -= amount;
     restart_collection_window(pool, claim, now);
@@ -928,7 +954,14 @@ pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
     });
 
     let to = ctx.accounts.beneficiary_usdc.to_account_info();
-    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, amount)
+    vault::pay_out(
+        pool,
+        &money.pool_info,
+        money.cash,
+        &money.vault,
+        &to,
+        amount,
+    )
 }
 
 // ------------------------------------------------------------------ admin: cancel, suspend, revoke
@@ -942,13 +975,24 @@ pub struct CancelClaim<'info> {
     pub claim: Box<Account<'info, Claim>>,
     #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), claim.staker.as_ref()], bump = stake_record.bump)]
     pub stake_record: Box<Account<'info, StakeRecord>>,
+    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
+    pub vault: Box<Account<'info, TokenAccount>>,
+    pub cash: Cash<'info>,
 }
 
 /// False-positive reversal. An approved (forfeited) stake is restored under the penalty lock, less
 /// what the claim already paid out; before approval nothing was forfeited, so there is no penalty.
 pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     let now = now()?;
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        ctx.accounts.vault.to_account_info(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
+    // Growth so far belongs to the stakers counted until now, before the restored stake joins them.
+    money.harvest(pool, now)?;
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(
@@ -1258,7 +1302,7 @@ fn execute_override(
         bump,
         approve_window: pool.settings().get(SettingKey::ApproveWindowSecs),
         inactivity_window: 0,
-        pause_mark: 0,
+        blocked_mark: 0,
         queue_seq,
         share_day: 0,
         share_left: 0,

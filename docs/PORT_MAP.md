@@ -11,7 +11,7 @@ form differs (reason given). **Left out** = not in this build.
 
 | Multichain | Solana | Kind | Note |
 |---|---|---|---|
-| `__constructor` | `initialize` | Changed | Also takes Marinade program/state/mint (checked against the live state) and the cluster tag. Pool cap from `config/pool.devnet.json`; every other setting starts at its `params.rs` default. |
+| `__constructor` | `initialize` | Changed | Also takes the USDC mint (classic SPL Token, checked) and the cluster tag; opens the vault. No yield venue: governance sets one later. Pool cap from `config/pool.devnet.json`; every other setting starts at its `params.rs` default. |
 | settings (`propose_setting` … timers, cap, outflow) | `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` | Changed | 19 settings, each by slot number (`SETTING_*` in the IDL): stake min/max, yield split, cooldown, vesting, admit + payout bands, backer notice, maturity, pause max + gap, approve + inactivity windows, pool cap. Admin proposes, co-signer approves the same value, anyone executes after `SETTINGS_TIMELOCK_SECS` (7 days, demo 5 min). Hard ranges (`pool_core::settings`) and the order between settings (min ≤ max, low ≥ mid ≥ high, pause max ≤ pause gap) are checked at proposal and again at execution. 32 slots, 13 spare. Stored inside `Pool`, so no extra account in any instruction. Every read goes through `Pool::settings()`, the one hook for a future self-managing mode. Multichain only lets timers, cap and outflow change. |
 | `propose_change` / `approve_change` / `propose_recovery` / `cancel_change` / `execute_change` / `get_pending_change` | none | Left out | Governance 2-of-3 + 90-day recovery. Admin + co-signer override kept. Stretch item. |
 | `get_admin` / `get_co_signer` / `get_oracle` / `get_guardian` / `get_paused_until` | `Pool` account fields | Changed | Reads are account fetches on Solana. No guardian (came with governance). |
@@ -31,13 +31,13 @@ form differs (reason given). **Left out** = not in this build.
 | `try_release_queued_claim` / `expire_queued_claim` | same | Rules | Permissionless. |
 | `approve_claim` | same | Rules | Staker signs. No points burn (points left out). |
 | `expire_pending_approval` / `expire_stale_claim` | same | Rules | Permissionless. |
-| `claim_stream` | `claim_stream` | Changed | Pays the stored beneficiary. If liquid SOL is short, Marinade `liquid_unstake` of the shortfall; **the unstake fee on that part comes off that payment** (devnet default; roadmap: user chooses instant or delayed). Same for every payout: withdraw, emergency exit, backer withdrawal, yield claims, treasury. |
+| `claim_stream` | `claim_stream` | Changed | Pays the stored beneficiary. If free USDC is short, redeems from Kamino first. If the pool still cannot pay, it pays nothing, counts the day as a cash-short day (rule 18: blocked time, extends every claim window, once per day) and restarts this claim's collection window, as multichain. Other payouts (withdraw, emergency exit, backer withdrawal, yield claims, treasury) pull the same way and refuse with `InsufficientLiquidity` if still short. |
 | `cancel_claim` | same | Changed | Penalty lock only when the stake was forfeited. What the claim already paid out stays paid and comes off the restored stake; a claim that paid the whole stake leaves it forfeited and earmarked for no claim. Multichain restores the full stake. |
 | `approve_override` / `cancel_pending_override` | same | Changed | 2-of-2 admin + co-signer. `Override` PDA `[override, claim]`. On a forfeited stake, only the claim that forfeited it (`StakeRecord.forfeited_by`) may be re-executed; multichain lets any claim count that forfeited principal as capacity again. |
 | `get_stake` / `get_claim` / `is_eligible` / `is_claim_eligible` | account fetch + client helpers | Changed | Eligibility maths lives in `pool-core`, read by clients through the IDL constants. |
 | `get_points_balance` | none | Left out | Points (V8 legacy). Not shown anywhere. |
-| `deploy_to_vault` / `auto_deploy_liquidity` / `provide_liquidity` / `ensure_liquidity` | `rebalance` (permissionless) + in-path push (after `stake` / `back`) and pull (every payout) | Changed | Marinade `deposit` / `liquid_unstake`, built by hand. Push = multichain `push_idle` (idle above open claims, up to `DEPLOY_BPS` = 80%, once ≥ `AUTO_PUSH_MIN_BPS`). `rebalance` pull = multichain `ensure_liquidity` target (open claims short of free cash, or deployment above the line); the pool pays that fee. No admin deploy / provide calls. |
-| `harvest` | `harvest` | Changed | Yield = mSOL value growth above book (Marinade `State.msol_price`), unstaked and credited as the SOL that arrives. Growth limit 10 bp/day kept. Also runs first inside `stake`, `back`, `mature_backing`, `withdraw`, `cancel_claim` (approved claims), `claim_yield`, `claim_backer_yield`, `complete_backer_withdrawal` (multichain call sites), so growth goes to the money already in. |
+| `deploy_to_vault` / `auto_deploy_liquidity` / `provide_liquidity` / `ensure_liquidity` | `auto_deploy_liquidity` / `ensure_liquidity` (permissionless), `provide_liquidity` (admin, works paused), `init_yield_account` (permissionless, once) + in-path push (after `stake` / `back` / `mature_backing`) and pull (every payout) | Changed | Kamino Lend `deposit_reserve_liquidity` / `redeem_reserve_collateral` on the venue reserve, built by hand. Push = multichain `push_idle` (idle above open claims, up to `deploy_bps`, once ≥ `AUTO_PUSH_MIN_BPS`). Pull = multichain `pull_cash` (shortfall plus buffer, else the shortfall alone). `ensure_liquidity` = multichain target (open claims short of free cash, or deployment above the line). Keeper calls hold the venue's rate to `MAX_REBALANCE_SLIPPAGE_BPS`; `provide_liquidity` takes the admin's `min_out`. No admin reference deposit: the keeper deploy needs none. |
+| `harvest` | `harvest` | Changed | Yield = value of the kUSDC held above book value (klend `collateral_to_liquidity` after a refresh), redeemed and credited as the USDC that arrives. Growth limit 10 bp/day kept; its clock starts at the first deposit. Also runs first inside `stake`, `back`, `mature_backing`, `withdraw`, `cancel_claim`, `claim_yield`, `claim_backer_yield`, `complete_backer_withdrawal` (multichain call sites), so growth goes to the money already in. Views take the reserve (optional) to count growth not yet harvested (rule 22). |
 | `claim_yield` / `claim_backer_yield` | same | Rules | Any time (not while paused), principal untouched. Staker yield goes to the stored beneficiary. |
 | `withdraw_yield` | `withdraw_yield` | Changed | Treasury takes protocol revenue only, capped at the protocol surplus. **Refused while paused** (multichain allows it). |
 | `get_liquid_balance` … `get_total_stakers` / `is_paused` (views) | account fields | Changed | Read the `Pool` account. |
@@ -47,7 +47,7 @@ form differs (reason given). **Left out** = not in this build.
 | Multichain storage | Solana account |
 |---|---|
 | Instance storage (admin, oracle, totals, indexes, day counters) | `Pool` PDA `[pool]` |
-| Contract balance (XLM) + DeFindex shares | `vault` PDA `[vault, pool]`: system-owned, no data. Holds the SOL and owns the mSOL token account. |
+| Contract balance (XLM) + DeFindex shares | `vault` PDA `[vault, pool]`: the pool's USDC token account (authority = pool PDA). kUSDC sits in a second token account, PDA `[leg, pool, collateral mint]`, also owned by the pool. |
 | `Stake(wallet)` | `StakeRecord` `[stake, pool, staker]` |
 | `Backer(address)` | `BackerRecord` `[backer, pool, backer]` |
 | `Claim(claim_id)` | `Claim` `[claim, pool, staker, tx_hash]` |
@@ -63,26 +63,33 @@ form differs (reason given). **Left out** = not in this build.
 - **Room to upgrade:** the program is upgradeable (same pool address, same records). `StakeRecord`, `BackerRecord`, `Claim` and `StakerWallets` carry `version` (1) + 64 spare bytes; `Pool` carries 256 spare bytes, 13 spare setting slots and `asset_mint` (native SOL today) so a USDC or CCTP version can migrate in place instead of launching a new pool.
 - **Snapshots:** a claim keeps the rules it started with. Approve window at admission, inactivity window at activation, cooldown and vesting at approval. A later setting change applies to new claims only.
 - **Stake record reuse:** closed on withdraw / emergency exit and re-created by the next stake. A forfeited record is never closed, so that address can never stake again (as multichain), enforced by `init` failing.
-- **Positions are program records.** No position token is minted, and mSOL stays in the pool.
+- **Positions are program records.** No position token is minted, and kUSDC stays in the pool.
 - **No price feed.** The oracle converts the USD loss to lamports off-chain and signs the lamport amount; the program checks it against the tier ceiling in SOL.
 
-## Marinade leg
+## Kamino leg
 
+- **The venue** is `Pool.yield_venue`, a Kamino Lend reserve set by governance (2-of-3, delay). A new
+  venue must be a klend reserve of the pool's USDC on classic SPL Token, passed with the execute call;
+  no venue change while anything is deployed. `init_yield_account` then opens the pool's kUSDC account
+  (PDA `[leg, pool, collateral mint]`). Until it exists nothing is deployed.
+- **Every account is checked before any call.** Each money instruction carries the nine venue accounts
+  in `Cash` (or the program id in each place when there is no venue). The program checks klend's id,
+  the reserve against `yield_venue`, and the market, market authority, supply vault, collateral mint,
+  kUSDC account and Scope price account against what the reserve itself records. klend is upgradeable:
+  owner, discriminator and length are checked before any byte is read, and a mismatch fails closed.
 - **Solana cannot catch a failed call.** Multichain's best-effort `try_deposit` / `try_withdraw` become
-  pre-checks: push and harvest skip unless Marinade is unpaused, the amount clears Marinade's minimum
-  and (harvest) its liquidity pool can pay. A payout that needs an unstake gets it or fails whole with
-  `InsufficientLiquidity` / `UnstakeFeeTooHigh`, and nothing changes.
-- **Who pays Marinade's fee.** The payee pays the fee on the part of an unstake their payment needed
-  (rounded up). If the whole mSOL position was not worth their shortfall, they take what it returned
-  (in practice one lamport of Marinade rounding). A `rebalance` unstake is the pool's: growth that
-  comes back pays the fee first, any rest is a loss marked off `total_staked` (multichain
-  `DeploymentShortfall`).
-- **Fee limit.** Payee-paid unstakes accept Marinade's fee up to Marinade's own `lp_max_fee` (decided
-  2026-09-30: the payee pays whatever Marinade charges; the site shows it before signing, via
-  `pool_core::marinade::unstake_fee_bps`). Pool-paid `rebalance` unstakes are held to
-  `MAX_REBALANCE_SLIPPAGE_BPS` (5%), else `UnstakeFeeTooHigh`. Marinade's fee is linear from `lp_min_fee`
-  (at or above its liquidity target) to `lp_max_fee` (empty). Devnet 2026-09-30: 15,264 SOL against a
-  160,000 SOL target, fee ~8.2%: payouts go through at that cost, rebalances wait.
-- **Compute units** (LiteSVM, Marinade at target liquidity): stake + deposit 77k, harvest 60k,
-  claim_yield + harvest 68k, withdraw + harvest + unstake 117k. Client limit `computeUnitLimit` in
-  `config/pool.devnet.json` (200k); the test suite fails if any path exceeds it.
+  pre-checks on the refreshed reserve (`pool_core::kamino`): status, emergency flags, deposit limit,
+  cash in the reserve after queued withdraw tickets, and the withdrawal cap. Push and harvest skip when
+  a check says no; a payout that still cannot be paid fails whole (or, for `claim_stream`, counts a
+  cash-short day), and nothing changes.
+- **Book value, not market value.** Payments redeem by book value, so growth not yet harvested is never
+  spent on them. A redeem that returns more than its book share credits the gain as yield; less is a
+  loss marked off `total_staked` (multichain `DeploymentShortfall`).
+- **Tested against the real program.** `tests/kamino.rs` runs mainnet klend with the main-market USDC
+  reserve, market and Scope prices dumped 2026-10-22: deposit and redeem by CPI, our collateral maths
+  equal to klend's to the unit, a stale price does not stop deposits or redeems, harvest, pulls,
+  cash-short days, the account checks and the governance install.
+- **Size and compute units.** With the venue and full upkeep (head of line plus two watch places) the
+  largest money call, `stake`, is 1,143 bytes, under the 1,232-byte limit with room for compute-budget
+  instructions; no lookup table needed. Deposit by CPI ~42k CU. Client limit `computeUnitLimit` in
+  `config/pool.devnet.json` (200k); the test suite fails if a withdraw with a pull exceeds it.

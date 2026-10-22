@@ -1,12 +1,33 @@
 //! Read-only views (multichain `get_pending_yield`, `get_staker_yield_owed`, `get_points_balance`,
 //! `get_backer_points`, `get_backer_yield_owed`, `collectable_view`). Run them by simulation: each
 //! returns its answer as the instruction's return data and writes nothing.
+//!
+//! Pass the venue's reserve (optional) to count growth not yet harvested (rule 22): the views then
+//! answer as if `harvest` ran first, on the reserve as last refreshed.
 
 use anchor_lang::prelude::*;
 
 use super::{backer, now, stake};
 use crate::constants::SEED_POOL;
+use crate::errors::PoolError;
+use crate::kamino::read_reserve;
+use crate::leg::{credit_yield, harvestable};
 use crate::state::{BackerRecord, Pool, StakeRecord};
+
+/// Books the growth `harvest` would take now, on the loaded copy only: the pool is read-only here,
+/// so nothing is written back. Without the reserve, leaves the pool as it is.
+fn add_growth(pool: &mut Pool, reserve: &Option<UncheckedAccount>, now: i64) -> Result<()> {
+    if let Some(reserve) = reserve {
+        require_keys_eq!(
+            reserve.key(),
+            pool.yield_venue,
+            PoolError::YieldAccountsMissing
+        );
+        let growth = harvestable(pool, &read_reserve(reserve)?, now)?;
+        credit_yield(pool, growth)?;
+    }
+    Ok(())
+}
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StakerView {
@@ -29,12 +50,16 @@ pub struct ViewStaker<'info> {
     #[account(seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
     pub stake_record: Box<Account<'info, StakeRecord>>,
+    /// CHECK: optional; must be `pool.yield_venue`, read by `read_reserve`.
+    pub reserve: Option<UncheckedAccount<'info>>,
 }
 
 pub fn view_staker(ctx: Context<ViewStaker>) -> Result<StakerView> {
+    let now = now()?;
+    add_growth(&mut ctx.accounts.pool, &ctx.accounts.reserve, now)?;
     let pool = &ctx.accounts.pool;
     let mut record = (*ctx.accounts.stake_record).clone();
-    stake::settle_points(pool, &mut record, now()?)?;
+    stake::settle_points(pool, &mut record, now)?;
     Ok(StakerView {
         yield_owed: stake::staker_owed(pool, &record)?,
         points: record.points,
@@ -46,11 +71,14 @@ pub struct ViewBacker<'info> {
     #[account(seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
     pub backer_record: Box<Account<'info, BackerRecord>>,
+    /// CHECK: optional; must be `pool.yield_venue`, read by `read_reserve`.
+    pub reserve: Option<UncheckedAccount<'info>>,
 }
 
 /// Counted balance only: a deposit still maturing earns from when it counts.
 pub fn view_backer(ctx: Context<ViewBacker>) -> Result<BackerView> {
     let now = now()?;
+    add_growth(&mut ctx.accounts.pool, &ctx.accounts.reserve, now)?;
     let pool = &ctx.accounts.pool;
     let record = &ctx.accounts.backer_record;
     let (yield_owed, points, _) = backer::accrued(pool, record, now)?;

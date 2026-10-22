@@ -13,6 +13,7 @@ use super::now;
 use crate::constants::{SEED_POOL, SEED_QUEUE, SEED_STAKE, SEED_VAULT, SEED_WATCH};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::YieldWithdrawn;
+use crate::leg::Money;
 // Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
 use crate::state::{Claim, ClaimStatus, Pool, QueueEntry, StakeRecord, WatchEntry};
 use crate::vault::{self, *};
@@ -44,10 +45,16 @@ pub struct WithdrawYield<'info> {
 /// protocol revenue that the balance still counts (as multichain). Not while paused
 /// for the same reason: stakers and backers cannot claim yield then.
 pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
-    let pool_info = ctx.accounts.pool.to_account_info();
+    let now = super::now()?;
     let vault = ctx.accounts.vault.to_account_info();
+    let mut money = Money::new(
+        &ctx.accounts.pool,
+        ctx.accounts.pool.to_account_info(),
+        vault.clone(),
+        &ctx.accounts.cash,
+    )?;
     let pool = &mut ctx.accounts.pool;
-    require!(!pool.is_paused(super::now()?), PoolError::Paused);
+    require!(!pool.is_paused(now), PoolError::Paused);
     require!(amount > 0, PoolError::AmountNotPositive);
     require!(
         amount <= pool.protocol_yield_balance,
@@ -75,7 +82,7 @@ pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
         amount
     });
     let to = ctx.accounts.treasury_usdc.to_account_info();
-    vault::pay_out_strict(pool, &pool_info, &ctx.accounts.cash, &vault, &to, amount)
+    money.pay_strict(pool, &to, amount, now)
 }
 
 #[derive(Accounts)]

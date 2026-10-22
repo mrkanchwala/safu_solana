@@ -7,6 +7,7 @@ pub mod settings;
 pub mod stake;
 pub mod upkeep;
 pub mod views;
+pub mod yield_leg;
 
 pub use admin::*;
 pub use backer::*;
@@ -17,6 +18,7 @@ pub use settings::*;
 pub use stake::*;
 pub use upkeep::*;
 pub use views::*;
+pub use yield_leg::*;
 
 use anchor_lang::prelude::*;
 

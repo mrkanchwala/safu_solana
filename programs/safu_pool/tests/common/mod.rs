@@ -114,11 +114,32 @@ pub struct Env {
     pub writer: Keypair,
     pub treasury: Keypair,
     pub now: i64,
+    /// The yield venue's accounts, once a test sets one up (`tests/kamino.rs`); every money call
+    /// passes them.
+    pub venue: Option<Venue>,
+}
+
+/// A klend reserve's accounts, as the pool's calls pass them.
+#[derive(Clone, Copy, Debug)]
+pub struct Venue {
+    pub reserve: Pubkey,
+    pub market: Pubkey,
+    pub authority: Pubkey,
+    pub supply: Pubkey,
+    pub collateral_mint: Pubkey,
+    pub pool_collateral: Pubkey,
+    pub oracle: Pubkey,
 }
 
 impl Env {
     /// Program and USDC mint loaded, clock set, roles funded; pool not initialized.
     pub fn uninitialized() -> Env {
+        Env::uninitialized_at(Keypair::new().pubkey(), START)
+    }
+
+    /// `uninitialized` with the USDC mint at `usdc_mint` and the clock at `start` (a mainnet fork
+    /// needs the real mint and a time its price feeds know).
+    pub fn uninitialized_at(usdc_mint: Pubkey, start: i64) -> Env {
         let mut svm = LiteSVM::new();
         let cfg = config();
         svm.add_program(
@@ -126,14 +147,13 @@ impl Env {
             include_bytes!("../../../../target/deploy/safu_pool.so"),
         )
         .unwrap();
-        let usdc_mint = Keypair::new().pubkey();
         set_token_program_account(
             &mut svm,
             usdc_mint,
             mint_data(pool_core::params::USDC_DECIMALS, 0),
         );
         let mut clock: Clock = svm.get_sysvar();
-        clock.unix_timestamp = START;
+        clock.unix_timestamp = start;
         svm.set_sysvar(&clock);
         let (admin, co_signer, guardian, oracle, writer, treasury) = (
             Keypair::new(),
@@ -157,7 +177,8 @@ impl Env {
             oracle,
             writer,
             treasury,
-            now: START,
+            now: start,
+            venue: None,
         };
         let t = env.treasury.pubkey();
         env.open_usdc(&t);
@@ -166,7 +187,11 @@ impl Env {
 
     /// Initialized with the devnet config.
     pub fn new() -> Env {
-        let mut env = Env::uninitialized();
+        Env::new_at(Keypair::new().pubkey(), START)
+    }
+
+    pub fn new_at(usdc_mint: Pubkey, start: i64) -> Env {
+        let mut env = Env::uninitialized_at(usdc_mint, start);
         let args = env.init_args();
         let admin = env.admin.insecure_clone();
         let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
@@ -255,10 +280,36 @@ impl Env {
         )
         .0
     }
+    /// The mint, the token program, and the venue's accounts (or none).
     pub fn cash(&self) -> safu_pool::accounts::Cash {
-        safu_pool::accounts::Cash {
-            usdc_mint: self.usdc_mint,
-            token_program: TOKEN,
+        let (usdc_mint, token_program) = (self.usdc_mint, TOKEN);
+        match self.venue {
+            None => safu_pool::accounts::Cash {
+                usdc_mint,
+                token_program,
+                klend_program: None,
+                reserve: None,
+                lending_market: None,
+                lending_market_authority: None,
+                reserve_liquidity_supply: None,
+                reserve_collateral_mint: None,
+                pool_collateral: None,
+                oracle: None,
+                instructions: None,
+            },
+            Some(v) => safu_pool::accounts::Cash {
+                usdc_mint,
+                token_program,
+                klend_program: Some(safu_pool::constants::KLEND_PROGRAM_ID),
+                reserve: Some(v.reserve),
+                lending_market: Some(v.market),
+                lending_market_authority: Some(v.authority),
+                reserve_liquidity_supply: Some(v.supply),
+                reserve_collateral_mint: Some(v.collateral_mint),
+                pool_collateral: Some(v.pool_collateral),
+                oracle: Some(v.oracle),
+                instructions: Some(IX_SYSVAR),
+            },
         }
     }
 
@@ -534,6 +585,8 @@ impl Env {
             safu_pool::accounts::MatureBacking {
                 pool: self.pool(),
                 backer_record: self.backer_record(backer),
+                vault: self.vault(),
+                cash: self.cash(),
             },
             safu_pool::instruction::MatureBacking {},
         )
@@ -827,6 +880,8 @@ impl Env {
                 pool: self.pool(),
                 claim: self.claim_addr(staker, tx),
                 stake_record: self.stake_record(staker),
+                vault: self.vault(),
+                cash: self.cash(),
             },
             safu_pool::instruction::CancelClaim {},
         )
@@ -981,6 +1036,7 @@ impl Env {
             safu_pool::accounts::ViewStaker {
                 pool: self.pool(),
                 stake_record: self.stake_record(staker),
+                reserve: self.venue.map(|v| v.reserve),
             },
             safu_pool::instruction::ViewStaker {},
         );
@@ -992,6 +1048,7 @@ impl Env {
             safu_pool::accounts::ViewBacker {
                 pool: self.pool(),
                 backer_record: self.backer_record(backer),
+                reserve: self.venue.map(|v| v.reserve),
             },
             safu_pool::instruction::ViewBacker {},
         );

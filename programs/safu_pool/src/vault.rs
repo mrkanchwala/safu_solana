@@ -9,20 +9,55 @@ use pool_core::liquidity;
 
 use crate::constants::SEED_POOL;
 use crate::errors::PoolError;
+use crate::kamino::Leg;
 use crate::state::Pool;
 
-/// The accounts every money-moving instruction needs besides the vault: the USDC mint and the token
-/// program. The mint is checked against `Pool::usdc_mint` before any transfer.
+/// The accounts every money-moving instruction needs besides the vault: the USDC mint, the token
+/// program, and the yield venue's accounts. The mint is checked against
+/// `Pool::usdc_mint` before any transfer.
 #[derive(Accounts)]
 pub struct Cash<'info> {
     pub usdc_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
+    // The yield venue's accounts (klend). All optional: a pool with no venue takes none (pass the
+    // program id in each place). With a venue set, an instruction that uses it refuses unless all
+    // are passed (`load_leg`).
+    /// CHECK: must be klend (`KLEND_PROGRAM_ID`).
+    pub klend_program: Option<UncheckedAccount<'info>>,
+    /// CHECK: must be `pool.yield_venue`; owner, discriminator and length checked on read.
+    #[account(mut)]
+    pub reserve: Option<UncheckedAccount<'info>>,
+    /// CHECK: must be the reserve's market; owner and discriminator checked on read.
+    pub lending_market: Option<UncheckedAccount<'info>>,
+    /// CHECK: klend PDA `[LENDING_MARKET_AUTH_SEED, market]`, checked on load.
+    pub lending_market_authority: Option<UncheckedAccount<'info>>,
+    /// CHECK: must be the reserve's liquidity supply vault.
+    #[account(mut)]
+    pub reserve_liquidity_supply: Option<UncheckedAccount<'info>>,
+    /// CHECK: must be the reserve's collateral mint.
+    #[account(mut)]
+    pub reserve_collateral_mint: Option<UncheckedAccount<'info>>,
+    /// CHECK: this program's PDA `[SEED_LEG, pool, collateral_mint]` (`init_yield_account`); a token
+    /// account of the collateral mint whose authority is the pool, checked on load.
+    #[account(mut)]
+    pub pool_collateral: Option<UncheckedAccount<'info>>,
+    /// CHECK: the reserve's Scope price account (its `scope_feed`), checked on load; klend checks
+    /// the contents.
+    pub oracle: Option<UncheckedAccount<'info>>,
+    /// CHECK: the instructions sysvar (address checked on load).
+    pub instructions: Option<UncheckedAccount<'info>>,
 }
 
-impl Cash<'_> {
+impl<'info> Cash<'info> {
     pub fn check(&self, pool: &Pool) -> Result<()> {
         require_keys_eq!(self.usdc_mint.key(), pool.usdc_mint, PoolError::WrongMint);
         Ok(())
+    }
+
+    /// The yield venue, loaded and checked (`None` without one). Load once per instruction.
+    pub fn venue(&self, pool: &Pool, pool_key: &Pubkey) -> Result<Option<Leg<'info>>> {
+        self.check(pool)?;
+        self.load_leg(pool, pool_key)
     }
 }
 
@@ -137,6 +172,12 @@ pub fn pay_out<'info>(
     }
     require_free_liquid(pool, vault, amount)?;
     pay(pool, pool_info, cash, vault, to, amount)
+}
+
+/// `pay_out` would go through for `amount` now (free cash, plus the rounding reserve's capped draw).
+pub fn can_pay(pool: &Pool, vault: &AccountInfo, amount: u64) -> Result<bool> {
+    let free = free_liquid(pool, vault)?;
+    Ok(free >= amount || liquidity::rounding_draw(amount, free, pool.rounding_reserve) > 0)
 }
 
 /// `pay_out` without the rounding reserve: protocol revenue never reaches it.

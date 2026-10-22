@@ -10,6 +10,7 @@ pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod instructions;
+pub mod kamino;
 pub mod leg;
 pub mod state;
 pub mod vault;
@@ -126,6 +127,27 @@ pub mod safu_pool {
     }
     pub fn fund_rounding_reserve(ctx: Context<FundRoundingReserve>, amount: u64) -> Result<()> {
         instructions::upkeep::fund_rounding_reserve(ctx, amount)
+    }
+
+    // Yield venue (keepers and admin; user calls harvest, push and pull on their own).
+    pub fn init_yield_account(ctx: Context<InitYieldAccount>) -> Result<()> {
+        instructions::yield_leg::init_yield_account(ctx)
+    }
+    pub fn harvest(ctx: Context<LegCall>) -> Result<()> {
+        instructions::yield_leg::harvest(ctx)
+    }
+    pub fn auto_deploy_liquidity(ctx: Context<LegCall>) -> Result<()> {
+        instructions::yield_leg::auto_deploy_liquidity(ctx)
+    }
+    pub fn ensure_liquidity(ctx: Context<LegCall>) -> Result<()> {
+        instructions::yield_leg::ensure_liquidity(ctx)
+    }
+    pub fn provide_liquidity(
+        ctx: Context<ProvideLiquidity>,
+        collateral: u64,
+        min_out: u64,
+    ) -> Result<()> {
+        instructions::yield_leg::provide_liquidity(ctx, collateral, min_out)
     }
 
     // Views (simulate; the answer is the return data).

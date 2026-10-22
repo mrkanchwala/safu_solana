@@ -10,6 +10,8 @@
 
 pub mod claim;
 pub mod drip;
+pub mod kamino;
+pub mod leg;
 pub mod liquidity;
 pub mod params;
 pub mod points;
@@ -49,6 +51,8 @@ pub enum CoreError {
     SettingOutOfBounds,
     /// Value breaks the order between settings (min <= max stake, rate bands low >= mid >= high).
     SettingOrderInvalid,
+    /// An external account (the yield venue's) is not what it should be.
+    BadAccount,
 }
 
 pub type Result<T> = core::result::Result<T, CoreError>;
