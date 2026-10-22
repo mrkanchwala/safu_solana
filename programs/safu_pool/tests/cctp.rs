@@ -140,6 +140,8 @@ struct Cctp {
     attesters: Vec<SigningKey>,
     relayer: Keypair,
     nonces: u64,
+    /// Sign for this cluster instead of the pool's (a signature made for another network).
+    sign_cluster: Option<u8>,
 }
 
 /// Instruction accounts as the program sees them: a key is a signer if any instruction signs it or
@@ -253,6 +255,7 @@ impl Cctp {
             attesters,
             relayer,
             nonces: 0,
+            sign_cluster: None,
         };
         for mode in [c::MODE_STAKE, c::MODE_BACK] {
             let ix = t.open_inbox_ix(mode);
@@ -556,6 +559,7 @@ impl Cctp {
     ) -> (OwnerSignature, Option<Instruction>) {
         let preimage = c::action_preimage(
             &safu_pool::ID.to_bytes(),
+            self.sign_cluster.unwrap_or(self.env.pool_state().cluster),
             &self.account(identity).to_bytes(),
             nonce,
             expires_at,
@@ -1062,4 +1066,21 @@ fn owner_calls_and_bridging_fit_the_site_limit() {
             assert!(cu <= limit, "{cu} of {limit}");
         }
     }
+}
+
+#[test]
+fn a_signature_made_for_another_cluster_does_not_work_here() {
+    let mut t = Cctp::new();
+    let owner = HomeKey::eth();
+    let identity = staked(&mut t, &owner);
+    let cluster = t.env.pool_state().cluster;
+    t.sign_cluster = Some(cluster + 1);
+    let inner = t.withdraw_metas(&identity);
+    let data = safu_pool::instruction::Withdraw { amount: bounds().1 }.data();
+    assert_err(
+        t.act(&owner, &identity, inner.clone(), data.clone()),
+        PoolError::CctpBadSignature,
+    );
+    t.sign_cluster = None;
+    t.act(&owner, &identity, inner, data).unwrap();
 }

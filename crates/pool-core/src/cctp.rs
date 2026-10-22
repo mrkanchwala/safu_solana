@@ -274,13 +274,14 @@ pub fn forward_hook(key: &[u8; 32]) -> [u8; FORWARD_HOOK_LEN] {
 // - Stellar: SEP-53 `signMessage` of the digest, i.e. Ed25519 over
 //   `sha256("Stellar Signed Message:\n" || digest)`.
 //
-// The preimage binds the program, the owner's account, a per-account nonce (each signature works
-// once) and an expiry, plus a hash of the exact call (instruction data and accounts).
+// The preimage binds the program and the cluster (the program id can be the same on devnet and
+// mainnet, so a devnet signature must not work on mainnet), the owner's account, a per-account nonce
+// (each signature works once) and an expiry, plus a hash of the exact call.
 
 /// Domain tag at the start of every signed action.
 pub const ACTION_DOMAIN: &[u8; 26] = b"SAFU_SOLANA_CCTP_ACTION_V1";
 /// Byte length of [`action_preimage`].
-pub const ACTION_PREIMAGE_LEN: usize = 26 + 32 + 32 + 8 + 8 + 32;
+pub const ACTION_PREIMAGE_LEN: usize = 26 + 32 + 1 + 32 + 8 + 8 + 32;
 /// EIP-191 prefix of a 32-byte message.
 pub const EIP191_PREFIX_32: &[u8; 28] = b"\x19Ethereum Signed Message:\n32";
 /// SEP-53 prefix (Stellar signed message).
@@ -289,6 +290,7 @@ pub const SEP53_PREFIX: &[u8; 24] = b"Stellar Signed Message:\n";
 /// What the owner's digest is `sha256` of.
 pub fn action_preimage(
     program: &[u8; 32],
+    cluster: u8,
     account: &[u8; 32],
     nonce: u64,
     expires_at: i64,
@@ -299,6 +301,7 @@ pub fn action_preimage(
     for part in [
         &ACTION_DOMAIN[..],
         program,
+        &[cluster],
         account,
         &nonce.to_le_bytes(),
         &expires_at.to_le_bytes(),
@@ -447,13 +450,14 @@ mod tests {
 
     #[test]
     fn action_preimage_binds_every_field_in_order() {
-        let p = action_preimage(&[1; 32], &[2; 32], 3, 4, &[5; 32]);
+        let p = action_preimage(&[1; 32], 9, &[2; 32], 3, 4, &[5; 32]);
         assert_eq!(&p[..26], ACTION_DOMAIN);
         assert_eq!(p[26..58], [1; 32]);
-        assert_eq!(p[58..90], [2; 32]);
-        assert_eq!(p[90..98], 3u64.to_le_bytes());
-        assert_eq!(p[98..106], 4i64.to_le_bytes());
-        assert_eq!(p[106..], [5; 32]);
+        assert_eq!(p[58], 9);
+        assert_eq!(p[59..91], [2; 32]);
+        assert_eq!(p[91..99], 3u64.to_le_bytes());
+        assert_eq!(p[99..107], 4i64.to_le_bytes());
+        assert_eq!(p[107..], [5; 32]);
     }
 
     #[test]

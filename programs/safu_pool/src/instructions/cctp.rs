@@ -120,6 +120,7 @@ fn authorize(
     require!(nonce == account.nonce, PoolError::CctpBadNonce);
     let digest = solana_sha256_hasher::hash(&c::action_preimage(
         &crate::ID.to_bytes(),
+        account.cluster,
         &account_key.to_bytes(),
         nonce,
         expires_at,
@@ -426,6 +427,7 @@ pub fn cctp_receive(
         account.version = ACCOUNT_VERSION;
         account.mode = mode;
         account.home_domain = home_domain;
+        account.cluster = a.pool.cluster;
         account.home_owner = home_owner;
         account.bump = ctx.bumps.account;
         account.identity_bump = ctx.bumps.identity;

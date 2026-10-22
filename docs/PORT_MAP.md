@@ -106,7 +106,7 @@ Multichain `cctp-adapter` + `safu-account` + `cctp-common`, as one part of this 
 | Per-user contract account | Identity PDA (staker/backer key) + `CctpAccount` + `held` token account | The program signs for the identity only after the owner's signature checks out. |
 | `__check_auth` + allowed calls | `cctp_act` | Runs one allowed pool call as the identity. The owner signs the call's data and its own accounts; upkeep accounts after them are not signed (they change as the pool moves and move no money). `set_beneficiary` is not allowed, and a stake's beneficiary must be the identity. |
 | `send_home` | `cctp_send_home` | Ethereum: burn to the owner's address. Stellar: burn to Circle's CctpForwarder with the owner's `G...` strkey in hook data (Circle: a Stellar `mintRecipient` is always a contract). Standard finality, max fee 0 (Circle's Solana minimum, 2026-10-22). |
-| Owner signatures (EVM, Solana) | EVM `personal_sign` of the 32-byte digest; Stellar SEP-53 `signMessage` of the digest as hex text | Each signature carries a nonce (works once) and an expiry (at most `MAX_ACTION_TTL_SECS`). |
+| Owner signatures (EVM, Solana) | EVM `personal_sign` of the 32-byte digest; Stellar SEP-53 `signMessage` of the digest as hex text | Each signature names the program and cluster (no devnet signature works on mainnet), carries a nonce (works once) and an expiry (at most `MAX_ACTION_TTL_SECS`). |
 | Decimals from Circle's config | `bridge_scale` refuses a mint with fewer decimals than canonical (KupiaSec #4) | Solana USDC is 6 = canonical, scale 1. |
 | Solana as a home chain | not applicable | Solana users stake directly. |
 

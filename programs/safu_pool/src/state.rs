@@ -585,6 +585,8 @@ pub struct CctpAccount {
     pub mode: u8,
     /// Circle domain of the owner's home chain.
     pub home_domain: u32,
+    /// The pool's cluster tag, signed into every owner action.
+    pub cluster: u8,
     /// The owner as a CCTP `bytes32` (Ethereum addresses left-padded).
     pub home_owner: [u8; 32],
     /// The next owner signature must carry this nonce; each one is used once.
