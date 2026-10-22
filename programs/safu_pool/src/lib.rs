@@ -37,6 +37,10 @@ pub mod safu_pool {
     pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
         instructions::admin::initialize(ctx, args)
     }
+    /// After an upgrade: brings the pool's data to this version (anyone; a no-op the second time).
+    pub fn migrate(ctx: Context<Migrate>) -> Result<u8> {
+        instructions::admin::migrate(ctx)
+    }
     pub fn pause(ctx: Context<AdminOnly>) -> Result<()> {
         instructions::admin::pause(ctx)
     }

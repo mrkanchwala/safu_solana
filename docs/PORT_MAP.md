@@ -60,7 +60,7 @@ form differs (reason given). **Left out** = not in this build.
 
 - **One clock:** Unix seconds (`Clock`). Multichain used ledger sequence for durations and timestamps for windows.
 - **Beneficiary:** stored as a plain `Pubkey`, since it is public at payout anyway. Never the pool or vault (`BeneficiaryIsPoolAccount`).
-- **Room to upgrade:** the program is upgradeable (same pool address, same records). `StakeRecord`, `BackerRecord`, `Claim` and `StakerWallets` carry `version` (1) + 64 spare bytes; `Pool` carries 256 spare bytes, 13 spare setting slots and `asset_mint` (native SOL today) so a USDC or CCTP version can migrate in place instead of launching a new pool.
+- **Room to upgrade:** the program is upgradeable (same pool address, same records). Every record carries `version` (`ACCOUNT_VERSION`) and spare bytes; `Pool` also has spare setting slots. After an upgrade that changes a layout, `migrate` (anyone, a no-op the second time, multichain `migrate`) brings the pool's data up; until it runs every other instruction refuses with `NotMigrated`, so new code never runs on old data. Solana runs upgraded code from the next slot, so `migrate` is the transaction right after the upgrade, not the same one.
 - **Snapshots:** a claim keeps the rules it started with. Approve window at admission, inactivity window at activation, cooldown and vesting at approval. A later setting change applies to new claims only.
 - **Stake record reuse:** closed on withdraw / emergency exit and re-created by the next stake. A forfeited record is never closed, so that address can never stake again (as multichain), enforced by `init` failing.
 - **Positions are program records.** No position token is minted, and kUSDC stays in the pool.

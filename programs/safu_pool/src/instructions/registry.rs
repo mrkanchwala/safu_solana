@@ -17,7 +17,7 @@ use pool_core::params::MAX_COVERED_WALLETS;
 pub struct RegisterWallet<'info> {
     #[account(mut)]
     pub registry_writer: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump, has_one = registry_writer @ PoolError::NotRegistryWriter)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = registry_writer @ PoolError::NotRegistryWriter)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(
         init_if_needed,

@@ -9,7 +9,7 @@ use pool_core::params::{GOV_DELAY_SECS, MAX_DEPLOY_BPS, RECOVERY_DELAY_SECS};
 use safu_pool::constants::*;
 use safu_pool::errors::PoolError;
 use safu_pool::instruction::{ApproveChange, CancelChange, ProposeChange, ProposeRecovery};
-use safu_pool::state::{GovChange, Pool};
+use safu_pool::state::{GovChange, Pool, ACCOUNT_VERSION};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
@@ -401,4 +401,45 @@ fn initialize_needs_four_different_role_keys() {
     args.guardian = args.oracle;
     let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
     assert_err(env.send(&[ix], &[&admin]), PoolError::RoleCollision);
+}
+
+/// Writes the pool's stored layout version (first byte after the discriminator), as an upgrade
+/// whose data is not yet migrated would leave it.
+fn set_pool_version(env: &mut Env, version: u8) {
+    let pool = env.pool();
+    let mut a = env.svm.get_account(&pool).unwrap();
+    a.data[8] = version;
+    env.svm.set_account(pool, a).unwrap();
+}
+
+fn migrate(env: &mut Env) -> Result<(), String> {
+    let caller = env.funded(0);
+    let ix = env.ix(
+        safu_pool::accounts::Migrate { pool: env.pool() },
+        safu_pool::instruction::Migrate {},
+    );
+    env.send(&[ix], &[&caller]).map(|_| ())
+}
+
+/// After an upgrade the pool refuses every call until `migrate` brings its data to this version.
+/// Anyone runs it, it is a no-op the second time, and a pool written by a newer version is refused.
+#[test]
+fn an_older_pool_refuses_every_call_until_migrate_runs() {
+    let (mut env, roles) = funded_env();
+    set_pool_version(&mut env, ACCOUNT_VERSION - 1);
+    let s = env.funded(bounds().0);
+    let ix = env.stake_ix(&s.pubkey(), bounds().0, s.pubkey());
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::NotMigrated,
+    );
+    let pause = env.admin_ix(safu_pool::instruction::Pause {});
+    assert_err(env.send(&[pause], &[&roles.admin]), PoolError::NotMigrated);
+    migrate(&mut env).unwrap();
+    assert_eq!(env.pool_state().version, ACCOUNT_VERSION);
+    migrate(&mut env).unwrap();
+    assert_eq!(env.pool_state().version, ACCOUNT_VERSION);
+    env.send(&[ix], &[&s]).unwrap();
+    set_pool_version(&mut env, ACCOUNT_VERSION + 1);
+    assert_err(migrate(&mut env), PoolError::NotMigrated);
 }

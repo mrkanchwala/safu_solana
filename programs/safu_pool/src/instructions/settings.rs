@@ -17,20 +17,20 @@ use crate::state::{PendingSetting, Pool, PENDING_APPROVED, PENDING_NONE, PENDING
 #[derive(Accounts)]
 pub struct ApproveSetting<'info> {
     pub co_signer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, has_one = co_signer @ PoolError::NotAdminOrCoSigner)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = co_signer @ PoolError::NotAdminOrCoSigner)]
     pub pool: Box<Account<'info, Pool>>,
 }
 
 #[derive(Accounts)]
 pub struct ExecuteSetting<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
 }
 
 #[derive(Accounts)]
 pub struct CancelSetting<'info> {
     pub signer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
 }
 

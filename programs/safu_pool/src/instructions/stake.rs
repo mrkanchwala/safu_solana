@@ -132,7 +132,7 @@ fn recheck_capital(pool: &Pool) -> Result<()> {
 pub struct Stake<'info> {
     #[account(mut)]
     pub staker: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -262,7 +262,7 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
 #[derive(Accounts)]
 pub struct SetBeneficiary<'info> {
     pub staker: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(
         mut,
@@ -292,7 +292,7 @@ pub fn set_beneficiary(ctx: Context<SetBeneficiary>, beneficiary: Pubkey) -> Res
 pub struct Withdraw<'info> {
     #[account(mut)]
     pub staker: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -346,7 +346,7 @@ pub fn withdraw(ctx: &mut Context<Withdraw>, amount: u64) -> Result<()> {
 pub struct EmergencyExit<'info> {
     #[account(mut)]
     pub staker: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -400,7 +400,7 @@ pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
 #[derive(Accounts)]
 pub struct ClaimYield<'info> {
     pub staker: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,

@@ -252,7 +252,7 @@ fn clear_request(record: &mut BackerRecord) {
 pub struct Back<'info> {
     #[account(mut)]
     pub backer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -313,7 +313,7 @@ pub fn back(ctx: &mut Context<Back>, amount: u64) -> Result<()> {
 
 #[derive(Accounts)]
 pub struct MatureBacking<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_BACKER, pool.key().as_ref(), backer_record.backer.as_ref()], bump = backer_record.bump)]
     pub backer_record: Box<Account<'info, BackerRecord>>,
@@ -345,7 +345,7 @@ pub fn mature_backing(ctx: &mut Context<MatureBacking>) -> Result<()> {
 #[derive(Accounts)]
 pub struct RequestBackerWithdrawal<'info> {
     pub backer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(
         mut,
@@ -359,7 +359,7 @@ pub struct RequestBackerWithdrawal<'info> {
 #[derive(Accounts)]
 pub struct BackerOnly<'info> {
     pub backer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(
         mut,
@@ -426,7 +426,7 @@ pub fn cancel_backer_withdrawal(ctx: &mut Context<BackerOnly>) -> Result<()> {
 pub struct CompleteBackerWithdrawal<'info> {
     #[account(mut)]
     pub backer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -496,7 +496,7 @@ pub fn complete_backer_withdrawal(ctx: &mut Context<CompleteBackerWithdrawal>) -
 pub struct ClaimBackerYield<'info> {
     #[account(mut)]
     pub backer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,

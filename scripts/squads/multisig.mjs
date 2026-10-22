@@ -10,6 +10,7 @@
 // when given the fingerprint printed here. Then the admin executes.
 //   node multisig.mjs propose-transfer --rpc <url> --multisig <pda> --admin <key.json> --to <pubkey> --lamports <n>
 //   node multisig.mjs propose-upgrade  --rpc <url> --multisig <pda> --admin <key.json> --program <id> --buffer <pubkey>
+//     After it executes, call the pool's `migrate` (anyone): every other pool call refuses until it runs.
 //   node multisig.mjs status  --rpc <url> --multisig <pda> --index <n>
 //   node multisig.mjs execute --rpc <url> --multisig <pda> --admin <key.json> --index <n>
 //

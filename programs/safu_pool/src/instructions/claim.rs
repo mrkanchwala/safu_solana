@@ -366,7 +366,7 @@ fn daily_share(pool: &mut Pool, claim: &Claim, day: i64) -> Result<u64> {
 pub struct SubmitClaim<'info> {
     #[account(mut)]
     pub oracle: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, has_one = oracle @ PoolError::NotOracle)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = oracle @ PoolError::NotOracle)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), approval.staker.as_ref()], bump = stake_record.bump)]
     pub stake_record: Box<Account<'info, StakeRecord>>,
@@ -534,7 +534,7 @@ pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<
 
 #[derive(Accounts)]
 pub struct ClaimTransition<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), claim.staker.as_ref(), claim.tx_hash.as_ref()], bump = claim.bump)]
     pub claim: Box<Account<'info, Claim>>,
@@ -544,7 +544,7 @@ pub struct ClaimTransition<'info> {
 
 #[derive(Accounts)]
 pub struct ReleaseQueuedClaim<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), claim.staker.as_ref(), claim.tx_hash.as_ref()], bump = claim.bump)]
     pub claim: Box<Account<'info, Claim>>,
@@ -624,7 +624,7 @@ pub fn try_release_queued_claim(ctx: &mut Context<ReleaseQueuedClaim>) -> Result
 
 #[derive(Accounts)]
 pub struct AdvanceQueue<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), claim.staker.as_ref(), claim.tx_hash.as_ref()], bump = claim.bump)]
     pub claim: Box<Account<'info, Claim>>,
@@ -817,7 +817,7 @@ pub fn expire_stale_claim(ctx: &mut Context<ClaimTransition>) -> Result<()> {
 #[derive(Accounts)]
 pub struct ApproveClaim<'info> {
     pub staker: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), staker.key().as_ref(), claim.tx_hash.as_ref()], bump = claim.bump, has_one = staker)]
     pub claim: Box<Account<'info, Claim>>,
@@ -858,7 +858,7 @@ pub fn approve_claim(ctx: &mut Context<ApproveClaim>) -> Result<()> {
 #[derive(Accounts)]
 pub struct ClaimStream<'info> {
     pub staker: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -969,7 +969,7 @@ pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
 #[derive(Accounts)]
 pub struct CancelClaim<'info> {
     pub admin: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, has_one = admin @ PoolError::NotAdmin)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), claim.staker.as_ref(), claim.tx_hash.as_ref()], bump = claim.bump)]
     pub claim: Box<Account<'info, Claim>>,
@@ -1031,7 +1031,7 @@ pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
 #[instruction(staker: Pubkey)]
 pub struct AdminStake<'info> {
     pub admin: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump, has_one = admin @ PoolError::NotAdmin)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), staker.as_ref()], bump = stake_record.bump)]
     pub stake_record: Box<Account<'info, StakeRecord>>,
@@ -1080,7 +1080,7 @@ pub fn unsuspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> 
 pub struct RevokeApproval<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump, has_one = admin @ PoolError::NotAdmin)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(
         init,
@@ -1124,7 +1124,7 @@ pub fn revoke_approval(
 pub struct ApproveOverride<'info> {
     #[account(mut)]
     pub signer: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), staker.as_ref()], bump = stake_record.bump)]
     pub stake_record: Box<Account<'info, StakeRecord>>,
@@ -1324,7 +1324,7 @@ fn execute_override(
 pub struct CancelPendingOverride<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump, has_one = admin @ PoolError::NotAdmin)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, close = admin, seeds = [SEED_OVERRIDE, override_request.claim.as_ref()], bump = override_request.bump)]
     pub override_request: Box<Account<'info, OverrideRequest>>,

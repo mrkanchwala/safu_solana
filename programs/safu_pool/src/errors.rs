@@ -255,6 +255,8 @@ pub enum PoolError {
     VenueUnavailable,
     #[msg("Venue returned less than the minimum")]
     MinAmountNotMet,
+    #[msg("Pool data is from an older version: run migrate first")]
+    NotMigrated,
 }
 
 impl From<CoreError> for PoolError {

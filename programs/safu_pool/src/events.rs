@@ -6,6 +6,12 @@ pub struct PoolInitialized {
     pub pool_cap: u64,
     pub cluster: u8,
 }
+/// The pool's data moved to a newer layout after an upgrade.
+#[event]
+pub struct PoolMigrated {
+    pub from: u8,
+    pub to: u8,
+}
 #[event]
 pub struct PausedUntil {
     pub until: i64,

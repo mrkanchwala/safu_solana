@@ -18,7 +18,7 @@ use crate::vault::*;
 pub struct InitYieldAccount<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     /// CHECK: must be `pool.yield_venue`, a klend USDC reserve (`check_venue`).
     #[account(address = pool.yield_venue @ PoolError::VenueNotSet)]
@@ -52,7 +52,7 @@ pub fn init_yield_account(ctx: Context<InitYieldAccount>) -> Result<()> {
 
 #[derive(Accounts)]
 pub struct LegCall<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
@@ -62,7 +62,7 @@ pub struct LegCall<'info> {
 #[derive(Accounts)]
 pub struct ProvideLiquidity<'info> {
     pub admin: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, has_one = admin @ PoolError::NotAdmin)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,

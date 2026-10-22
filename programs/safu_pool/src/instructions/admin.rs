@@ -102,9 +102,35 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
 }
 
 #[derive(Accounts)]
+pub struct Migrate<'info> {
+    /// The one account without the version check: this is how it gets current.
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    pub pool: Box<Account<'info, Pool>>,
+}
+
+/// After an upgrade, brings the pool's data up to this code's layout (multichain `migrate`). Anyone
+/// can call it; it runs only the fixed steps from the stored version, oldest first, and does nothing
+/// the second time. Until it runs, every other instruction refuses (`NotMigrated`). Returns the
+/// version.
+pub fn migrate(ctx: Context<Migrate>) -> Result<u8> {
+    let pool = &mut ctx.accounts.pool;
+    let from = pool.version;
+    require!(from <= ACCOUNT_VERSION, PoolError::NotMigrated);
+    if from < ACCOUNT_VERSION {
+        // Version 1 is the first layout: no steps yet. Later versions add theirs here.
+        pool.version = ACCOUNT_VERSION;
+        emit!(crate::events::PoolMigrated {
+            from,
+            to: ACCOUNT_VERSION
+        });
+    }
+    Ok(ACCOUNT_VERSION)
+}
+
+#[derive(Accounts)]
 pub struct AdminOnly<'info> {
     pub admin: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, has_one = admin @ PoolError::NotAdmin)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated, has_one = admin @ PoolError::NotAdmin)]
     pub pool: Box<Account<'info, Pool>>,
 }
 

@@ -5,8 +5,9 @@ use pool_core::params::{MAX_COVERED_WALLETS, MAX_PENDING_DEPOSITS};
 use pool_core::points::{self, SIDES};
 use pool_core::settings::{self, Settings, TierRatios, SETTING_SLOTS};
 
-/// Layout version of every record below. An upgrade that changes a layout bumps it and migrates;
-/// the spare `reserved` bytes let most new fields land without resizing anyone's account.
+/// Layout version of every record below. An upgrade that changes a layout bumps it and adds the
+/// step to `migrate` (the pool) or reads the record's own `version` (a per-user record); the spare
+/// `reserved` bytes let most new fields land without resizing anyone's account.
 pub const ACCOUNT_VERSION: u8 = 1;
 
 /// A setting change on its way: proposed by the admin, approved by the co-signer (starting the
@@ -245,6 +246,12 @@ pub struct Pool {
 }
 
 impl Pool {
+    /// The pool's data is on this code's layout. Every instruction but `migrate` requires it, so
+    /// code from an upgrade never runs on data an older version wrote.
+    pub fn is_current(&self) -> bool {
+        self.version == ACCOUNT_VERSION
+    }
+
     pub fn is_paused(&self, now: i64) -> bool {
         now < self.paused_until
     }

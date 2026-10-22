@@ -47,7 +47,7 @@ pub struct BackerView {
 
 #[derive(Accounts)]
 pub struct ViewStaker<'info> {
-    #[account(seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     pub stake_record: Box<Account<'info, StakeRecord>>,
     /// CHECK: optional; must be `pool.yield_venue`, read by `read_reserve`.
@@ -68,7 +68,7 @@ pub fn view_staker(ctx: Context<ViewStaker>) -> Result<StakerView> {
 
 #[derive(Accounts)]
 pub struct ViewBacker<'info> {
-    #[account(seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     pub backer_record: Box<Account<'info, BackerRecord>>,
     /// CHECK: optional; must be `pool.yield_venue`, read by `read_reserve`.

@@ -24,7 +24,7 @@ pub struct WithdrawYield<'info> {
     #[account(
         mut,
         seeds = [SEED_POOL],
-        bump = pool.bump,
+        bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated,
         has_one = admin @ PoolError::NotAdmin,
     )]
     pub pool: Box<Account<'info, Pool>>,
@@ -88,7 +88,7 @@ pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
 #[derive(Accounts)]
 pub struct FundRoundingReserve<'info> {
     pub funder: Signer<'info>,
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,

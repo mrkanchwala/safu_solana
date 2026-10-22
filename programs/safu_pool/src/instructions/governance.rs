@@ -44,7 +44,7 @@ const NO_VOTE: Pubkey = Pubkey::new_from_array([0; 32]);
 #[derive(Accounts)]
 pub struct GovCall<'info> {
     pub caller: Signer<'info>,
-    #[account(seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_GOVERNANCE, pool.key().as_ref()], bump)]
     pub governance: AccountLoader<'info, Governance>,
@@ -52,7 +52,7 @@ pub struct GovCall<'info> {
 
 #[derive(Accounts)]
 pub struct GovExecute<'info> {
-    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_GOVERNANCE, pool.key().as_ref()], bump)]
     pub governance: AccountLoader<'info, Governance>,

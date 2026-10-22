@@ -488,9 +488,9 @@ fn a_backing_with_harvest_push_and_full_upkeep_fits_the_site_limit() {
         if places[..2] == [Some(0), Some(1)] {
             break;
         }
-        let s = &claimants[0];
-        let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
-        env.send(&[ix], &[s]).unwrap();
+        let b = env.funded(USDC);
+        let ix = env.back_ix(&b.pubkey(), USDC);
+        env.send(&[ix], &[&b]).unwrap();
     }
     // Past both watched claims' approve deadlines, a new day, no Scope update.
     let deadline = claimants
