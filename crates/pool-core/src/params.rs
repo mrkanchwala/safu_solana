@@ -111,6 +111,10 @@ pub const MAX_COVERED_WALLETS: u8 = 3;
 /// this, and the site reads it from the IDL. Same as multichain.
 pub const MAX_TXIDS_PER_CLAIM: u8 = 20;
 
+/// The longest a CCTP owner's signed action may wait before it is used (`cctp.rs`). Short, so a
+/// leaked signature dies fast; each one also works only once.
+pub const MAX_ACTION_TTL_SECS: i64 = SECONDS_PER_HOUR;
+
 /// USDC decimals. `initialize` refuses a mint with any other.
 pub const USDC_DECIMALS: u8 = 6;
 /// Base units in one USDC.

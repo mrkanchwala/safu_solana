@@ -8,6 +8,7 @@
 //! fewer decimals than that cannot hold a canonical amount exactly, so [`bridge_scale`] refuses it
 //! instead of underflowing the scale.
 
+use crate::params::MAX_ACTION_TTL_SECS;
 use crate::{CoreError, Result};
 
 /// Circle CCTP domain ids.
@@ -260,8 +261,6 @@ pub const ACTION_PREIMAGE_LEN: usize = 26 + 32 + 32 + 8 + 8 + 32;
 pub const EIP191_PREFIX_32: &[u8; 28] = b"\x19Ethereum Signed Message:\n32";
 /// SEP-53 prefix (Stellar signed message).
 pub const SEP53_PREFIX: &[u8; 24] = b"Stellar Signed Message:\n";
-/// The longest a signed action may wait before it is used.
-pub const MAX_ACTION_TTL_SECS: i64 = 60 * 60;
 
 /// What the owner's digest is `sha256` of.
 pub fn action_preimage(
