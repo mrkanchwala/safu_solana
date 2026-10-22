@@ -319,9 +319,38 @@ impl Env {
         self.send_cu(ixs, signers).map(|_| ())
     }
 
-    /// Sends and returns the compute units the transaction used.
+    /// Sends at the site's compute limit and returns the compute units the transaction used.
     pub fn send_cu(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<u64, String> {
+        self.send_at_limit(ixs, signers)
+    }
+
+    /// Sends with upkeep but no compute limit instruction: Solana's 200k default, as any other
+    /// caller might.
+    pub fn send_default_limit(
+        &mut self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+    ) -> Result<u64, String> {
         let ixs = self.with_upkeep(ixs);
+        self.send_bare(&ixs, signers)
+    }
+
+    /// As `send_cu`, with the compute limit the site asks for (`computeUnitLimit` in the config).
+    pub fn send_at_limit(
+        &mut self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+    ) -> Result<u64, String> {
+        let mut ixs = self.with_upkeep(ixs);
+        // ComputeBudget `SetComputeUnitLimit` (tag 2, u32 units). Last, so instruction indexes the
+        // pool reads (approval signatures) stay where they are.
+        let mut data = vec![2u8];
+        data.extend_from_slice(&(self.cfg.compute_unit_limit as u32).to_le_bytes());
+        ixs.push(Instruction {
+            program_id: solana_sdk_ids::compute_budget::ID,
+            accounts: vec![],
+            data,
+        });
         self.send_bare(&ixs, signers)
     }
 

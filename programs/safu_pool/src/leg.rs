@@ -14,6 +14,7 @@
 
 use anchor_lang::prelude::*;
 use pool_core::leg as lg;
+use pool_core::params::{HARVEST_MIN_CU, PUSH_MIN_CU};
 use pool_core::settings::SettingKey;
 use pool_core::{add, liquidity, sub, yields};
 
@@ -25,6 +26,17 @@ use crate::events::{
 use crate::kamino::Leg;
 use crate::state::Pool;
 use crate::vault::{self, Cash};
+
+/// Compute units left in this transaction. Host builds (IDL, unit tests) have no meter.
+pub fn cu_left() -> u64 {
+    #[cfg(target_os = "solana")]
+    // SAFETY: read-only syscall, no arguments.
+    unsafe {
+        solana_define_syscall::definitions::sol_remaining_compute_units()
+    }
+    #[cfg(not(target_os = "solana"))]
+    u64::MAX
+}
 
 pub fn credit_yield(pool: &mut Pool, amount: u64) -> Result<()> {
     if amount == 0 {
@@ -197,7 +209,9 @@ impl<'a, 'info> Money<'a, 'info> {
             pool.deploy_bps,
         )
         .core()?;
-        if amount == 0 {
+        // Not enough compute left for a refresh, the deposit and the rest of the call: the cash
+        // stays in the vault until a later call or the keeper pushes it.
+        if amount == 0 || cu_left() < PUSH_MIN_CU {
             return Ok(0);
         }
         let leg = self.leg()?;
@@ -252,6 +266,16 @@ impl<'a, 'info> Money<'a, 'info> {
     /// growth limit, and credits it as yield. Book value never changes here. Skipped while paused or
     /// if the reserve cannot pay it now. Returns the yield credited.
     pub fn harvest(&mut self, pool: &mut Pool, now: i64) -> Result<u64> {
+        self.harvest_with(pool, now, HARVEST_MIN_CU)
+    }
+
+    /// The permissionless `harvest` call: nothing else runs in it, so only the harvest's own cost
+    /// needs to fit.
+    pub fn harvest_alone(&mut self, pool: &mut Pool, now: i64) -> Result<u64> {
+        self.harvest_with(pool, now, 0)
+    }
+
+    fn harvest_with(&mut self, pool: &mut Pool, now: i64, min_cu: u64) -> Result<u64> {
         if self.leg.is_none()
             || pool.is_paused(now)
             || pool.deployed_collateral == 0
@@ -265,11 +289,15 @@ impl<'a, 'info> Money<'a, 'info> {
             pool.last_harvest_at = now.max(1);
             return Ok(0);
         }
-        let leg = self.leg()?;
-        // Nothing to take at the last-read rate: skip the refresh too.
-        if harvestable(pool, &leg.state, now)? == 0 {
+        // No time since the last harvest: the growth limit is 0 whatever the rate. Not enough compute
+        // left for a refresh, a redeem and the rest of the call: the growth waits for the next call.
+        // These are the only skips before the refresh; the rate is always read fresh, never as
+        // someone last left it.
+        let elapsed = now.saturating_sub(pool.last_harvest_at);
+        if yields::harvest_limit(pool.deployed_book, elapsed).core()? == 0 || cu_left() < min_cu {
             return Ok(0);
         }
+        let leg = self.leg()?;
         leg.refresh()?;
         let value = leg.state.liquidity_for(pool.deployed_collateral).core()?;
         let collateral = lg::harvest_collateral(

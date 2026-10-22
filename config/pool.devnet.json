@@ -4,7 +4,7 @@
   "siteRpcPath": "/rpc",
   "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
   "poolCapUsdc": 100000000000,
-  "computeUnitLimit": 200000,
+  "computeUnitLimit": 400000,
   "drainTestMints": {
     "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   },

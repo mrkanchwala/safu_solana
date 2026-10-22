@@ -280,7 +280,7 @@ fn harvest_takes_only_the_growth_as_yield() {
     let mut env = setup(5_000);
     env.matured_backer(100_000 * USDC);
     let before = env.pool_state();
-    // The pool's own calls skip the harvest until klend's rate moves: someone refreshes the reserve.
+    // Refreshed here only to measure the growth the harvest should take.
     warp(&mut env, 86_400);
     fresh_prices(&mut env);
     refresh_reserve(&mut env);
@@ -308,6 +308,21 @@ fn harvest_takes_only_the_growth_as_yield() {
     assert!(left + 2 >= after.deployed_book && left <= after.deployed_book + 2);
     // Credited as yield: the stakers' and backers' shares are set aside.
     assert!(after.backer_yield_reserved > before.backer_yield_reserved);
+}
+
+#[test]
+fn harvest_refreshes_the_rate_itself() {
+    let mut env = setup(5_000);
+    env.matured_backer(100_000 * USDC);
+    let before = env.pool_state();
+    // Nobody outside refreshes the reserve: the harvest must accrue klend's interest on its own.
+    warp(&mut env, 86_400);
+    let anyone = env.funded(0);
+    let ix = leg_call(&env, safu_pool::instruction::Harvest {});
+    env.ok(&[ix], &[&anyone]);
+    let after = env.pool_state();
+    assert!(after.total_extracted_yield > before.total_extracted_yield);
+    assert_eq!(after.deployed_book, before.deployed_book);
 }
 
 #[test]
@@ -391,6 +406,49 @@ fn withdraw_pulls_the_shortfall_and_a_buffer() {
     assert_eq!(env.usdc(&s.pubkey()), max);
     let after = env.pool_state();
     assert!(after.deployed_book < p.deployed_book - max + 1);
+}
+
+/// The heaviest calls that harvest, a day on with no Scope update (klend's refresh costs most then):
+/// at the site's compute limit the harvest runs inside them; at Solana's 200k default it steps aside
+/// and the call still goes through. A harvest is the only thing that moves `last_harvest_at` (a pull
+/// also books growth as yield, so yield alone does not tell).
+#[test]
+fn heavy_calls_harvest_at_the_site_limit_and_never_fail_at_the_default() {
+    for site in [true, false] {
+        let send = |env: &mut Env, ix: Instruction, s: &solana_keypair::Keypair| {
+            let before = env.pool_state().last_harvest_at;
+            if site {
+                env.send_cu(&[ix], &[s]).unwrap();
+            } else {
+                env.send_default_limit(&[ix], &[s]).unwrap();
+            }
+            env.pool_state().last_harvest_at != before
+        };
+        let (min, max) = bounds();
+
+        // Withdraw that pulls its whole amount from klend.
+        let mut env = setup(8_000);
+        env.matured_backer(100_000 * USDC);
+        let s = env.staker(max);
+        warp(&mut env, 86_400);
+        let idle = env.vault_liquid();
+        env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = idle);
+        let ix = env.withdraw_part_ix(&s.pubkey(), &s.pubkey(), max);
+        assert_eq!(send(&mut env, ix, &s), site, "withdraw, site limit {site}");
+
+        // New stake and new backing: the harvest, then the push of the new cash into klend.
+        let mut env = setup(8_000);
+        env.matured_backer(100_000 * USDC);
+        warp(&mut env, 86_400);
+        let amount = min.max(2_000 * USDC);
+        let k = env.funded(amount);
+        let ix = env.stake_ix(&k.pubkey(), amount, k.pubkey());
+        assert_eq!(send(&mut env, ix, &k), site, "stake, site limit {site}");
+        warp(&mut env, 86_400);
+        let b = env.funded(50_000 * USDC);
+        let ix = env.back_ix(&b.pubkey(), 50_000 * USDC);
+        assert_eq!(send(&mut env, ix, &b), site, "back, site limit {site}");
+    }
 }
 
 #[test]

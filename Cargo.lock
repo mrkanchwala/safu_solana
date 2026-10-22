@@ -2514,6 +2514,7 @@ dependencies = [
  "pool-core",
  "serde_json",
  "solana-account",
+ "solana-define-syscall 3.0.0",
  "solana-instructions-sysvar",
  "solana-keypair",
  "solana-message",

@@ -166,6 +166,19 @@ pub const MAX_REBALANCE_SLIPPAGE_BPS: u64 = 500;
 /// Most growth one harvest may book, per day since the last harvest, bps of book value.
 pub const HARVEST_MAX_GROWTH_BPS_PER_DAY: u64 = 10;
 
+/// Compute units a harvest inside a user call needs left before it starts: klend's refresh on a stale
+/// price, the redeem, and the rest of the heaviest money call after it. Measured 22 Oct at ~200k (a
+/// new stake: harvest, then the push into klend), plus ~20% margin. Above Solana's 200k default, so
+/// a caller on the default skips the harvest; the site asks for 400k (`computeUnitLimit`). Checked
+/// by `programs/safu_pool/tests/kamino.rs` `heavy_calls_harvest_at_the_site_limit_and_never_fail_at_the_default`.
+pub const HARVEST_MIN_CU: u64 = 240_000;
+
+/// Compute units the push of new cash into the venue needs left before it starts: klend's refresh on
+/// a stale price, the deposit, and the rest of the call. Measured 22 Oct at ~146k, plus ~20% margin.
+/// A caller on Solana's 200k default skips the push (the keeper's `auto_deploy_liquidity` does it
+/// later); the site asks for 400k.
+pub const PUSH_MIN_CU: u64 = 175_000;
+
 // -----------------------------------------------------------------------
 // Yield split
 // -----------------------------------------------------------------------

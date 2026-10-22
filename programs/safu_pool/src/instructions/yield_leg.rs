@@ -81,7 +81,7 @@ fn money<'a, 'info>(
 pub fn harvest(ctx: Context<LegCall>) -> Result<()> {
     let now = now()?;
     let mut m = money(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
-    m.harvest(&mut ctx.accounts.pool, now)?;
+    m.harvest_alone(&mut ctx.accounts.pool, now)?;
     Ok(())
 }
 
