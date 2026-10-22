@@ -8,6 +8,7 @@
 //! - **Rounding favours the pool:** payouts and yield round down, amounts owed to the pool round up.
 #![no_std]
 
+pub mod cctp;
 pub mod claim;
 pub mod drip;
 pub mod kamino;
@@ -53,6 +54,8 @@ pub enum CoreError {
     SettingOrderInvalid,
     /// An external account (the yield venue's) is not what it should be.
     BadAccount,
+    /// A bridged mint has fewer decimals than Circle's canonical ones.
+    DecimalsMismatch,
 }
 
 pub type Result<T> = core::result::Result<T, CoreError>;

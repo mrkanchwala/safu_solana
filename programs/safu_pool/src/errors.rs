@@ -261,6 +261,8 @@ pub enum PoolError {
     SuspendNeedsSecondRole,
     #[msg("The second approver must be the co-signer or the guardian")]
     ApproverNotSecondRole,
+    #[msg("The bridged mint has fewer decimals than Circle's canonical ones")]
+    DecimalsMismatch,
 }
 
 impl From<CoreError> for PoolError {
@@ -285,6 +287,7 @@ impl From<CoreError> for PoolError {
             CoreError::SignatureExpired => PoolError::SignatureExpired,
             CoreError::SignatureDeadlineTooFar => PoolError::SignatureDeadlineTooFar,
             CoreError::BadAccount => PoolError::YieldAccountsMissing,
+            CoreError::DecimalsMismatch => PoolError::DecimalsMismatch,
         }
     }
 }
