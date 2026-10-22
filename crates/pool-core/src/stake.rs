@@ -12,16 +12,19 @@ pub fn bounds(s: &Settings) -> Result<(u64, u64)> {
     ))
 }
 
-/// A new stake of `amount` is in bounds and keeps total staked within the cap.
-pub fn check_new_stake(amount: u64, total_staked: u64, s: &Settings) -> Result<()> {
+/// Splits a deposit of `amount` into `(staked, overflow)`: up to the max is staked, the rest becomes
+/// backing (multichain `stake`). Below the min is refused. A pool full for stakes refuses the whole
+/// deposit: the overflow never turns a refused stake into backing.
+pub fn split_new_stake(amount: u64, total_staked: u64, s: &Settings) -> Result<(u64, u64)> {
     let (min, max) = bounds(s)?;
-    if amount == 0 || amount < min || amount > max {
+    if amount == 0 || amount < min {
         return Err(CoreError::StakeOutOfRange);
     }
-    if add(total_staked, amount)? > s.pool_cap() {
+    let staked = amount.min(max);
+    if add(total_staked, staked)? > s.pool_cap() {
         return Err(CoreError::PoolCapExceeded);
     }
-    Ok(())
+    Ok((staked, amount - staked))
 }
 
 /// Taking `amount` out of a stake of `stake`: returns what stays. All of it may go; a part only if

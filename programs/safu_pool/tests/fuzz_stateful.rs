@@ -134,8 +134,40 @@ impl World {
     }
 
     fn backer_rec(&self, i: usize) -> Option<BackerRecord> {
-        let a = self.env.backer_record(&self.backers[i].pubkey());
+        self.backer_rec_of(&self.backers[i].pubkey())
+    }
+
+    fn backer_rec_of(&self, owner: &Pubkey) -> Option<BackerRecord> {
+        let a = self.env.backer_record(owner);
         self.env.exists(&a).then(|| self.env.read(&a))
+    }
+
+    /// Every backer record: the backers', and the stakers' (a stake above the max backs the rest).
+    fn all_backer_recs(&self) -> Vec<BackerRecord> {
+        let owners = self.backers.iter().map(|k| k.pubkey());
+        let stakers = self.stakers.iter().map(|s| s.kp.pubkey());
+        owners
+            .chain(stakers)
+            .filter_map(|o| self.backer_rec_of(&o))
+            .collect()
+    }
+
+    /// The claim first in line, if anyone waits.
+    fn queue_head_claim(&self) -> Option<ClaimRef> {
+        let p = self.pool();
+        if p.queue_head >= p.queue_tail {
+            return None;
+        }
+        let entry = self.env.queue_entry(p.queue_head);
+        if !self.env.exists(&entry) {
+            return None;
+        }
+        let claim = self.env.queue_state(p.queue_head).claim;
+        self.claims.iter().copied().find(|c| {
+            self.env
+                .claim_addr(&self.stakers[c.staker].kp.pubkey(), &c.tx)
+                == claim
+        })
     }
 
     fn claim(&self, c: &ClaimRef) -> Option<Claim> {
@@ -285,10 +317,22 @@ impl World {
                 )
             }
             10 | 11 => {
-                let amount = self.backer_rec(bi).map(|r| r.withdraw_amount).unwrap_or(0);
+                let pre = self.backer_rec(bi);
+                let reserved = self.pool().backer_yield_reserved;
                 let before = self.env.usdc(&bpk);
                 let ix = self.env.complete_backer_ix(&bpk);
                 let ok = self.send(&[ix], &bk);
+                // One drip part of principal (the rest of the request once it closes), plus the
+                // yield paid with it.
+                let principal = match (pre, self.backer_rec(bi)) {
+                    (Some(b), Some(a)) if a.withdraw_amount == 0 => {
+                        b.withdraw_amount - b.withdraw_paid
+                    }
+                    (Some(b), Some(a)) => a.withdraw_paid - b.withdraw_paid,
+                    _ => 0,
+                };
+                let yield_paid = reserved.saturating_sub(self.pool().backer_yield_reserved);
+                let amount = principal + yield_paid;
                 let did = Did::CapitalOut {
                     staker: None,
                     amount,
@@ -306,8 +350,11 @@ impl World {
                     return ("submit_claim", false, Did::Other);
                 };
                 let tier = [TIER_A, TIER_B, TIER_C][self.rng.below(3) as usize];
-                let ratio = [TIER_A_RATIO, TIER_B_RATIO, TIER_C_RATIO][tier as usize % 3];
-                let top = rec.amount.saturating_mul(ratio).max(1);
+                // This stake's own ceiling: its ratios, or the live ones where higher.
+                let ratios = rec.tier_ratios(self.pool().settings().tier_ratios());
+                let top = pool_core::claim::tier_cap(rec.amount, tier, ratios)
+                    .unwrap()
+                    .max(1);
                 let entitlement =
                     [top, top + 1, self.rng.range(1, top), 1][self.rng.below(4) as usize];
                 let mut tx = [0u8; 32];
@@ -341,12 +388,22 @@ impl World {
                 ),
                 None => ("unlock_pending_claim", false, Did::Other),
             },
-            16 => match self.open_claim() {
-                Some(c) => (
-                    "try_release_queued_claim",
-                    self.transition(c, safu_pool::instruction::TryReleaseQueuedClaim {}),
-                    Did::Other,
-                ),
+            16 => match self.queue_head_claim() {
+                Some(c) => {
+                    let s = self.stakers[c.staker].kp.pubkey();
+                    let payer = self.env.admin.insecure_clone();
+                    if self.rng.chance(2) {
+                        let ix = self.env.release_ix(&s, &c.tx);
+                        (
+                            "try_release_queued_claim",
+                            self.send(&[ix], &payer),
+                            Did::Other,
+                        )
+                    } else {
+                        let ix = self.env.advance_ix(&s, &c.tx);
+                        ("advance_queue", self.send(&[ix], &payer), Did::Other)
+                    }
+                }
                 None => ("try_release_queued_claim", false, Did::Other),
             },
             17 | 18 | 33 | 34 => match self.open_claim() {
@@ -421,9 +478,14 @@ impl World {
                 let ix = self.env.admin_ix(safu_pool::instruction::Pause {});
                 ("pause", self.send(&[ix], &admin), Did::Pause)
             }
-            26 | 38 => {
+            26 => {
                 let ix = self.env.admin_ix(safu_pool::instruction::Unpause {});
                 ("unpause", self.send(&[ix], &admin), Did::Other)
+            }
+            38 => {
+                let a = self.rng.range(1, 2 * MAX_ROUNDING_DRAW);
+                let ix = self.env.fund_reserve_ix(&bpk, a);
+                ("fund_rounding_reserve", self.send(&[ix], &bk), Did::Other)
             }
             27 => {
                 // Propose + co-sign a random in-range value; executes after the timelock.
@@ -493,7 +555,7 @@ impl World {
                 return Err(format!("staker wallets out of bounds: count {}", w.count));
             }
             for h in w.hashes() {
-                let c: CoveredWallet = self.env.read(&self.env.covered(&h));
+                let c: CoveredWallet = self.env.read(&self.env.covered(h));
                 if c.staker != pk || c.wallet_hash != *h {
                     return Err(format!("listed wallet {:?} belongs to {}", h[0], c.staker));
                 }
@@ -534,10 +596,22 @@ impl World {
         let now = self.env.now;
         let liquid = self.env.vault_liquid();
         let reserved = p.staker_yield_reserved + p.backer_yield_reserved;
-        if liquid < reserved {
+        // Unpaid yield is pool cash (claims may spend it); the rounding reserve never is.
+        if liquid < p.rounding_reserve {
             return Err(format!(
-                "set-aside yield not in cash: liquid {liquid} < reserved {reserved}"
+                "rounding reserve not in cash: liquid {liquid} < reserve {}",
+                p.rounding_reserve
             ));
+        }
+
+        // Watch list: every place from head to tail exists, the one before the head is closed.
+        for seq in p.watch_head..p.watch_tail {
+            if !self.env.exists(&self.env.watch_entry(seq)) {
+                return Err(format!("watch place {seq} missing"));
+            }
+        }
+        if p.watch_head > 0 && self.env.exists(&self.env.watch_entry(p.watch_head - 1)) {
+            return Err("watch place behind the head not closed".into());
         }
 
         // Stakes: live records sum to total_staked exactly (no loss path), count exact.
@@ -546,7 +620,10 @@ impl World {
             if let Some(r) = self.stake_rec(i) {
                 if !r.forfeited {
                     sum += r.amount;
-                    count += 1;
+                    count += (r.amount > 0) as u64;
+                }
+                if r.forfeited && !r.claim_approved {
+                    return Err("forfeited stake without an approved claim".into());
                 }
                 if r.version != 1 {
                     return Err(format!("stake record version {}", r.version));
@@ -559,18 +636,18 @@ impl World {
                 p.total_staked, p.total_stakers
             ));
         }
-        // Backing: exact, no loss path touches it.
-        let (mut backed, mut pending) = (0u64, 0u64);
-        for i in 0..BACKERS {
-            if let Some(r) = self.backer_rec(i) {
-                backed += r.amount;
-                pending += r.pending_amount;
-                if r.withdraw_amount > r.amount {
-                    return Err(format!(
-                        "backer withdrawal {} > backing {}",
-                        r.withdraw_amount, r.amount
-                    ));
-                }
+        // Backing: exact, no loss path touches it. Open withdrawals: exact, never above the backing.
+        let (mut backed, mut pending, mut open) = (0u64, 0u64, 0u64);
+        for r in self.all_backer_recs() {
+            backed += r.amount;
+            pending += r.pending[..r.pending_count as usize]
+                .iter()
+                .map(|d| d.amount)
+                .sum::<u64>();
+            let unpaid = r.withdraw_amount - r.withdraw_paid;
+            open += unpaid;
+            if unpaid > r.amount {
+                return Err(format!("backer withdrawal {unpaid} > backing {}", r.amount));
             }
         }
         if backed != p.total_backed || pending != p.total_backed_pending {
@@ -578,6 +655,32 @@ impl World {
                 "backing: records {backed}/{pending}, pool {}/{}",
                 p.total_backed, p.total_backed_pending
             ));
+        }
+        if open != p.total_backer_open {
+            return Err(format!(
+                "backer open: records {open}, pool {}",
+                p.total_backer_open
+            ));
+        }
+        // The line: every place from head to tail exists and names its own claim's place.
+        if p.queue_head > p.queue_tail {
+            return Err(format!(
+                "queue head {} > tail {}",
+                p.queue_head, p.queue_tail
+            ));
+        }
+        for seq in p.queue_head..p.queue_tail {
+            let entry = self.env.queue_entry(seq);
+            if !self.env.exists(&entry) {
+                return Err(format!("queue place {seq} missing"));
+            }
+            let claim: Claim = self.env.read(&self.env.queue_state(seq).claim);
+            if claim.queue_seq != seq {
+                return Err(format!(
+                    "queue place {seq} names a claim at {}",
+                    claim.queue_seq
+                ));
+            }
         }
         // Claims: allocation equals the unpaid part of every admitted open claim.
         let mut allocated = 0u64;
@@ -680,10 +783,7 @@ impl World {
 }
 
 /// Largest books-over-holdings gap of one episode.
-fn run_episode(
-    seed: u64,
-    stats: &mut BTreeMap<&'static str, (u64, u64)>,
-) -> Result<u64, String> {
+fn run_episode(seed: u64, stats: &mut BTreeMap<&'static str, (u64, u64)>) -> Result<u64, String> {
     let mut w = World::new(seed);
     for i in 0..STEPS {
         let pre = w.pool();

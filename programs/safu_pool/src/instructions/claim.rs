@@ -2,6 +2,16 @@
 //! stake) → cooldown → vesting stream under a daily payout cap → completed. Plus cancel (false
 //! positive), the 2-of-2 override, approval revocation, and the permissionless expiry sweeps.
 //!
+//! The line: a claim that cannot be admitted now queues at the back (`QueueEntry` at
+//! `Pool.queue_tail`), and while anyone waits a new claim joins the back even if there is room for
+//! it. Only the head of the line is released; calling fast buys nothing. A queued claim never
+//! expires on time (days in the line are days the pool could not pay); it leaves the line only once
+//! it can never be released.
+//!
+//! Payouts: each claim gets a pro-rata share (by what it is still owed) of the day's payout cap,
+//! set at its first collection that day from the day's snapshot, so the order of calls does not
+//! matter. What a claim does not take stays vested for later days.
+//!
 //! Pause and the claim windows: every window (hack → submit, approve, collection) runs on
 //! the claim clock, `Pool::claim_clock(now, claim.pause_mark)`, which does not count time the pool
 //! spent paused. The expiry sweeps are also refused while paused. A pause therefore never uses up a
@@ -12,17 +22,20 @@
 
 use anchor_lang::prelude::*;
 use pool_core::claim as rules;
-use pool_core::params::{CLAIM_WINDOW_SECS, PENALTY_LOCK_SECS};
+use pool_core::params::PENALTY_LOCK_SECS;
 use pool_core::settings::SettingKey;
-use pool_core::{add, capacity, yields};
+use pool_core::{add, capacity, drip};
 
 use super::now;
 use crate::approval::{self, ClaimApproval};
-use crate::constants::{SEED_CLAIM, SEED_OVERRIDE, SEED_POOL, SEED_STAKE, SEED_VAULT};
+use crate::constants::{
+    SEED_CLAIM, SEED_OVERRIDE, SEED_POOL, SEED_QUEUE, SEED_STAKE, SEED_VAULT, SEED_WATCH,
+};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::*;
 use crate::state::{
-    Claim, ClaimStatus, OverrideRequest, Pool, RevokedApproval, StakeRecord, ACCOUNT_VERSION,
+    Claim, ClaimStatus, OverrideRequest, Pool, QueueEntry, RevokedApproval, StakeRecord,
+    WatchEntry, ACCOUNT_VERSION,
 };
 // Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
 use crate::vault::{self, *};
@@ -70,23 +83,36 @@ fn admit(
     claim.stake = stake.amount;
     // The claim keeps the approve window it was admitted with.
     claim.approve_window = pool.settings().get(SettingKey::ApproveWindowSecs);
-    if rules::time_gate_met(stake.staked_at, now) {
+    if rules::time_gate_met(stake.staked_at, now, stake.time_gate_secs) {
         open_approve_window(pool, claim, now)?;
     } else {
+        // Pause time from here on is added back to the approve window that opens at the gate.
         claim.status = ClaimStatus::PendingTime;
+        claim.pause_mark = pool.paused_secs_at(now);
     }
     Ok(())
 }
 
-/// Moves a stake's unpaid yield to the protocol share (a forfeited stake and its yield go to the pool).
-fn forfeit_staker_yield(pool: &mut Pool, stake: &mut StakeRecord) -> Result<()> {
-    if !stake.forfeited {
-        let owed =
-            yields::owed(stake.amount, pool.staker_yield_index, stake.yield_index_at).core()?;
-        let moved = owed.min(pool.staker_yield_reserved);
-        pool.staker_yield_reserved -= moved;
-        pool.protocol_yield_balance = add(pool.protocol_yield_balance, moved).core()?;
+/// Past the time gate a pending claim awaits approval from the gate moment on, whether or not anyone
+/// called anything (multichain `promote_if_due`): one-click approve, and the approve window runs
+/// from the gate (pause time since admission added back). In memory; the caller persists. True if
+/// promoted.
+pub(crate) fn promote_if_due(claim: &mut Claim, stake: &StakeRecord, now: i64) -> Result<bool> {
+    if claim.status != ClaimStatus::PendingTime
+        || !rules::time_gate_met(stake.staked_at, now, stake.time_gate_secs)
+    {
+        return Ok(false);
     }
+    let gate_at = secs_after(stake.staked_at, stake.time_gate_secs)?;
+    claim.status = ClaimStatus::AwaitingApproval;
+    claim.approve_deadline = secs_after(gate_at, claim.approve_window)?;
+    Ok(true)
+}
+
+/// The claimant keeps the yield earned so far: settled into `yield_owed` (still set aside, paid on
+/// request), before the stake leaves `total_staked` (multichain `settle_staker_yield`).
+fn settle_staker_yield(pool: &Pool, stake: &mut StakeRecord) -> Result<()> {
+    stake.yield_owed = super::stake::staker_owed(pool, stake)?;
     stake.yield_index_at = pool.staker_yield_index;
     Ok(())
 }
@@ -127,19 +153,208 @@ fn activate(
     claim: &mut Claim,
     claim_key: Pubkey,
     now: i64,
-) -> Result<()> {
-    forfeit_staker_yield(pool, stake)?;
+) -> Result<u64> {
+    super::stake::settle_points(pool, stake, now)?;
+    let points_burned = core::mem::take(&mut stake.points);
+    settle_staker_yield(pool, stake)?;
     stake.forfeited = true;
+    stake.claim_approved = true;
     stake.forfeited_by = Some(claim_key);
     start_clocks(pool, claim, now)?;
     claim.stake = stake.amount;
     pool.total_staked = pool.total_staked.saturating_sub(stake.amount);
     pool.total_stakers = pool.total_stakers.saturating_sub(1);
-    Ok(())
+    Ok(points_burned)
 }
 
 fn release_allocation(pool: &mut Pool, amount: u64) {
     pool.total_allocated = pool.total_allocated.saturating_sub(amount);
+}
+
+/// A queued claim that can never be released: no longer queued (an override took it over), or its
+/// stake is forfeited, empty, or now points at another queued claim. A different live claim on the
+/// same stake alone is NOT enough: if that one is cancelled, this one must still be able to go.
+pub(crate) fn queued_claim_dead(
+    claim: &Claim,
+    claim_key: &Pubkey,
+    stake: Option<&StakeRecord>,
+) -> bool {
+    if claim.status != ClaimStatus::Reserved {
+        return true;
+    }
+    match stake {
+        None => true,
+        Some(r) => r.reserved_claim.as_ref() != Some(claim_key) || r.forfeited || r.amount == 0,
+    }
+}
+
+/// Marks a dead queued claim Expired and frees its stake's queue slot (only if it is this claim's).
+fn expire_queued(claim: &mut Claim, claim_key: Pubkey, stake: Option<&mut StakeRecord>) {
+    if let Some(r) = stake {
+        if r.reserved_claim == Some(claim_key) {
+            r.reserved_claim = None;
+        }
+    }
+    claim.status = ClaimStatus::Expired;
+    emit!(ClaimQueueExpired { claim: claim_key });
+}
+
+/// Creates the place PDA `[seed, pool, seq]`, owned by this program, holding `value(bump)`, rent from
+/// `payer`. By hand because a place exists only when needed. Like Anchor's `init`, it works even if
+/// someone sent lamports to the address first.
+#[allow(clippy::too_many_arguments)]
+fn create_place<'info, T: AccountSerialize + Space>(
+    seed: &[u8],
+    pool_key: &Pubkey,
+    seq: u64,
+    entry: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    wrong: PoolError,
+    value: impl FnOnce(u8) -> T,
+) -> Result<()> {
+    use anchor_lang::system_program::{allocate, assign, create_account, transfer};
+    use anchor_lang::system_program::{Allocate, Assign, CreateAccount, Transfer};
+    let seq_bytes = seq.to_le_bytes();
+    let (address, bump) =
+        Pubkey::find_program_address(&[seed, pool_key.as_ref(), &seq_bytes], &crate::ID);
+    require_keys_eq!(entry.key(), address, wrong);
+    let space = 8 + T::INIT_SPACE;
+    let rent = Rent::get()?.minimum_balance(space);
+    let signer: &[&[&[u8]]] = &[&[seed, pool_key.as_ref(), &seq_bytes, &[bump]]];
+    let sys = system_program.key();
+    if entry.lamports() == 0 {
+        create_account(
+            CpiContext::new_with_signer(
+                sys,
+                CreateAccount {
+                    from: payer.clone(),
+                    to: entry.clone(),
+                },
+                signer,
+            ),
+            rent,
+            space as u64,
+            &crate::ID,
+        )?;
+    } else {
+        let short = rent.saturating_sub(entry.lamports());
+        if short > 0 {
+            transfer(
+                CpiContext::new(
+                    sys,
+                    Transfer {
+                        from: payer.clone(),
+                        to: entry.clone(),
+                    },
+                ),
+                short,
+            )?;
+        }
+        allocate(
+            CpiContext::new_with_signer(
+                sys,
+                Allocate {
+                    account_to_allocate: entry.clone(),
+                },
+                signer,
+            ),
+            space as u64,
+        )?;
+        assign(
+            CpiContext::new_with_signer(
+                sys,
+                Assign {
+                    account_to_assign: entry.clone(),
+                },
+                signer,
+            ),
+            &crate::ID,
+        )?;
+    }
+    let mut data = entry.try_borrow_mut_data()?;
+    let mut out: &mut [u8] = &mut data;
+    value(bump).try_serialize(&mut out)
+}
+
+/// Puts the claim at the back of the line (`QueueEntry` at `queue_tail`). Returns its place.
+fn join_queue<'info>(
+    pool: &mut Pool,
+    pool_key: &Pubkey,
+    entry: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    claim_key: Pubkey,
+) -> Result<u64> {
+    let seq = pool.queue_tail;
+    let payer_key = payer.key();
+    create_place(
+        SEED_QUEUE,
+        pool_key,
+        seq,
+        entry,
+        payer,
+        system_program,
+        PoolError::WrongQueueEntry,
+        |bump| QueueEntry {
+            claim: claim_key,
+            payer: payer_key,
+            bump,
+        },
+    )?;
+    pool.queue_tail = add(pool.queue_tail, 1).core()?;
+    Ok(seq)
+}
+
+/// Puts the claim on the watch list (`WatchEntry` at `watch_tail`), so upkeep expires it when due.
+fn watch_claim<'info>(
+    pool: &mut Pool,
+    pool_key: &Pubkey,
+    entry: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    claim_key: Pubkey,
+) -> Result<()> {
+    let payer_key = payer.key();
+    create_place(
+        SEED_WATCH,
+        pool_key,
+        pool.watch_tail,
+        entry,
+        payer,
+        system_program,
+        PoolError::WrongWatchEntry,
+        |bump| WatchEntry {
+            claim: claim_key,
+            payer: payer_key,
+            done: false,
+            bump,
+        },
+    )?;
+    pool.watch_tail = add(pool.watch_tail, 1).core()?;
+    Ok(())
+}
+
+/// The day's payout snapshot (capacity, what open claims are owed), taken at the day's first
+/// collection.
+fn payout_snap(pool: &mut Pool, day: i64) -> Result<(u64, u64)> {
+    if pool.payout_snap_day != day {
+        pool.payout_snap_day = day;
+        pool.payout_snap_capacity = pool_capacity(pool)?;
+        pool.payout_snap_allocated = pool.total_allocated;
+    }
+    Ok((pool.payout_snap_capacity, pool.payout_snap_allocated))
+}
+
+/// This claim's share of today's payout cap: pro rata to what it is still owed against everything
+/// owed at the snapshot. Its own approval-time capacity is still the floor of the cap base (so
+/// shrinking the pool after approval cannot slow it). Rounded up: no claim gets a zero share.
+fn daily_share(pool: &mut Pool, claim: &Claim, day: i64) -> Result<u64> {
+    let (snap_capacity, snap_allocated) = payout_snap(pool, day)?;
+    let base = snap_capacity.max(claim.capacity_snapshot);
+    let cap =
+        rules::payout_cap(base, pool.total_allocated, pool.settings().payout_rates()).core()?;
+    drip::share(cap, claim.entitlement - claim.streamed, snap_allocated).core()
 }
 
 // ------------------------------------------------------------------ submit
@@ -168,17 +383,25 @@ pub struct SubmitClaim<'info> {
     /// CHECK: the instructions sysvar (address constraint).
     #[account(address = solana_sdk_ids::sysvar::instructions::ID)]
     pub instructions: UncheckedAccount<'info>,
+    /// CHECK: the back of the line, `[SEED_QUEUE, pool, queue_tail]`; created only if the claim
+    /// queues (address checked then).
+    #[account(mut)]
+    pub queue_entry: UncheckedAccount<'info>,
+    /// CHECK: the back of the watch list, `[SEED_WATCH, pool, watch_tail]`; created here (address
+    /// checked then).
+    #[account(mut)]
+    pub watch_entry: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
 /// Oracle only, with an Ed25519-signed approval right before this instruction. Check order follows
 /// multichain: role, arguments, signature, stake, ceiling, hack window, duplicate, then admit or queue.
-pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
+pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
     let now = now()?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     require!(a.entitlement > 0, PoolError::EntitlementNotPositive);
-    rules::tier_ratio(a.tier).core()?;
+    rules::check_tier(a.tier).core()?;
 
     rules::check_deadline(a.deadline, now).core()?;
     let message = approval::encode_message(&crate::ID, pool.cluster, &a);
@@ -207,7 +430,8 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
         stake.reserved_claim.is_none(),
         PoolError::ClaimAlreadyQueued
     );
-    rules::check_entitlement(a.entitlement, stake.amount, a.tier).core()?;
+    let ratios = stake.tier_ratios(pool.settings().tier_ratios());
+    rules::check_entitlement(a.entitlement, stake.amount, a.tier, ratios).core()?;
     // The hack window runs on the claim clock from the hack: pause time since then does not count.
     let hack_mark = pool.paused_secs_at(a.hack_timestamp);
     rules::check_hack_time(
@@ -215,6 +439,7 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
         stake.staked_at,
         now,
         pool.claim_clock(now, hack_mark),
+        stake.claim_window_secs,
     )
     .core()?;
 
@@ -243,9 +468,21 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
         approve_window: 0,
         inactivity_window: 0,
         pause_mark: hack_mark,
+        queue_seq: 0,
+        share_day: 0,
+        share_left: 0,
         reserved: [0; 64],
     });
 
+    let pool_key = pool.key();
+    watch_claim(
+        pool,
+        &pool_key,
+        &ctx.accounts.watch_entry.to_account_info(),
+        &ctx.accounts.oracle.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        claim_key,
+    )?;
     roll_day(pool, now);
     let fits = rules::admits(
         a.entitlement,
@@ -256,13 +493,24 @@ pub fn submit_claim(ctx: Context<SubmitClaim>, a: ClaimApproval) -> Result<()> {
     )
     .core()?;
     let oracle_limited = pool.day_oracle_count >= rules::oracle_daily_limit(pool.total_stakers);
-    // Genuine but not admittable now: queue, never lose it. Released later by anyone.
-    if !fits || oracle_limited {
+    let anyone_waiting = pool.queue_head < pool.queue_tail;
+    // Genuine but not admittable now, or others are already in line: join the back, never lose it.
+    if !fits || oracle_limited || anyone_waiting {
+        let seq = join_queue(
+            pool,
+            &pool_key,
+            &ctx.accounts.queue_entry.to_account_info(),
+            &ctx.accounts.oracle.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            claim_key,
+        )?;
+        claim.queue_seq = seq;
         stake.reserved_claim = Some(claim_key);
         emit!(ClaimQueued {
             staker: a.staker,
             claim: claim_key,
-            entitlement: a.entitlement
+            entitlement: a.entitlement,
+            seq
         });
         return Ok(());
     }
@@ -287,25 +535,50 @@ pub struct ClaimTransition<'info> {
     pub stake_record: Box<Account<'info, StakeRecord>>,
 }
 
-/// Re-checks a queued claim against the pool now; admits it if it fits. No claim-window check, as
-/// multichain: a genuine queued claim stays releasable until someone expires it.
-pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
-    let now = now()?;
-    let pool = &mut ctx.accounts.pool;
-    require!(!pool.is_paused(now), PoolError::Paused);
-    let claim_key = ctx.accounts.claim.key();
-    let claim = &mut ctx.accounts.claim;
+#[derive(Accounts)]
+pub struct ReleaseQueuedClaim<'info> {
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    pub pool: Box<Account<'info, Pool>>,
+    #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), claim.staker.as_ref(), claim.tx_hash.as_ref()], bump = claim.bump)]
+    pub claim: Box<Account<'info, Claim>>,
+    #[account(
+        mut,
+        close = rent_to,
+        seeds = [SEED_QUEUE, pool.key().as_ref(), &claim.queue_seq.to_le_bytes()],
+        bump = queue_entry.bump,
+        has_one = claim @ PoolError::WrongQueueEntry,
+    )]
+    pub queue_entry: Box<Account<'info, QueueEntry>>,
+    #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), claim.staker.as_ref()], bump = stake_record.bump)]
+    pub stake_record: Box<Account<'info, StakeRecord>>,
+    /// CHECK: whoever paid the place's rent gets it back (address constraint).
+    #[account(mut, address = queue_entry.payer @ PoolError::WrongQueueEntry)]
+    pub rent_to: UncheckedAccount<'info>,
+}
+
+/// Admits the first claim in line if it fits now (solvency and today's stress cap, re-checked
+/// against the pool now); the next claim moves up. Shared by the instruction and upkeep.
+pub(crate) fn release_head(
+    pool: &mut Pool,
+    claim: &mut Claim,
+    claim_key: Pubkey,
+    stake: &mut StakeRecord,
+    now: i64,
+) -> Result<()> {
     require!(
         claim.status == ClaimStatus::Reserved,
         PoolError::NoSuchQueuedClaim
     );
-    let stake = &mut ctx.accounts.stake_record;
+    require!(
+        claim.queue_seq == pool.queue_head,
+        PoolError::NotFirstInQueue
+    );
     // One claim per stake, re-asserted at release: an override may have opened another meanwhile.
     if let Some(active) = stake.active_claim {
         require_keys_eq!(active, claim_key, PoolError::WalletHasDifferentActiveClaim);
     }
     require!(
-        stake.reserved_claim == Some(claim_key) && !stake.forfeited,
+        !queued_claim_dead(claim, &claim_key, Some(stake)),
         PoolError::QueuedClaimStakeChanged
     );
     require!(!stake.suspended, PoolError::StakeSuspended);
@@ -322,74 +595,143 @@ pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
     require!(fits, PoolError::QueueReleaseNotYetEligible);
     // Never counts toward the oracle's own limit: anyone may call this.
     admit(pool, stake, claim, claim_key, now, false)?;
+    pool.queue_head = add(pool.queue_head, 1).core()?;
     emit!(ClaimQueueReleased { claim: claim_key });
     Ok(())
 }
 
-/// A queued claim whose claim window ran out (on the claim clock). Frees the stake's queue slot;
-/// nothing was allocated.
-pub fn expire_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+/// Permissionless. Releases the first claim in line (`release_head`).
+pub fn try_release_queued_claim(ctx: &mut Context<ReleaseQueuedClaim>) -> Result<()> {
     let now = now()?;
-    let pool = &ctx.accounts.pool;
-    require!(!pool.is_paused(now), PoolError::Paused);
+    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
+    let claim_key = ctx.accounts.claim.key();
+    let a = &mut *ctx.accounts;
+    release_head(
+        &mut a.pool,
+        &mut a.claim,
+        claim_key,
+        &mut a.stake_record,
+        now,
+    )
+}
+
+#[derive(Accounts)]
+pub struct AdvanceQueue<'info> {
+    #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
+    pub pool: Box<Account<'info, Pool>>,
+    #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), claim.staker.as_ref(), claim.tx_hash.as_ref()], bump = claim.bump)]
+    pub claim: Box<Account<'info, Claim>>,
+    #[account(
+        mut,
+        close = rent_to,
+        seeds = [SEED_QUEUE, pool.key().as_ref(), &claim.queue_seq.to_le_bytes()],
+        bump = queue_entry.bump,
+        has_one = claim @ PoolError::WrongQueueEntry,
+    )]
+    pub queue_entry: Box<Account<'info, QueueEntry>>,
+    /// The claim's stake. Needed only while the claim is still marked queued; a stake that has
+    /// since been closed is left out.
+    #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), claim.staker.as_ref()], bump = stake_record.bump)]
+    pub stake_record: Option<Box<Account<'info, StakeRecord>>>,
+    /// CHECK: whoever paid the place's rent gets it back (address constraint).
+    #[account(mut, address = queue_entry.payer @ PoolError::WrongQueueEntry)]
+    pub rent_to: UncheckedAccount<'info>,
+}
+
+/// Moves the head of the line past a place whose claim no longer waits (taken over, expired, or dead
+/// now, which this marks Expired), so the line never stalls behind it. Shared with upkeep.
+pub(crate) fn skip_head(
+    pool: &mut Pool,
+    claim: &mut Claim,
+    claim_key: Pubkey,
+    stake: Option<&mut StakeRecord>,
+) -> Result<()> {
+    require!(
+        claim.queue_seq == pool.queue_head,
+        PoolError::NotFirstInQueue
+    );
+    if claim.status == ClaimStatus::Reserved {
+        require!(
+            queued_claim_dead(claim, &claim_key, stake.as_deref()),
+            PoolError::QueueHeadLive
+        );
+        expire_queued(claim, claim_key, stake);
+    }
+    emit!(QueueAdvanced {
+        seq: pool.queue_head,
+        claim: claim_key
+    });
+    pool.queue_head = add(pool.queue_head, 1).core()?;
+    Ok(())
+}
+
+/// Permissionless (`skip_head`).
+pub fn advance_queue(ctx: &mut Context<AdvanceQueue>) -> Result<()> {
+    require!(!ctx.accounts.pool.is_paused(now()?), PoolError::Paused);
+    let claim_key = ctx.accounts.claim.key();
+    let a = &mut *ctx.accounts;
+    let stake = a.stake_record.as_deref_mut().map(|r| &mut **r);
+    skip_head(&mut a.pool, &mut a.claim, claim_key, stake)
+}
+
+/// Permissionless, any place in line. A queued claim never expires on time; this clears one only
+/// once it can never be released, freeing its stake. Its place is dropped when the head reaches it.
+pub fn expire_queued_claim(ctx: &mut Context<ClaimTransition>) -> Result<()> {
+    let now = now()?;
+    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
     require!(
         claim.status == ClaimStatus::Reserved,
         PoolError::NoSuchQueuedClaim
     );
-    let clock = pool.claim_clock(now, claim.pause_mark);
+    let stake = &mut ctx.accounts.stake_record;
     require!(
-        clock > secs_after(claim.hack_timestamp, CLAIM_WINDOW_SECS)?,
+        queued_claim_dead(claim, &claim_key, Some(stake)),
         PoolError::QueueNotYetExpired
     );
-    let stake = &mut ctx.accounts.stake_record;
-    if stake.reserved_claim == Some(claim_key) {
-        stake.reserved_claim = None;
-    }
-    claim.status = ClaimStatus::Expired;
-    emit!(ClaimQueueExpired { claim: claim_key });
+    expire_queued(claim, claim_key, Some(stake));
     Ok(())
 }
 
-/// Time gate met: the claim waits for the staker's approval.
-pub fn unlock_pending_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+/// Time gate met: the claim waits for the staker's approval, its window counted from the gate.
+pub fn unlock_pending_claim(ctx: &mut Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
-    let pool = &ctx.accounts.pool;
-    require!(!pool.is_paused(now), PoolError::Paused);
+    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
     let claim = &mut ctx.accounts.claim;
     require!(
         claim.status == ClaimStatus::PendingTime,
         PoolError::ClaimNotPending
     );
     require!(
-        rules::time_gate_met(ctx.accounts.stake_record.staked_at, now),
+        promote_if_due(claim, &ctx.accounts.stake_record, now)?,
         PoolError::TimeGateNotMet
     );
-    open_approve_window(pool, claim, now)?;
     emit!(ClaimUnlocked { claim: claim.key() });
     Ok(())
 }
 
-/// The staker did not approve in time (on the claim clock): the reservation returns to the pool.
-/// Never while suspended or paused (the staker cannot approve then).
-pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
-    let now = now()?;
-    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
-    let claim_key = ctx.accounts.claim.key();
-    let claim = &mut ctx.accounts.claim;
+/// The staker did not approve in time (on the claim clock): the reservation returns to the pool. A
+/// pending claim past its gate counts as awaiting approval. Never while suspended (the staker cannot
+/// approve then). Shared with upkeep.
+pub(crate) fn expire_unapproved(
+    pool: &mut Pool,
+    claim: &mut Claim,
+    claim_key: Pubkey,
+    stake: &mut StakeRecord,
+    now: i64,
+) -> Result<()> {
+    promote_if_due(claim, stake, now)?;
     require!(
         claim.status == ClaimStatus::AwaitingApproval,
         PoolError::ClaimNotAwaitingApproval
     );
-    let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
-    let clock = ctx.accounts.pool.claim_clock(now, claim.pause_mark);
     require!(
-        clock > claim.approve_deadline,
+        pool.claim_clock(now, claim.pause_mark) > claim.approve_deadline,
         PoolError::ApprovalWindowNotExpired
     );
-    release_allocation(&mut ctx.accounts.pool, claim.entitlement);
+    release_allocation(pool, claim.entitlement);
     stake.active_claim = None;
     claim.status = ClaimStatus::Expired;
     emit!(ClaimExpired {
@@ -399,13 +741,30 @@ pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
     Ok(())
 }
 
-/// An approved claim left uncollected too long (on the claim clock): the unpaid rest returns to the
-/// pool. Never while suspended or paused (the staker cannot collect then).
-pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
+/// Permissionless (`expire_unapproved`). Never while paused.
+pub fn expire_pending_approval(ctx: &mut Context<ClaimTransition>) -> Result<()> {
     let now = now()?;
     require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
-    let claim = &mut ctx.accounts.claim;
+    let a = &mut *ctx.accounts;
+    expire_unapproved(
+        &mut a.pool,
+        &mut a.claim,
+        claim_key,
+        &mut a.stake_record,
+        now,
+    )
+}
+
+/// An approved claim left uncollected too long (on the claim clock): the unpaid rest returns to the
+/// pool. Never while suspended (the staker cannot collect then). Shared with upkeep.
+pub(crate) fn expire_stale(
+    pool: &mut Pool,
+    claim: &mut Claim,
+    claim_key: Pubkey,
+    stake: &mut StakeRecord,
+    now: i64,
+) -> Result<()> {
     require!(
         claim.status == ClaimStatus::Active,
         PoolError::ClaimNotActive
@@ -414,15 +773,14 @@ pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
         claim.streamed < claim.entitlement,
         PoolError::ClaimFullyStreamed
     );
-    let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
-    let clock = ctx.accounts.pool.claim_clock(now, claim.pause_mark);
+    let clock = pool.claim_clock(now, claim.pause_mark);
     require!(
         clock.saturating_sub(claim.last_collected) > claim.inactivity_window,
         PoolError::ClaimNotStale
     );
     let remaining = claim.entitlement - claim.streamed;
-    release_allocation(&mut ctx.accounts.pool, remaining);
+    release_allocation(pool, remaining);
     stake.active_claim = None;
     claim.status = ClaimStatus::Expired;
     emit!(ClaimExpired {
@@ -430,6 +788,21 @@ pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
         released: remaining
     });
     Ok(())
+}
+
+/// Permissionless (`expire_stale`). Never while paused.
+pub fn expire_stale_claim(ctx: &mut Context<ClaimTransition>) -> Result<()> {
+    let now = now()?;
+    require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
+    let claim_key = ctx.accounts.claim.key();
+    let a = &mut *ctx.accounts;
+    expire_stale(
+        &mut a.pool,
+        &mut a.claim,
+        claim_key,
+        &mut a.stake_record,
+        now,
+    )
 }
 
 // ------------------------------------------------------------------ staker actions
@@ -446,12 +819,14 @@ pub struct ApproveClaim<'info> {
 }
 
 /// The staker's decision: forfeit the stake, start cooldown and vesting.
-pub fn approve_claim(ctx: Context<ApproveClaim>) -> Result<()> {
+pub fn approve_claim(ctx: &mut Context<ApproveClaim>) -> Result<()> {
     let now = now()?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
+    let stake = &mut ctx.accounts.stake_record;
+    promote_if_due(claim, stake, now)?;
     require!(
         claim.status == ClaimStatus::AwaitingApproval,
         PoolError::ClaimNotAwaitingApproval
@@ -460,14 +835,16 @@ pub fn approve_claim(ctx: Context<ApproveClaim>) -> Result<()> {
         pool.claim_clock(now, claim.pause_mark) <= claim.approve_deadline,
         PoolError::ApprovalWindowExpired
     );
-    let stake = &mut ctx.accounts.stake_record;
     require!(!stake.suspended, PoolError::StakeSuspended);
     require!(
         !stake.forfeited && stake.active_claim == Some(claim_key),
         PoolError::ClaimStakeMismatch
     );
-    activate(pool, stake, claim, claim_key, now)?;
-    emit!(ClaimApproved { claim: claim_key });
+    let points_burned = activate(pool, stake, claim, claim_key, now)?;
+    emit!(ClaimApproved {
+        claim: claim_key,
+        points_burned
+    });
     Ok(())
 }
 
@@ -496,7 +873,7 @@ pub struct ClaimStream<'info> {
 }
 
 /// Pays what has vested, up to today's payout cap, to the beneficiary.
-pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
+pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
     let now = now()?;
     let pool_info = ctx.accounts.pool.to_account_info();
     let vault = ctx.accounts.vault.to_account_info();
@@ -529,13 +906,16 @@ pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
     require!(claimable > 0, PoolError::NothingVested);
 
     roll_day(pool, now);
-    let base = pool_capacity(pool)?.max(claim.capacity_snapshot);
-    let cap =
-        rules::payout_cap(base, pool.total_allocated, pool.settings().payout_rates()).core()?;
-    let amount = claimable.min(cap.saturating_sub(pool.day_outflow));
+    let day = rules::day_of(now);
+    if claim.share_day != day {
+        claim.share_left = daily_share(pool, claim, day)?;
+        claim.share_day = day;
+    }
+    let amount = claimable.min(claim.share_left);
     require!(amount > 0, PoolError::DailyOutflowCapReached);
 
     claim.streamed += amount;
+    claim.share_left -= amount;
     restart_collection_window(pool, claim, now);
     if claim.streamed >= claim.entitlement {
         claim.status = ClaimStatus::Completed;
@@ -641,6 +1021,7 @@ pub fn unsuspend_stake(ctx: Context<AdminStake>, _staker: Pubkey) -> Result<()> 
     });
     let pool = &ctx.accounts.pool;
     if let Some(claim) = ctx.accounts.claim.as_mut() {
+        promote_if_due(claim, stake, now)?;
         match claim.status {
             ClaimStatus::AwaitingApproval => open_approve_window(pool, claim, now)?,
             ClaimStatus::Active => restart_collection_window(pool, claim, now),
@@ -719,6 +1100,10 @@ pub struct ApproveOverride<'info> {
         bump,
     )]
     pub override_request: Box<Account<'info, OverrideRequest>>,
+    /// CHECK: the back of the watch list, `[SEED_WATCH, pool, watch_tail]`; created when the override
+    /// executes (address checked then).
+    #[account(mut)]
+    pub watch_entry: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -740,7 +1125,7 @@ pub fn approve_override(
     );
     require!(!ctx.accounts.pool.is_paused(now), PoolError::Paused);
     require!(entitlement > 0, PoolError::EntitlementNotPositive);
-    rules::tier_ratio(tier).core()?;
+    rules::check_tier(tier).core()?;
 
     let claim_key = ctx.accounts.claim.key();
     let req = &mut ctx.accounts.override_request;
@@ -787,6 +1172,15 @@ pub fn approve_override(
         ctx.bumps.claim,
         now,
     )?;
+    let pool_key = ctx.accounts.pool.key();
+    watch_claim(
+        &mut ctx.accounts.pool,
+        &pool_key,
+        &ctx.accounts.watch_entry.to_account_info(),
+        &ctx.accounts.signer.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        claim_key,
+    )?;
     emit!(OverrideExecuted { claim: claim_key });
     // Deleted on execution, so cancel_pending_override finds nothing afterwards.
     ctx.accounts
@@ -809,6 +1203,8 @@ fn execute_override(
 ) -> Result<()> {
     // A correction of a live claim releases its reservation first and carries what it already paid.
     let mut carried_streamed = 0;
+    // A queued claim taken over keeps its place number, so its place can still be found and dropped.
+    let queue_seq = claim.queue_seq;
     match claim.status {
         ClaimStatus::Completed => return err!(PoolError::ClaimAlreadyCompleted),
         ClaimStatus::Active | ClaimStatus::PendingTime | ClaimStatus::AwaitingApproval => {
@@ -830,7 +1226,8 @@ fn execute_override(
             PoolError::StakeForfeited
         );
     }
-    rules::check_entitlement(entitlement, stake.amount, tier).core()?;
+    let ratios = stake.tier_ratios(pool.settings().tier_ratios());
+    rules::check_entitlement(entitlement, stake.amount, tier, ratios).core()?;
 
     // An already-forfeited stake (re-execution of this same claim) is earmarked for it, not new capacity.
     let mut effective = pool_capacity(pool)?;
@@ -862,6 +1259,9 @@ fn execute_override(
         approve_window: pool.settings().get(SettingKey::ApproveWindowSecs),
         inactivity_window: 0,
         pause_mark: 0,
+        queue_seq,
+        share_day: 0,
+        share_left: 0,
         reserved: [0; 64],
     };
     if stake.forfeited {

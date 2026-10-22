@@ -7,7 +7,7 @@
 use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_lang::{
     prelude::{Clock, Pubkey},
-    solana_program::instruction::Instruction,
+    solana_program::instruction::{AccountMeta, Instruction},
     AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
@@ -109,6 +109,7 @@ pub struct Env {
     pub usdc_mint: Pubkey,
     pub admin: Keypair,
     pub co_signer: Keypair,
+    pub guardian: Keypair,
     pub oracle: Keypair,
     pub writer: Keypair,
     pub treasury: Keypair,
@@ -126,18 +127,23 @@ impl Env {
         )
         .unwrap();
         let usdc_mint = Keypair::new().pubkey();
-        set_token_program_account(&mut svm, usdc_mint, mint_data(pool_core::params::USDC_DECIMALS, 0));
+        set_token_program_account(
+            &mut svm,
+            usdc_mint,
+            mint_data(pool_core::params::USDC_DECIMALS, 0),
+        );
         let mut clock: Clock = svm.get_sysvar();
         clock.unix_timestamp = START;
         svm.set_sysvar(&clock);
-        let (admin, co_signer, oracle, writer, treasury) = (
+        let (admin, co_signer, guardian, oracle, writer, treasury) = (
+            Keypair::new(),
             Keypair::new(),
             Keypair::new(),
             Keypair::new(),
             Keypair::new(),
             Keypair::new(),
         );
-        for k in [&admin, &co_signer, &oracle, &writer, &treasury] {
+        for k in [&admin, &co_signer, &guardian, &oracle, &writer, &treasury] {
             svm.airdrop(&k.pubkey(), 100 * SOL).unwrap();
         }
         set_upgrade_authority(&mut svm, &safu_pool::ID, &admin.pubkey());
@@ -147,6 +153,7 @@ impl Env {
             usdc_mint,
             admin,
             co_signer,
+            guardian,
             oracle,
             writer,
             treasury,
@@ -170,6 +177,7 @@ impl Env {
     pub fn init_args(&self) -> safu_pool::instructions::InitArgs {
         safu_pool::instructions::InitArgs {
             co_signer: self.co_signer.pubkey(),
+            guardian: self.guardian.pubkey(),
             oracle: self.oracle.pubkey(),
             registry_writer: self.writer.pubkey(),
             treasury: self.treasury.pubkey(),
@@ -193,6 +201,7 @@ impl Env {
                 pool,
                 usdc_mint,
                 vault: self.vault(),
+                governance: self.governance(),
                 token_program: TOKEN,
                 system_program: SYSTEM,
             },
@@ -228,6 +237,16 @@ impl Env {
     pub fn covered(&self, hash: &[u8; 32]) -> Pubkey {
         pda(&[SEED_COVERED, self.pool().as_ref(), hash.as_ref()])
     }
+    pub fn governance(&self) -> Pubkey {
+        pda(&[SEED_GOVERNANCE, self.pool().as_ref()])
+    }
+    /// The pending change in governance slot `kind` (zero-copy account: read in place).
+    pub fn gov_pending(&self, kind: u8) -> safu_pool::state::GovProposal {
+        let data = self.svm.get_account(&self.governance()).unwrap().data;
+        let size = std::mem::size_of::<safu_pool::state::GovProposal>();
+        let at = 8 + kind as usize * size;
+        *bytemuck::from_bytes(&data[at..at + size])
+    }
     /// `owner`'s USDC account: the associated-token address, as wallets use.
     pub fn ata(&self, owner: &Pubkey) -> Pubkey {
         Pubkey::find_program_address(
@@ -251,6 +270,12 @@ impl Env {
 
     /// Sends and returns the compute units the transaction used.
     pub fn send_cu(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<u64, String> {
+        let ixs = self.with_upkeep(ixs);
+        self.send_bare(&ixs, signers)
+    }
+
+    /// Sends exactly these instructions, without the upkeep accounts.
+    pub fn send_bare(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<u64, String> {
         let msg = Message::new_with_blockhash(
             ixs,
             Some(&signers[0].pubkey()),
@@ -272,8 +297,9 @@ impl Env {
         ixs: &[Instruction],
         signers: &[&Keypair],
     ) -> Result<Vec<String>, String> {
+        let ixs = self.with_upkeep(ixs);
         let msg = Message::new_with_blockhash(
-            ixs,
+            &ixs,
             Some(&signers[0].pubkey()),
             &self.svm.latest_blockhash(),
         );
@@ -400,7 +426,22 @@ impl Env {
         )
     }
 
+    /// Passes the staker's backer record only when `amount` is above the live max stake (the
+    /// overflow becomes backing), as a client would.
     pub fn stake_ix(&self, staker: &Pubkey, amount: u64, beneficiary: Pubkey) -> Instruction {
+        let max = pool_core::stake::bounds(&self.pool_state().settings())
+            .unwrap()
+            .1;
+        let record = (amount > max).then(|| self.backer_record(staker));
+        self.stake_ix_with(staker, amount, beneficiary, record)
+    }
+    pub fn stake_ix_with(
+        &self,
+        staker: &Pubkey,
+        amount: u64,
+        beneficiary: Pubkey,
+        backer_record: Option<Pubkey>,
+    ) -> Instruction {
         self.ix(
             safu_pool::accounts::Stake {
                 staker: *staker,
@@ -408,6 +449,7 @@ impl Env {
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
                 staker_usdc: self.ata(staker),
+                backer_record,
                 system_program: SYSTEM,
                 cash: self.cash(),
             },
@@ -610,6 +652,8 @@ impl Env {
                 claim: self.claim_addr(&a.staker, &a.tx_hash),
                 revoked: self.revoked_addr(a),
                 instructions: IX_SYSVAR,
+                queue_entry: self.queue_entry(self.pool_state().queue_tail),
+                watch_entry: self.watch_entry(self.pool_state().watch_tail),
                 system_program: SYSTEM,
             },
             safu_pool::instruction::SubmitClaim {
@@ -640,6 +684,113 @@ impl Env {
             },
             data,
         )
+    }
+
+    // ---- the claim line
+    pub fn queue_entry(&self, seq: u64) -> Pubkey {
+        pda(&[SEED_QUEUE, self.pool().as_ref(), &seq.to_le_bytes()])
+    }
+    pub fn queue_state(&self, seq: u64) -> safu_pool::state::QueueEntry {
+        self.read(&self.queue_entry(seq))
+    }
+    pub fn watch_entry(&self, seq: u64) -> Pubkey {
+        pda(&[SEED_WATCH, self.pool().as_ref(), &seq.to_le_bytes()])
+    }
+    pub fn watch_state(&self, seq: u64) -> safu_pool::state::WatchEntry {
+        self.read(&self.watch_entry(seq))
+    }
+
+    /// The upkeep accounts a user transaction passes now: the head of the line, then the watch
+    /// places, each as (place, claim, stake record, rent payer). Empty while paused.
+    pub fn upkeep_metas(&self) -> Vec<AccountMeta> {
+        let mut out = Vec::new();
+        if !self.exists(&self.pool()) {
+            return out;
+        }
+        let p = self.pool_state();
+        if p.is_paused(self.now) {
+            return out;
+        }
+        let mut place = |entry: Pubkey, claim: Pubkey, payer: Pubkey| {
+            let staker = self.read::<Claim>(&claim).staker;
+            for a in [entry, claim, self.stake_record(&staker), payer] {
+                out.push(AccountMeta::new(a, false));
+            }
+        };
+        if p.queue_head < p.queue_tail {
+            let e = self.queue_state(p.queue_head);
+            place(self.queue_entry(p.queue_head), e.claim, e.payer);
+        }
+        let watch = pool_core::upkeep::watch_places(p.watch_head, p.watch_tail, p.watch_cursor);
+        for pos in watch.into_iter().flatten() {
+            let e = self.watch_state(pos);
+            place(self.watch_entry(pos), e.claim, e.payer);
+        }
+        out
+    }
+
+    /// Every pool instruction carries the upkeep accounts, as a client sends them.
+    fn with_upkeep(&self, ixs: &[Instruction]) -> Vec<Instruction> {
+        let metas = self.upkeep_metas();
+        ixs.iter()
+            .cloned()
+            .map(|mut ix| {
+                if ix.program_id == safu_pool::ID {
+                    ix.accounts.extend(metas.iter().cloned());
+                }
+                ix
+            })
+            .collect()
+    }
+    /// The place of `staker`'s claim on `tx` and who gets its rent back.
+    fn place_of(&self, staker: &Pubkey, tx: &[u8; 32]) -> (Pubkey, Pubkey) {
+        let seq = self.claim_state(staker, tx).queue_seq;
+        let entry = self.queue_entry(seq);
+        let payer = if self.exists(&entry) {
+            self.queue_state(seq).payer
+        } else {
+            self.oracle.pubkey()
+        };
+        (entry, payer)
+    }
+    pub fn release_ix(&self, staker: &Pubkey, tx: &[u8; 32]) -> Instruction {
+        let (queue_entry, rent_to) = self.place_of(staker, tx);
+        self.ix(
+            safu_pool::accounts::ReleaseQueuedClaim {
+                pool: self.pool(),
+                claim: self.claim_addr(staker, tx),
+                queue_entry,
+                stake_record: self.stake_record(staker),
+                rent_to,
+            },
+            safu_pool::instruction::TryReleaseQueuedClaim {},
+        )
+    }
+    /// Passes the stake only if its record still exists.
+    pub fn advance_ix(&self, staker: &Pubkey, tx: &[u8; 32]) -> Instruction {
+        let (queue_entry, rent_to) = self.place_of(staker, tx);
+        let stake = self.stake_record(staker);
+        self.ix(
+            safu_pool::accounts::AdvanceQueue {
+                pool: self.pool(),
+                claim: self.claim_addr(staker, tx),
+                queue_entry,
+                stake_record: self.exists(&stake).then_some(stake),
+                rent_to,
+            },
+            safu_pool::instruction::AdvanceQueue {},
+        )
+    }
+    /// Anyone (a fresh fee payer) releases `staker`'s queued claim.
+    pub fn release(&mut self, staker: &Pubkey, tx: &[u8; 32]) -> Result<(), String> {
+        let payer = self.funded(0);
+        let ix = self.release_ix(staker, tx);
+        self.send(&[ix], &[&payer])
+    }
+    pub fn advance(&mut self, staker: &Pubkey, tx: &[u8; 32]) -> Result<(), String> {
+        let payer = self.funded(0);
+        let ix = self.advance_ix(staker, tx);
+        self.send(&[ix], &[&payer])
     }
 
     pub fn approve_claim_ix(&self, staker: &Pubkey, tx: &[u8; 32]) -> Instruction {
@@ -732,6 +883,7 @@ impl Env {
                 stake_record: self.stake_record(staker),
                 claim,
                 override_request: self.override_addr(&claim),
+                watch_entry: self.watch_entry(self.pool_state().watch_tail),
                 system_program: SYSTEM,
             },
             safu_pool::instruction::ApproveOverride {
@@ -754,14 +906,18 @@ impl Env {
         )
     }
 
-    /// Matured backer money of `amount`: capacity for claims.
+    /// Counted backer money of `amount`: capacity for claims. Waits out the live maturity first if
+    /// it is above zero.
     pub fn matured_backer(&mut self, amount: u64) -> Keypair {
         let b = self.funded(amount);
         let ix = self.back_ix(&b.pubkey(), amount);
         self.ok(&[ix], &[&b]);
-        self.warp(BACKER_MATURITY_SECS);
-        let m = self.mature_ix(&b.pubkey());
-        self.ok(&[m], &[&b]);
+        let maturity = self.setting(SettingKey::BackerMaturitySecs);
+        if maturity > 0 {
+            self.warp(maturity);
+            let m = self.mature_ix(&b.pubkey());
+            self.ok(&[m], &[&b]);
+        }
         b
     }
 
@@ -791,6 +947,55 @@ impl Env {
             },
             safu_pool::instruction::ClaimBackerYield {},
         )
+    }
+
+    pub fn fund_reserve_ix(&self, funder: &Pubkey, amount: u64) -> Instruction {
+        self.ix(
+            safu_pool::accounts::FundRoundingReserve {
+                funder: *funder,
+                pool: self.pool(),
+                vault: self.vault(),
+                funder_usdc: self.ata(funder),
+                cash: self.cash(),
+            },
+            safu_pool::instruction::FundRoundingReserve { amount },
+        )
+    }
+
+    /// Runs a view instruction by simulation and decodes its return data.
+    pub fn view<T: anchor_lang::AnchorDeserialize>(&mut self, ix: Instruction) -> T {
+        let payer = self.admin.insecure_clone();
+        let msg =
+            Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &self.svm.latest_blockhash());
+        let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
+        let r = self
+            .svm
+            .simulate_transaction(tx)
+            .map_err(|e| format!("{:?}", e.err))
+            .unwrap();
+        T::deserialize(&mut &r.meta.return_data.data[..]).unwrap()
+    }
+
+    pub fn view_staker(&mut self, staker: &Pubkey) -> safu_pool::instructions::StakerView {
+        let ix = self.ix(
+            safu_pool::accounts::ViewStaker {
+                pool: self.pool(),
+                stake_record: self.stake_record(staker),
+            },
+            safu_pool::instruction::ViewStaker {},
+        );
+        self.view(ix)
+    }
+
+    pub fn view_backer(&mut self, backer: &Pubkey) -> safu_pool::instructions::BackerView {
+        let ix = self.ix(
+            safu_pool::accounts::ViewBacker {
+                pool: self.pool(),
+                backer_record: self.backer_record(backer),
+            },
+            safu_pool::instruction::ViewBacker {},
+        );
+        self.view(ix)
     }
 
     pub fn withdraw_yield_ix(&self, admin: &Pubkey, treasury: &Pubkey, amount: u64) -> Instruction {
@@ -831,6 +1036,41 @@ impl Env {
 
     pub fn setting(&self, key: SettingKey) -> i64 {
         self.pool_state().settings[key.index()]
+    }
+    /// The live time gate and claim window (a new stake takes these).
+    pub fn time_gate(&self) -> i64 {
+        self.setting(SettingKey::TimeGateSecs)
+    }
+    pub fn claim_window(&self) -> i64 {
+        self.setting(SettingKey::ClaimWindowSecs)
+    }
+    /// Tier ceiling of a new stake of `amount` under the live tier ratios.
+    pub fn tier_cap(&self, amount: u64, tier: u8) -> u64 {
+        let ratios = self.pool_state().settings().tier_ratios();
+        pool_core::claim::tier_cap(amount, tier, ratios).unwrap()
+    }
+
+    // ---- governance
+    pub fn gov_ix(&self, caller: &Pubkey, data: impl anchor_lang::InstructionData) -> Instruction {
+        self.ix(
+            safu_pool::accounts::GovCall {
+                caller: *caller,
+                pool: self.pool(),
+                governance: self.governance(),
+            },
+            data,
+        )
+    }
+    /// `new_key`: the key a role change installs, signing its own installation.
+    pub fn execute_change_ix(&self, kind: u8, new_key: Option<Pubkey>) -> Instruction {
+        self.ix(
+            safu_pool::accounts::GovExecute {
+                pool: self.pool(),
+                governance: self.governance(),
+                new_key,
+            },
+            safu_pool::instruction::ExecuteChange { kind },
+        )
     }
     pub fn propose_ix(&self, key: u8, value: i64) -> Instruction {
         self.admin_ix(safu_pool::instruction::ProposeSetting { key, value })

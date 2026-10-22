@@ -2509,6 +2509,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "base64 0.22.1",
+ "bytemuck",
  "litesvm",
  "pool-core",
  "serde_json",

@@ -16,8 +16,17 @@ pub mod vault;
 
 use approval::ClaimApproval;
 use instructions::*;
+use state::GovChange;
 
 declare_id!("6nE296ZjUgVifngxv1Z5jWp4xvBexaBiepFHA8UVYC7X");
+
+/// Runs a user instruction with the in-transaction upkeep (`instructions::upkeep::with_upkeep`).
+macro_rules! upkept {
+    ($ctx:ident, $body:expr) => {{
+        let mut ctx = $ctx;
+        instructions::upkeep::with_upkeep(&mut ctx, |a| &mut a.pool, $body)
+    }};
+}
 
 #[program]
 pub mod safu_pool {
@@ -32,6 +41,27 @@ pub mod safu_pool {
     }
     pub fn unpause(ctx: Context<AdminOnly>) -> Result<()> {
         instructions::admin::unpause(ctx)
+    }
+    /// The admin's immediate brake: the cap only goes down here (up: the settings timelock).
+    pub fn lower_pool_cap(ctx: Context<AdminOnly>, value: i64) -> Result<()> {
+        instructions::admin::lower_pool_cap(ctx, value)
+    }
+
+    // Governance (2-of-3 roles: admin, co-signer, guardian).
+    pub fn propose_change(ctx: Context<GovCall>, change: GovChange) -> Result<()> {
+        instructions::governance::propose_change(ctx, change)
+    }
+    pub fn approve_change(ctx: Context<GovCall>, change: GovChange) -> Result<()> {
+        instructions::governance::approve_change(ctx, change)
+    }
+    pub fn propose_recovery(ctx: Context<GovCall>, change: GovChange) -> Result<()> {
+        instructions::governance::propose_recovery(ctx, change)
+    }
+    pub fn cancel_change(ctx: Context<GovCall>, kind: u8) -> Result<()> {
+        instructions::governance::cancel_change(ctx, kind)
+    }
+    pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
+        instructions::governance::execute_change(ctx, kind)
     }
 
     // Settings timelock (pool cap, clocks, rates, yield split, stake bounds).
@@ -50,47 +80,60 @@ pub mod safu_pool {
 
     // Stakers.
     pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()> {
-        instructions::stake::stake(ctx, amount, beneficiary)
+        upkept!(ctx, |c| instructions::stake::stake(c, amount, beneficiary))
     }
     pub fn set_beneficiary(ctx: Context<SetBeneficiary>, beneficiary: Pubkey) -> Result<()> {
         instructions::stake::set_beneficiary(ctx, beneficiary)
     }
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-        instructions::stake::withdraw(ctx, amount)
+        upkept!(ctx, |c| instructions::stake::withdraw(c, amount))
     }
     pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
         instructions::stake::emergency_exit(ctx, amount)
     }
     pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
-        instructions::stake::claim_yield(ctx)
+        upkept!(ctx, instructions::stake::claim_yield)
     }
 
     // Backers.
     pub fn back(ctx: Context<Back>, amount: u64) -> Result<()> {
-        instructions::backer::back(ctx, amount)
+        upkept!(ctx, |c| instructions::backer::back(c, amount))
     }
     pub fn mature_backing(ctx: Context<MatureBacking>) -> Result<()> {
-        instructions::backer::mature_backing(ctx)
+        upkept!(ctx, instructions::backer::mature_backing)
     }
     pub fn request_backer_withdrawal(
         ctx: Context<RequestBackerWithdrawal>,
         amount: u64,
     ) -> Result<()> {
-        instructions::backer::request_backer_withdrawal(ctx, amount)
+        upkept!(ctx, |c| instructions::backer::request_backer_withdrawal(
+            c, amount
+        ))
     }
     pub fn cancel_backer_withdrawal(ctx: Context<BackerOnly>) -> Result<()> {
-        instructions::backer::cancel_backer_withdrawal(ctx)
+        upkept!(ctx, instructions::backer::cancel_backer_withdrawal)
     }
     pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Result<()> {
-        instructions::backer::complete_backer_withdrawal(ctx)
+        upkept!(ctx, instructions::backer::complete_backer_withdrawal)
     }
     pub fn claim_backer_yield(ctx: Context<ClaimBackerYield>) -> Result<()> {
-        instructions::backer::claim_backer_yield(ctx)
+        upkept!(ctx, instructions::backer::claim_backer_yield)
     }
 
     // Protocol revenue.
     pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
         instructions::upkeep::withdraw_yield(ctx, amount)
+    }
+    pub fn fund_rounding_reserve(ctx: Context<FundRoundingReserve>, amount: u64) -> Result<()> {
+        instructions::upkeep::fund_rounding_reserve(ctx, amount)
+    }
+
+    // Views (simulate; the answer is the return data).
+    pub fn view_staker(ctx: Context<ViewStaker>) -> Result<StakerView> {
+        instructions::views::view_staker(ctx)
+    }
+    pub fn view_backer(ctx: Context<ViewBacker>) -> Result<BackerView> {
+        instructions::views::view_backer(ctx)
     }
 
     // Covered wallets.
@@ -104,28 +147,31 @@ pub mod safu_pool {
 
     // Claims.
     pub fn submit_claim(ctx: Context<SubmitClaim>, approval: ClaimApproval) -> Result<()> {
-        instructions::claim::submit_claim(ctx, approval)
+        upkept!(ctx, |c| instructions::claim::submit_claim(c, approval))
     }
-    pub fn try_release_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
-        instructions::claim::try_release_queued_claim(ctx)
+    pub fn try_release_queued_claim(ctx: Context<ReleaseQueuedClaim>) -> Result<()> {
+        upkept!(ctx, instructions::claim::try_release_queued_claim)
+    }
+    pub fn advance_queue(ctx: Context<AdvanceQueue>) -> Result<()> {
+        upkept!(ctx, instructions::claim::advance_queue)
     }
     pub fn expire_queued_claim(ctx: Context<ClaimTransition>) -> Result<()> {
-        instructions::claim::expire_queued_claim(ctx)
+        upkept!(ctx, instructions::claim::expire_queued_claim)
     }
     pub fn unlock_pending_claim(ctx: Context<ClaimTransition>) -> Result<()> {
-        instructions::claim::unlock_pending_claim(ctx)
+        upkept!(ctx, instructions::claim::unlock_pending_claim)
     }
     pub fn expire_pending_approval(ctx: Context<ClaimTransition>) -> Result<()> {
-        instructions::claim::expire_pending_approval(ctx)
+        upkept!(ctx, instructions::claim::expire_pending_approval)
     }
     pub fn expire_stale_claim(ctx: Context<ClaimTransition>) -> Result<()> {
-        instructions::claim::expire_stale_claim(ctx)
+        upkept!(ctx, instructions::claim::expire_stale_claim)
     }
     pub fn approve_claim(ctx: Context<ApproveClaim>) -> Result<()> {
-        instructions::claim::approve_claim(ctx)
+        upkept!(ctx, instructions::claim::approve_claim)
     }
     pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
-        instructions::claim::claim_stream(ctx)
+        upkept!(ctx, instructions::claim::claim_stream)
     }
     pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
         instructions::claim::cancel_claim(ctx)

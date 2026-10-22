@@ -50,7 +50,7 @@ pub struct Withdrawn {
     pub staker: Pubkey,
     pub principal: u64,
     pub yield_paid: u64,
-    /// Principal left in the stake (0 = fully withdrawn, record closed).
+    /// Principal left in the stake (0 = fully withdrawn).
     pub remaining: u64,
 }
 #[event]
@@ -58,7 +58,7 @@ pub struct EmergencyExited {
     pub staker: Pubkey,
     pub principal: u64,
     pub yield_paid: u64,
-    /// Principal left in the stake (0 = fully withdrawn, record closed).
+    /// Principal left in the stake (0 = fully withdrawn).
     pub remaining: u64,
 }
 #[event]
@@ -105,6 +105,8 @@ pub struct ClaimQueued {
     pub staker: Pubkey,
     pub claim: Pubkey,
     pub entitlement: u64,
+    /// Place in line.
+    pub seq: u64,
 }
 #[event]
 pub struct ClaimQueueReleased {
@@ -114,6 +116,12 @@ pub struct ClaimQueueReleased {
 pub struct ClaimQueueExpired {
     pub claim: Pubkey,
 }
+/// The head of the line moved past a place whose claim no longer waits.
+#[event]
+pub struct QueueAdvanced {
+    pub seq: u64,
+    pub claim: Pubkey,
+}
 #[event]
 pub struct ClaimUnlocked {
     pub claim: Pubkey,
@@ -121,6 +129,8 @@ pub struct ClaimUnlocked {
 #[event]
 pub struct ClaimApproved {
     pub claim: Pubkey,
+    /// The staker's points, burned by the approval.
+    pub points_burned: u64,
 }
 #[event]
 pub struct ClaimExpired {
@@ -180,7 +190,53 @@ pub struct YieldClaimed {
     pub backer: bool,
 }
 #[event]
+pub struct RoundingReserveFunded {
+    pub from: Pubkey,
+    pub amount: u64,
+}
+/// A payment took `amount` from the rounding reserve.
+#[event]
+pub struct RoundingReserveUsed {
+    pub amount: u64,
+}
+#[event]
 pub struct YieldWithdrawn {
     pub treasury: Pubkey,
     pub amount: u64,
+}
+
+// Governance: every step is public.
+#[event]
+pub struct GovProposed {
+    pub kind: u8,
+    pub change: crate::state::GovChange,
+    pub proposer: Pubkey,
+    pub solo: bool,
+    pub eta: i64,
+}
+#[event]
+pub struct GovApproved {
+    pub kind: u8,
+    pub approver: Pubkey,
+    pub eta: i64,
+}
+#[event]
+pub struct GovCancelVote {
+    pub kind: u8,
+    pub by: Pubkey,
+}
+#[event]
+pub struct GovCancelled {
+    pub kind: u8,
+    pub by: Pubkey,
+}
+#[event]
+pub struct GovExecuted {
+    pub kind: u8,
+    pub change: crate::state::GovChange,
+}
+#[event]
+pub struct PoolCapLowered {
+    pub old_value: i64,
+    pub new_value: i64,
 }

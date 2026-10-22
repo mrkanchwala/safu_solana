@@ -39,7 +39,7 @@ pub struct CancelSetting<'info> {
 pub fn propose_setting(ctx: Context<AdminOnly>, key: u8, value: i64) -> Result<()> {
     let k = SettingKey::from_index(key).core()?;
     let pool = &mut ctx.accounts.pool;
-    pool.settings().check_value(k, value).core()?;
+    pool.settings().check_change(k, value).core()?;
     pool.pending_settings[k.index()] = PendingSetting {
         value,
         eta: 0,
@@ -80,7 +80,13 @@ pub fn execute_setting(ctx: Context<ExecuteSetting>, key: u8) -> Result<()> {
         pending.state == PENDING_APPROVED && now >= pending.eta,
         PoolError::SettingNotReady
     );
-    pool.settings().check_value(k, pending.value).core()?;
+    pool.settings().check_change(k, pending.value).core()?;
+    // The old rate covers every second before the change, the new one every second after.
+    for side in 0..pool_core::points::SIDES {
+        if crate::state::points_rate_key(side) == k {
+            pool.points_checkpoint(side, now).core()?;
+        }
+    }
     let old_value = pool.settings[k.index()];
     pool.settings[k.index()] = pending.value;
     pool.pending_settings[k.index()] = PendingSetting::default();

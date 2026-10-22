@@ -2,42 +2,57 @@
 //! admission (solvency + daily stress cap), oracle daily limit, vesting, daily payout cap.
 
 use crate::params::*;
-use crate::settings::Rates;
+use crate::settings::{Rates, TierRatios};
 use crate::{add, apply_bps, mul_div_floor, CoreError, Result};
 
-/// Coverage ratio of a tier code (1 = A, 2 = B, 3 = C).
-pub fn tier_ratio(tier: u8) -> Result<u64> {
+/// A known tier code (1 = A, 2 = B, 3 = C).
+pub fn check_tier(tier: u8) -> Result<()> {
     match tier {
-        TIER_A => Ok(TIER_A_RATIO),
-        TIER_B => Ok(TIER_B_RATIO),
-        TIER_C => Ok(TIER_C_RATIO),
+        TIER_A | TIER_B | TIER_C => Ok(()),
         _ => Err(CoreError::InvalidTier),
     }
 }
 
-/// Most a claim on `stake` can pay: `stake x ratio x TIER_COVERAGE_BPS / BPS`.
-pub fn tier_cap(stake: u64, tier: u8) -> Result<u64> {
+/// Coverage ratio of a tier code under `ratios`.
+pub fn tier_ratio(tier: u8, ratios: TierRatios) -> Result<u64> {
+    match tier {
+        TIER_A => Ok(ratios.a),
+        TIER_B => Ok(ratios.b),
+        TIER_C => Ok(ratios.c),
+        _ => Err(CoreError::InvalidTier),
+    }
+}
+
+/// Most a claim on `stake` can pay: `stake x ratio x TIER_COVERAGE_BPS / BPS`. `ratios` are the
+/// stake's own, already combined with the live ones (`TierRatios::at_least`).
+pub fn tier_cap(stake: u64, tier: u8, ratios: TierRatios) -> Result<u64> {
     let raw = stake
-        .checked_mul(tier_ratio(tier)?)
+        .checked_mul(tier_ratio(tier, ratios)?)
         .ok_or(CoreError::Overflow)?;
     apply_bps(raw, TIER_COVERAGE_BPS)
 }
 
 /// Entitlement is positive and within the tier ceiling.
-pub fn check_entitlement(entitlement: u64, stake: u64, tier: u8) -> Result<()> {
+pub fn check_entitlement(entitlement: u64, stake: u64, tier: u8, ratios: TierRatios) -> Result<()> {
     if entitlement == 0 {
         return Err(CoreError::EntitlementNotPositive);
     }
-    if entitlement > tier_cap(stake, tier)? {
+    if entitlement > tier_cap(stake, tier, ratios)? {
         return Err(CoreError::EntitlementExceedsTierCap);
     }
     Ok(())
 }
 
-/// The hack is not in the future, not before the stake, and inside the claim window.
-/// `window_now` is the claim clock since the hack (`settings::claim_clock`): time the pool spent
-/// paused does not count against the window. Pass `now` when nothing was paused.
-pub fn check_hack_time(hack_ts: i64, staked_at: i64, now: i64, window_now: i64) -> Result<()> {
+/// The hack is not in the future, not before the stake, and inside the claim window (`claim_window`,
+/// the stake's own). `window_now` is the claim clock since the hack (`settings::claim_clock`): time
+/// the pool spent paused does not count against the window. Pass `now` when nothing was paused.
+pub fn check_hack_time(
+    hack_ts: i64,
+    staked_at: i64,
+    now: i64,
+    window_now: i64,
+    claim_window: i64,
+) -> Result<()> {
     if hack_ts > now {
         return Err(CoreError::HackTimestampInFuture);
     }
@@ -46,7 +61,7 @@ pub fn check_hack_time(hack_ts: i64, staked_at: i64, now: i64, window_now: i64) 
     }
     if window_now
         > hack_ts
-            .checked_add(CLAIM_WINDOW_SECS)
+            .checked_add(claim_window)
             .ok_or(CoreError::Overflow)?
     {
         return Err(CoreError::ClaimWindowExpired);
@@ -121,9 +136,9 @@ pub fn oracle_daily_limit(total_stakers: u64) -> u64 {
     (total_stakers / ORACLE_DAILY_LIMIT_DIVISOR).max(1)
 }
 
-/// The stake has been in long enough for its claim to be approved.
-pub fn time_gate_met(staked_at: i64, now: i64) -> bool {
-    now.saturating_sub(staked_at) >= TIME_GATE_SECS
+/// The stake has been in for its time gate (`gate`, the stake's own).
+pub fn time_gate_met(staked_at: i64, now: i64, gate: i64) -> bool {
+    now.saturating_sub(staked_at) >= gate
 }
 
 /// Amount vested by `now`: linear from `cooldown_ends` to `vesting_ends`, rounded down.

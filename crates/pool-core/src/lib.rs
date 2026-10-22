@@ -9,10 +9,13 @@
 #![no_std]
 
 pub mod claim;
+pub mod drip;
 pub mod liquidity;
 pub mod params;
+pub mod points;
 pub mod settings;
 pub mod stake;
+pub mod upkeep;
 pub mod yields;
 
 /// Maths failures and rule violations. The program maps each one to its own error code.

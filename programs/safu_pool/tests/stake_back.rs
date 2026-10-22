@@ -4,6 +4,7 @@
 mod common;
 
 use common::*;
+use pool_core::settings::SettingKey as K;
 use safu_pool::constants::*;
 use safu_pool::errors::PoolError;
 use safu_pool::state::{CoveredWallet, Pool, StakeRecord, StakerWallets};
@@ -92,7 +93,16 @@ fn initialize_refuses_a_mint_not_owned_by_classic_spl_token() {
     let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
     let other_program = Keypair::new().pubkey();
     env.svm
-        .set_account(mint, solana_account::Account { lamports, data, owner: other_program, executable: false, rent_epoch: 0 })
+        .set_account(
+            mint,
+            solana_account::Account {
+                lamports,
+                data,
+                owner: other_program,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
         .unwrap();
     let ix = env.init_ix(&admin.pubkey(), env.init_args(), mint);
     let err = env.send(&[ix], &[&admin]).expect_err("must fail");
@@ -169,12 +179,20 @@ fn stake_refuses_someone_elses_usdc_or_another_mint() {
     let other = env.funded(min);
     // Another wallet's USDC account as the source.
     let mut ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
-    let src = ix.accounts.iter().position(|a| a.pubkey == env.ata(&s.pubkey())).unwrap();
+    let src = ix
+        .accounts
+        .iter()
+        .position(|a| a.pubkey == env.ata(&s.pubkey()))
+        .unwrap();
     ix.accounts[src].pubkey = env.ata(&other.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::WrongTokenAccount);
     // A token account of another mint, owned by the staker.
     let fake_mint = Keypair::new().pubkey();
-    set_token_program_account(&mut env.svm, fake_mint, mint_data(pool_core::params::USDC_DECIMALS, 0));
+    set_token_program_account(
+        &mut env.svm,
+        fake_mint,
+        mint_data(pool_core::params::USDC_DECIMALS, 0),
+    );
     let fake = Keypair::new().pubkey();
     set_token_program_account(&mut env.svm, fake, token_data(&fake_mint, &s.pubkey(), min));
     let mut ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
@@ -187,10 +205,45 @@ fn stake_bounds_enforced() {
     let mut env = Env::new();
     let (min, max) = bounds();
     let s = env.funded(2 * max);
-    for amount in [0, min - 1, max + 1] {
+    for amount in [0, min - 1] {
         let ix = env.stake_ix(&s.pubkey(), amount, s.pubkey());
         assert_err(env.send(&[ix], &[&s]), PoolError::StakeOutOfRange);
     }
+}
+
+#[test]
+fn a_deposit_above_the_max_stakes_the_max_and_backs_the_rest() {
+    let mut env = Env::new();
+    let (_, max) = bounds();
+    let s = env.funded(3 * max);
+    let ix = env.stake_ix(&s.pubkey(), 3 * max, s.pubkey());
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.stake_state(&s.pubkey()).amount, max);
+    let b = env.backer_state(&s.pubkey());
+    assert_eq!(
+        (b.backer, b.amount, b.pending_count),
+        (s.pubkey(), 2 * max, 0)
+    );
+    let p = env.pool_state();
+    assert_eq!((p.total_staked, p.total_backed), (max, 2 * max));
+    // One transfer for both parts.
+    assert_eq!((env.vault_liquid(), env.usdc(&s.pubkey())), (3 * max, 0));
+    // The backing part leaves like any backing, never with the stake.
+    let ix = env.request_backer_ix(&s.pubkey(), 2 * max);
+    env.ok(&[ix], &[&s]);
+}
+
+#[test]
+fn an_overflow_needs_the_backer_record_account() {
+    let mut env = Env::new();
+    let (_, max) = bounds();
+    let s = env.funded(2 * max);
+    let ix = env.stake_ix_with(&s.pubkey(), max + 1, s.pubkey(), None);
+    assert_err(env.send(&[ix], &[&s]), PoolError::BackerRecordRequired);
+    // Within the max it is not needed.
+    let ix = env.stake_ix_with(&s.pubkey(), max, s.pubkey(), None);
+    env.ok(&[ix], &[&s]);
+    assert!(!env.exists(&env.backer_record(&s.pubkey())));
 }
 
 #[test]
@@ -205,6 +258,10 @@ fn stake_refused_above_the_pool_cap() {
     let s = env.funded(2 * max);
     let ix = env.stake_ix(&s.pubkey(), max, s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::PoolCapExceeded);
+    // The overflow never turns a refused stake into backing.
+    let ix = env.stake_ix(&s.pubkey(), 2 * max, s.pubkey());
+    assert_err(env.send(&[ix], &[&s]), PoolError::PoolCapExceeded);
+    assert_eq!(env.pool_state().total_backed, 0);
 }
 
 #[test]
@@ -224,6 +281,14 @@ fn forfeited_address_can_never_stake_again() {
     let rec = env.stake_record(&s.pubkey());
     env.edit::<StakeRecord>(&rec, |r| r.forfeited = true);
     let ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
+    assert_err(
+        env.send(std::slice::from_ref(&ix), &[&s]),
+        PoolError::AlreadyStaked,
+    );
+    // Approved once means never again, even with the stake restored and then withdrawn.
+    env.edit::<StakeRecord>(&rec, |r| {
+        (r.forfeited, r.claim_approved, r.amount) = (false, true, 0);
+    });
     assert_err(env.send(&[ix], &[&s]), PoolError::AddressHasApprovedClaim);
 }
 
@@ -275,7 +340,7 @@ fn set_beneficiary_blocked_while_a_claim_is_open_or_queued() {
 // ------------------------------------------------------------------ withdraw
 
 #[test]
-fn withdraw_pays_the_beneficiary_and_closes_the_record() {
+fn withdraw_pays_the_beneficiary_and_keeps_the_record() {
     let mut env = Env::new();
     let (_, max) = bounds();
     // Enough for two stakes: the first withdrawal goes to the beneficiary, not back here.
@@ -284,20 +349,22 @@ fn withdraw_pays_the_beneficiary_and_closes_the_record() {
     env.open_usdc(&ben);
     let ix = env.stake_ix(&s.pubkey(), max, ben);
     env.ok(&[ix], &[&s]);
-    let rec = env.stake_record(&s.pubkey());
-    let rent = env.lamports(&rec);
-    let before = env.lamports(&s.pubkey());
+    env.warp(SECONDS_PER_DAY);
     let ix = env.withdraw_ix(&s.pubkey(), &ben);
     env.ok(&[ix], &[&s]);
     assert_eq!(env.usdc(&ben), max);
-    assert!(!env.exists(&rec));
-    // Rent (SOL) comes back to the staker, less this transaction's fee.
-    assert!(env.lamports(&s.pubkey()) > before + rent - SOL / 1_000);
+    // The record stays: its points (one day's) live on it.
+    let r = env.stake_state(&s.pubkey());
+    assert_eq!((r.amount, r.points), (0, max / USDC_UNIT));
     let p = env.pool_state();
-    assert_eq!((p.total_staked, p.total_stakers, env.vault_liquid()), (0, 0, 0));
-    // The address can stake again: the record is re-created.
+    assert_eq!(
+        (p.total_staked, p.total_stakers, env.vault_liquid()),
+        (0, 0, 0)
+    );
+    // The address can stake again, and keeps its points.
     let ix = env.stake_ix(&s.pubkey(), max, s.pubkey());
     env.ok(&[ix], &[&s]);
+    assert_eq!(env.stake_state(&s.pubkey()).points, max / USDC_UNIT);
 }
 
 #[test]
@@ -361,12 +428,29 @@ fn withdraw_refused_when_forfeited_claimed_queued_or_penalty_locked() {
 }
 
 #[test]
-fn withdraw_never_spends_the_yield_set_aside() {
+fn the_rounding_reserve_covers_only_a_small_gap() {
     let mut env = Env::new();
     let (min, _) = bounds();
     let s = env.staker(min);
-    // The vault holds exactly the stake; set-aside yield is not the stake's to take.
-    env.edit::<Pool>(&env.pool(), |p| p.staker_yield_reserved = 1);
+    let f = env.funded(unit());
+    let ix = env.fund_reserve_ix(&f.pubkey(), MAX_ROUNDING_DRAW);
+    env.ok(&[ix], &[&f]);
+    assert_eq!(env.pool_state().rounding_reserve, MAX_ROUNDING_DRAW);
+    // The reserve is not capacity and not the treasury's.
+    assert_eq!(env.pool_state().total_staked, min);
+    let t = env.treasury.pubkey();
+    let admin = env.admin.insecure_clone();
+    let ix = env.withdraw_yield_ix(&admin.pubkey(), &t, 1);
+    assert_err(env.send(&[ix], &[&admin]), PoolError::ExceedsYieldBalance);
+    // Cash one unit short of the books (venue rounding): the reserve pays the gap.
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve += 1);
+    let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.pool_state().rounding_reserve, MAX_ROUNDING_DRAW);
+    assert_eq!(env.vault_liquid(), MAX_ROUNDING_DRAW);
+    // A gap above the cap is a real loss: refused.
+    let s = env.staker(min);
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve += MAX_ROUNDING_DRAW + 1);
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
 }
@@ -416,45 +500,83 @@ fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
     let before = env.usdc(&s.pubkey());
     env.ok(&[ix], &[&s]);
     assert_eq!(env.usdc(&s.pubkey()), before + min);
-    assert!(!env.exists(&rec));
+    assert_eq!(env.stake_state(&s.pubkey()).amount, 0);
 }
 
 // ------------------------------------------------------------------ backers
 
+/// Drip length today, in days, from the live settings and the pool's utilisation now.
+fn drip_days(env: &Env) -> u64 {
+    let p = env.pool_state();
+    let s = p.settings();
+    let capacity = p.total_staked + p.total_backed;
+    let util = pool_core::drip::utilisation_bps(p.total_allocated, capacity).unwrap();
+    pool_core::drip::drip_days(util, s.get(K::DripMinSecs), s.get(K::DripMaxSecs)).unwrap()
+}
+
+fn collect(env: &mut Env, b: &Keypair) -> Result<(), String> {
+    let ix = env.complete_backer_ix(&b.pubkey());
+    env.send(&[ix], &[b])
+}
+
 #[test]
-fn backing_counts_only_after_maturity() {
+fn backing_counts_from_day_one() {
     let mut env = Env::new();
+    assert_eq!(env.setting(K::BackerMaturitySecs), 0);
     let b = env.funded(10 * unit());
     let ix = env.back_ix(&b.pubkey(), 2 * unit());
     env.ok(&[ix], &[&b]);
     let p = env.pool_state();
-    assert_eq!((p.total_backed, p.total_backed_pending), (0, 2 * unit()));
+    assert_eq!((p.total_backed, p.total_backed_pending), (2 * unit(), 0));
+    assert_eq!(env.backer_state(&b.pubkey()).amount, 2 * unit());
     let m = env.mature_ix(&b.pubkey());
+    assert_err(env.send(&[m], &[&b]), PoolError::NoPendingBacking);
+}
+
+#[test]
+fn with_a_maturity_each_deposit_keeps_its_own_clock() {
+    let mut env = Env::new();
+    let (_, top) = K::BackerMaturitySecs.bounds();
+    env.set_setting(K::BackerMaturitySecs, top);
+    let b = env.funded(10 * unit());
+    let ix = env.back_ix(&b.pubkey(), unit());
+    env.ok(&[ix], &[&b]);
+    env.warp(top / 2);
+    let ix = env.back_ix(&b.pubkey(), 2 * unit());
+    env.ok(&[ix], &[&b]);
+    let m = env.mature_ix(&b.pubkey());
+    let anyone = env.funded(unit());
     assert_err(
-        env.send(std::slice::from_ref(&m), &[&b]),
+        env.send(std::slice::from_ref(&m), &[&anyone]),
         PoolError::BackingNotMature,
     );
-    env.warp(BACKER_MATURITY_SECS);
-    // Permissionless: anyone can mature it.
-    let anyone = env.funded(unit());
+    // The first counts on its own clock; the top-up keeps waiting.
+    env.warp(top - top / 2);
+    env.ok(std::slice::from_ref(&m), &[&anyone]);
+    let r = env.backer_state(&b.pubkey());
+    assert_eq!(
+        (r.amount, r.pending_count, r.pending[0].amount),
+        (unit(), 1, 2 * unit())
+    );
+    env.warp(top / 2);
     env.ok(std::slice::from_ref(&m), &[&anyone]);
     let p = env.pool_state();
-    assert_eq!((p.total_backed, p.total_backed_pending), (2 * unit(), 0));
+    assert_eq!((p.total_backed, p.total_backed_pending), (3 * unit(), 0));
     assert_err(env.send(&[m], &[&anyone]), PoolError::NoPendingBacking);
 }
 
 #[test]
-fn top_up_restarts_the_wait_for_the_whole_pending_amount() {
+fn at_most_the_limit_of_deposits_wait_at_once() {
     let mut env = Env::new();
+    let (_, top) = K::BackerMaturitySecs.bounds();
+    env.set_setting(K::BackerMaturitySecs, top);
     let b = env.funded(10 * unit());
-    let ix = env.back_ix(&b.pubkey(), unit());
-    env.ok(std::slice::from_ref(&ix), &[&b]);
-    env.warp(BACKER_MATURITY_SECS - 1);
-    env.ok(&[ix], &[&b]);
-    env.warp(1);
-    let m = env.mature_ix(&b.pubkey());
-    assert_err(env.send(&[m], &[&b]), PoolError::BackingNotMature);
-    assert_eq!(env.backer_state(&b.pubkey()).pending_amount, 2 * unit());
+    for i in 0..MAX_PENDING_DEPOSITS as u64 {
+        let ix = env.back_ix(&b.pubkey(), 1 + i);
+        env.ok(&[ix], &[&b]);
+    }
+    let ix = env.back_ix(&b.pubkey(), 1);
+    assert_err(env.send(&[ix], &[&b]), PoolError::TooManyPendingDeposits);
 }
 
 #[test]
@@ -496,40 +618,125 @@ fn backer_withdrawal_request_rules() {
         env.send(&[req(&env, unit())], &[&b]),
         PoolError::BackerWithdrawalPending,
     );
-    // Still counted during the notice (rule 2).
-    assert_eq!(env.pool_state().total_backed, 2 * unit());
+    // Still counted while it drips (rule 2).
+    let p = env.pool_state();
+    assert_eq!((p.total_backed, p.total_backer_open), (2 * unit(), unit()));
     env.ok(&[cancel], &[&b]);
     assert_eq!(env.backer_state(&b.pubkey()).withdraw_amount, 0);
+    assert_eq!(env.pool_state().total_backer_open, 0);
 }
 
 #[test]
-fn backer_withdrawal_waits_for_notice_and_free_capital() {
+fn a_withdrawal_drips_out_one_part_a_day() {
+    let mut env = Env::new();
+    let w = 7 * unit();
+    let b = env.matured_backer(w);
+    let days = drip_days(&env);
+    assert_err(collect(&mut env, &b), PoolError::NoBackerWithdrawal);
+    let ix = env.request_backer_ix(&b.pubkey(), w);
+    env.ok(&[ix], &[&b]);
+    let before = env.usdc(&b.pubkey());
+    for day in 0..days {
+        collect(&mut env, &b).unwrap();
+        let want = pool_core::drip::unlocked(w, day, days).unwrap();
+        assert_eq!(env.usdc(&b.pubkey()) - before, want);
+        if day + 1 < days {
+            // Today's part is out: nothing more until tomorrow.
+            assert_err(collect(&mut env, &b), PoolError::NothingToCollectYet);
+            env.warp(pool_core::params::SECONDS_PER_DAY);
+        }
+    }
+    let p = env.pool_state();
+    assert_eq!((p.total_backed, p.total_backer_open), (0, 0));
+    let r = env.backer_state(&b.pubkey());
+    assert_eq!((r.amount, r.withdraw_amount, r.withdraw_paid), (0, 0, 0));
+}
+
+#[test]
+fn the_drip_is_longer_when_open_claims_use_the_pool() {
+    let mut env = Env::new();
+    let w = 4 * unit();
+    let b = env.matured_backer(w);
+    let idle = drip_days(&env);
+    // At the full-drip utilisation and above, the longest drip.
+    env.edit::<Pool>(&env.pool(), |p| {
+        p.total_allocated = pool_core::apply_bps(w, DRIP_FULL_UTIL_BPS).unwrap()
+    });
+    let busy = drip_days(&env);
+    let s = env.pool_state().settings();
+    let day = pool_core::params::SECONDS_PER_DAY as u64;
+    assert_eq!(busy, (s.get(K::DripMaxSecs) as u64).div_ceil(day).max(1));
+    assert!(busy >= idle);
+    let ix = env.request_backer_ix(&b.pubkey(), w / 4);
+    env.ok(&[ix], &[&b]);
+    let before = env.usdc(&b.pubkey());
+    collect(&mut env, &b).unwrap();
+    let want = pool_core::drip::unlocked(w / 4, 0, busy).unwrap();
+    assert_eq!(env.usdc(&b.pubkey()) - before, want);
+}
+
+#[test]
+fn a_day_when_open_claims_need_every_dollar_pays_nothing() {
     let mut env = Env::new();
     let b = env.matured_backer(2 * unit());
-    let complete = env.complete_backer_ix(&b.pubkey());
-    assert_err(
-        env.send(std::slice::from_ref(&complete), &[&b]),
-        PoolError::NoBackerWithdrawal,
-    );
-    let req = env.request_backer_ix(&b.pubkey(), unit());
-    env.ok(&[req], &[&b]);
-    assert_err(
-        env.send(std::slice::from_ref(&complete), &[&b]),
-        PoolError::BackerNoticeNotPassed,
-    );
-    env.warp(BACKER_NOTICE_SECS);
-    // Open claims need more than what would be left (rule 3).
-    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = unit() + 1);
-    assert_err(
-        env.send(std::slice::from_ref(&complete), &[&b]),
-        PoolError::CapitalNotFree,
-    );
-    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = unit());
+    let ix = env.request_backer_ix(&b.pubkey(), unit());
+    env.ok(&[ix], &[&b]);
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = 2 * unit());
+    assert_err(collect(&mut env, &b), PoolError::BackerCapitalNotFree);
+    // Capital frees up: the drip resumes the next day (today's snapshot had none free).
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = 0);
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    collect(&mut env, &b).unwrap();
+}
+
+#[test]
+fn requests_share_the_days_free_capital_pro_rata_whatever_the_order() {
+    let mut env = Env::new();
+    let w = 2 * unit();
+    let (b1, b2) = (env.matured_backer(w), env.matured_backer(w));
+    for b in [&b1, &b2] {
+        let ix = env.request_backer_ix(&b.pubkey(), w);
+        env.ok(&[ix], &[b]);
+    }
+    // Only a sliver is free from tomorrow (today's snapshot was taken at the requests).
+    let free = 1_000;
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = 2 * w - free);
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let (u1, u2) = (env.usdc(&b1.pubkey()), env.usdc(&b2.pubkey()));
+    collect(&mut env, &b2).unwrap();
+    collect(&mut env, &b1).unwrap();
+    // Each gets half the sliver: collecting first took nothing from the other.
+    let half = pool_core::drip::share(free, w, 2 * w).unwrap();
+    assert_eq!(env.usdc(&b1.pubkey()) - u1, half);
+    assert_eq!(env.usdc(&b2.pubkey()) - u2, half);
+    // And never more than was free (rule 3).
+    let p = env.pool_state();
+    assert!(p.total_allocated <= p.total_staked + p.total_backed);
+}
+
+#[test]
+fn cancel_leaves_the_unpaid_part_in_the_pool() {
+    let mut env = Env::new();
+    let w = 7 * unit();
+    let b = env.matured_backer(w);
+    let ix = env.request_backer_ix(&b.pubkey(), w);
+    env.ok(&[ix], &[&b]);
     let before = env.usdc(&b.pubkey());
-    env.ok(&[complete], &[&b]);
-    assert_eq!(env.usdc(&b.pubkey()), before + unit());
-    assert_eq!(env.pool_state().total_backed, unit());
-    assert_eq!(env.backer_state(&b.pubkey()).amount, unit());
+    collect(&mut env, &b).unwrap();
+    let paid = env.usdc(&b.pubkey()) - before;
+    let ix = env.backer_only_ix(
+        &b.pubkey(),
+        safu_pool::instruction::CancelBackerWithdrawal {},
+    );
+    if paid < w {
+        env.ok(&[ix], &[&b]);
+        let r = env.backer_state(&b.pubkey());
+        assert_eq!((r.amount, r.withdraw_amount), (w - paid, 0));
+    } else {
+        // A one-day drip (demo clocks) pays it all at once: nothing left to cancel.
+        assert_err(env.send(&[ix], &[&b]), PoolError::NoBackerWithdrawal);
+    }
+    assert_eq!(env.pool_state().total_backer_open, 0);
 }
 
 #[test]
@@ -541,28 +748,14 @@ fn backer_withdrawal_works_while_paused() {
     env.ok(&[p], &[&admin]);
     let req = env.request_backer_ix(&b.pubkey(), unit());
     env.ok(&[req], &[&b]);
-    env.warp(BACKER_NOTICE_SECS);
-    let complete = env.complete_backer_ix(&b.pubkey());
-    env.ok(&[complete], &[&b]);
-    assert_eq!(env.pool_state().total_backed, 0);
-}
-
-#[test]
-fn anyone_can_count_matured_backing() {
-    let mut env = Env::new();
-    let b = env.funded(10 * unit());
-    let crank = env.funded(unit());
-    let back = env.back_ix(&b.pubkey(), unit());
-    env.ok(&[back], &[&b]);
-    let mature = env.mature_ix(&b.pubkey());
-    assert_err(
-        env.send(std::slice::from_ref(&mature), &[&crank]),
-        PoolError::BackingNotMature,
+    let before = env.usdc(&b.pubkey());
+    collect(&mut env, &b).unwrap();
+    assert!(env.usdc(&b.pubkey()) > before);
+    let cancel = env.backer_only_ix(
+        &b.pubkey(),
+        safu_pool::instruction::CancelBackerWithdrawal {},
     );
-    env.warp(BACKER_MATURITY_SECS);
-    env.ok(&[mature], &[&crank]);
-    assert_eq!(env.backer_state(&b.pubkey()).amount, unit());
-    assert_eq!(env.pool_state().total_backed, unit());
+    let _ = env.send(&[cancel], &[&b]);
 }
 
 // ------------------------------------------------------------------ covered wallets

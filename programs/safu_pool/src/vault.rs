@@ -8,7 +8,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use pool_core::liquidity;
 
 use crate::constants::SEED_POOL;
-use crate::errors::{CoreResultExt, PoolError};
+use crate::errors::PoolError;
 use crate::state::Pool;
 
 /// The accounts every money-moving instruction needs besides the vault: the USDC mint and the token
@@ -37,10 +37,12 @@ pub fn liquid_balance(vault: &AccountInfo) -> Result<u64> {
     token_amount(vault)
 }
 
-/// Liquid USDC minus set-aside staker and backer yield.
+/// Cash the pool can spend: liquid USDC minus the rounding reserve. Unpaid yield is pool cash.
 pub fn free_liquid(pool: &Pool, vault: &AccountInfo) -> Result<u64> {
-    let reserved = pool_core::add(pool.staker_yield_reserved, pool.backer_yield_reserved).core()?;
-    Ok(liquidity::free_liquid(liquid_balance(vault)?, reserved))
+    Ok(liquidity::free_liquid(
+        liquid_balance(vault)?,
+        pool.rounding_reserve,
+    ))
 }
 
 /// Typed failure instead of a failed transfer, checked before any state changes.
@@ -49,6 +51,15 @@ pub fn require_free_liquid(pool: &Pool, vault: &AccountInfo, amount: u64) -> Res
         free_liquid(pool, vault)? >= amount,
         PoolError::InsufficientLiquidity
     );
+    Ok(())
+}
+
+/// The first stake or backing ends governance's no-wait setup window. Stake and back call it; a
+/// rounding-reserve top-up does not (that money is never pool capital).
+pub fn mark_funded(pool: &mut Pool) -> Result<()> {
+    if pool.funded_at == 0 {
+        pool.funded_at = crate::instructions::now()?;
+    }
     Ok(())
 }
 
@@ -108,9 +119,28 @@ pub fn pay<'info>(
     )
 }
 
-/// Pays `amount` of free liquid USDC to `to`. Call after the books are updated: on any failure the
-/// whole transaction reverts.
+/// Pays `amount` of free liquid USDC to `to`. A payment short by at most `MAX_ROUNDING_DRAW` takes
+/// the gap from the rounding reserve (the last exit after venue rounding left the pool a few units
+/// below its books). Call after the books are updated: on any failure the whole transaction reverts.
 pub fn pay_out<'info>(
+    pool: &mut Pool,
+    pool_info: &AccountInfo<'info>,
+    cash: &Cash<'info>,
+    vault: &AccountInfo<'info>,
+    to: &AccountInfo<'info>,
+    amount: u64,
+) -> Result<()> {
+    let draw = liquidity::rounding_draw(amount, free_liquid(pool, vault)?, pool.rounding_reserve);
+    if draw > 0 {
+        pool.rounding_reserve -= draw;
+        emit!(crate::events::RoundingReserveUsed { amount: draw });
+    }
+    require_free_liquid(pool, vault, amount)?;
+    pay(pool, pool_info, cash, vault, to, amount)
+}
+
+/// `pay_out` without the rounding reserve: protocol revenue never reaches it.
+pub fn pay_out_strict<'info>(
     pool: &Pool,
     pool_info: &AccountInfo<'info>,
     cash: &Cash<'info>,

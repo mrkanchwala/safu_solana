@@ -40,7 +40,8 @@ fn pending(env: &mut Env, s: &Keypair) {
 
 /// Staker's claim waiting for approval (gate met before the hack).
 fn awaiting(env: &mut Env, s: &Keypair) {
-    env.warp(TIME_GATE_SECS);
+    let gate = env.time_gate();
+    env.warp(gate);
     pending(env, s);
     assert_eq!(
         env.claim_state(&s.pubkey(), &TX).status,
@@ -306,7 +307,7 @@ fn stake_state_checks_on_submit() {
 #[test]
 fn entitlement_above_the_tier_ceiling_refused() {
     let (mut env, s) = setup();
-    let cap = pool_core::claim::tier_cap(entitlement(), TIER_C).unwrap();
+    let cap = env.tier_cap(entitlement(), TIER_C);
     let a = env.approval(&s.pubkey(), TX, cap + 1, TIER_C);
     assert_err(env.submit(&a), PoolError::EntitlementExceedsTierCap);
 }
@@ -320,7 +321,8 @@ fn hack_time_checks_on_submit() {
     assert_err(env.submit(&a), PoolError::HackTimestampInFuture);
     a.hack_timestamp = staked_at - 1;
     assert_err(env.submit(&a), PoolError::HackPredatesStake);
-    env.warp(CLAIM_WINDOW_SECS + 1);
+    let window = env.claim_window();
+    env.warp(window + 1);
     let mut a = env.approval(&s.pubkey(), TX, entitlement(), TIER_A);
     a.hack_timestamp = staked_at;
     assert_err(env.submit(&a), PoolError::ClaimWindowExpired);
@@ -339,40 +341,130 @@ fn same_wallet_and_transaction_can_never_be_claimed_twice() {
 
 // ------------------------------------------------------------------ queue
 
+/// One max staker per tx, each with a tier-A claim larger than an empty pool can hold: queued.
+fn queued_stakers(env: &mut Env, txs: &[[u8; 32]]) -> Vec<Keypair> {
+    let (_, max) = bounds();
+    let stakers: Vec<Keypair> = txs.iter().map(|_| env.staker(max)).collect();
+    for (s, tx) in stakers.iter().zip(txs) {
+        // One oracle submission a day per two stakers: a day apart keeps the limit out of it.
+        env.warp(pool_core::params::SECONDS_PER_DAY);
+        let a = env.approval(&s.pubkey(), *tx, env.tier_cap(max, TIER_A), TIER_A);
+        env.submit(&a).unwrap();
+        assert_eq!(
+            env.claim_state(&s.pubkey(), tx).status,
+            ClaimStatus::Reserved
+        );
+    }
+    stakers
+}
+
 #[test]
-fn insolvent_claim_is_queued_then_released_when_capital_arrives() {
+fn insolvent_claim_is_queued_then_released_by_the_next_transaction_once_capital_arrives() {
+    let mut env = Env::new();
+    let s = queued_stakers(&mut env, &[TX]).remove(0);
+    let claim = env.claim_addr(&s.pubkey(), &TX);
+    let c = env.claim_state(&s.pubkey(), &TX);
+    let p = env.pool_state();
+    assert_eq!((c.queue_seq, p.queue_head, p.queue_tail), (0, 0, 1));
+    assert_eq!(env.queue_state(0).claim, claim);
+    assert_eq!(env.stake_state(&s.pubkey()).reserved_claim, Some(claim));
+    assert_eq!(p.total_allocated, 0);
+    assert_err(
+        env.release(&s.pubkey(), &TX),
+        PoolError::QueueReleaseNotYetEligible,
+    );
+    // The backer's own transaction releases it (upkeep); the place's rent goes back to the oracle.
+    let oracle_before = env.lamports(&env.oracle.pubkey());
+    env.matured_backer(backing());
+    assert!(env.lamports(&env.oracle.pubkey()) > oracle_before);
+    assert!(!env.exists(&env.queue_entry(0)));
+    let r = env.stake_state(&s.pubkey());
+    assert_eq!((r.active_claim, r.reserved_claim), (Some(claim), None));
+    let p = env.pool_state();
+    assert_eq!((p.total_allocated, p.queue_head), (c.entitlement, 1));
+}
+
+#[test]
+fn the_line_is_first_come_first_served() {
+    let mut env = Env::new();
+    let s = queued_stakers(&mut env, &[TX, TX2]);
+    assert_err(
+        env.release(&s[1].pubkey(), &TX2),
+        PoolError::NotFirstInQueue,
+    );
+    // Room for both: each transaction releases the head, one place at a time.
+    env.matured_backer(4 * backing());
+    assert_eq!(env.pool_state().queue_head, 1);
+    assert_eq!(
+        env.claim_state(&s[1].pubkey(), &TX2).status,
+        ClaimStatus::Reserved
+    );
+    env.release(&s[1].pubkey(), &TX2).unwrap();
+    let p = env.pool_state();
+    assert_eq!((p.queue_head, p.queue_tail), (2, 2));
+}
+
+#[test]
+fn a_new_claim_joins_the_back_while_anyone_waits() {
+    let mut env = Env::new();
+    let s = queued_stakers(&mut env, &[TX]).remove(0);
+    // The head cannot go yet (suspended), though there is room now.
+    let rec = env.stake_record(&s.pubkey());
+    env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
+    env.matured_backer(4 * backing());
+    // There is room for a small claim, but someone is in line: it queues behind.
+    let (_, max) = bounds();
+    let late = env.staker(max);
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let a = env.approval(&late.pubkey(), TX2, entitlement(), TIER_A);
+    env.submit(&a).unwrap();
+    let c = env.claim_state(&late.pubkey(), &TX2);
+    assert_eq!((c.status, c.queue_seq), (ClaimStatus::Reserved, 1));
+    env.edit::<StakeRecord>(&rec, |r| r.suspended = false);
+    env.release(&s.pubkey(), &TX).unwrap();
+    env.release(&late.pubkey(), &TX2).unwrap();
+    // Line empty again: the next claim is admitted directly.
+    let next = env.staker(max);
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let a = env.approval(&next.pubkey(), TX, entitlement(), TIER_A);
+    env.submit(&a).unwrap();
+    assert_ne!(
+        env.claim_state(&next.pubkey(), &TX).status,
+        ClaimStatus::Reserved
+    );
+}
+
+#[test]
+fn submit_must_name_the_back_of_the_line() {
     let mut env = Env::new();
     let (_, max) = bounds();
     let s = env.staker(max);
-    let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
-    let a = env.approval(&s.pubkey(), TX, big, TIER_A);
-    env.submit(&a).unwrap();
-    let claim = env.claim_addr(&s.pubkey(), &TX);
-    assert_eq!(
-        env.claim_state(&s.pubkey(), &TX).status,
-        ClaimStatus::Reserved
+    let a = env.approval(&s.pubkey(), TX, env.tier_cap(max, TIER_A), TIER_A);
+    let oracle = env.oracle.insecure_clone();
+    let ed = ed25519_ix(&oracle, &env.message(&a), [0, 0, 0]);
+    let mut ix = env.submit_ix(&oracle.pubkey(), &a);
+    let at = ix
+        .accounts
+        .iter()
+        .position(|m| m.pubkey == env.queue_entry(0))
+        .unwrap();
+    ix.accounts[at].pubkey = env.queue_entry(1);
+    assert_err(env.send(&[ed, ix], &[&oracle]), PoolError::WrongQueueEntry);
+}
+
+#[test]
+fn lamports_sent_to_the_next_place_do_not_block_queuing() {
+    let mut env = Env::new();
+    let place = env.queue_entry(0);
+    let griefer = env.funded(0);
+    let ix = anchor_lang::solana_program::system_instruction::transfer(
+        &griefer.pubkey(),
+        &place,
+        1_000_000,
     );
-    assert_eq!(env.stake_state(&s.pubkey()).reserved_claim, Some(claim));
-    assert_eq!(env.pool_state().total_allocated, 0);
-    let release = env.transition_ix(
-        &s.pubkey(),
-        &TX,
-        safu_pool::instruction::TryReleaseQueuedClaim {},
-    );
-    let anyone = env.funded(unit());
-    assert_err(
-        env.send(std::slice::from_ref(&release), &[&anyone]),
-        PoolError::QueueReleaseNotYetEligible,
-    );
-    env.matured_backer(backing());
-    env.ok(std::slice::from_ref(&release), &[&anyone]);
-    let r = env.stake_state(&s.pubkey());
-    assert_eq!((r.active_claim, r.reserved_claim), (Some(claim), None));
-    assert_eq!(env.pool_state().total_allocated, big);
-    assert_err(
-        env.send(&[release], &[&anyone]),
-        PoolError::NoSuchQueuedClaim,
-    );
+    env.ok(&[ix], &[&griefer]);
+    let s = queued_stakers(&mut env, &[TX]).remove(0);
+    assert_eq!(env.queue_state(0).claim, env.claim_addr(&s.pubkey(), &TX));
 }
 
 #[test]
@@ -389,52 +481,38 @@ fn oracle_daily_limit_queues_instead_of_losing_the_claim() {
         ClaimStatus::Reserved
     );
     // Anyone can release it; a release never counts toward the oracle's limit.
-    let release = env.transition_ix(
-        &s2.pubkey(),
-        &TX2,
-        safu_pool::instruction::TryReleaseQueuedClaim {},
-    );
-    let anyone = env.funded(unit());
-    env.ok(&[release], &[&anyone]);
+    env.release(&s2.pubkey(), &TX2).unwrap();
     assert_eq!(env.pool_state().day_oracle_count, 1);
 }
 
 #[test]
 fn stress_cap_queues_and_resets_the_next_day() {
     let mut env = Env::new();
-    // Small backing: stress cap (25%) below one tier-A claim.
+    // Small backing: stress cap below one tier-A claim.
     env.matured_backer(4 * unit());
     let (_, max) = bounds();
     let s = env.staker(max);
-    let cap =
-        pool_core::claim::stress_cap(4 * unit() + max, 0, env.pool_state().settings().admit_rates())
-            .unwrap();
+    let capacity = 4 * unit() + max;
+    let cap = pool_core::claim::stress_cap(capacity, 0, env.pool_state().settings().admit_rates())
+        .unwrap();
     let a = env.approval(&s.pubkey(), TX, cap + 1, TIER_A);
     env.submit(&a).unwrap();
     assert_eq!(
         env.claim_state(&s.pubkey(), &TX).status,
         ClaimStatus::Reserved
     );
-    let release = env.transition_ix(
-        &s.pubkey(),
-        &TX,
-        safu_pool::instruction::TryReleaseQueuedClaim {},
-    );
-    let anyone = env.funded(unit());
     assert_err(
-        env.send(&[release], &[&anyone]),
+        env.release(&s.pubkey(), &TX),
         PoolError::QueueReleaseNotYetEligible,
     );
 }
 
 #[test]
-fn queued_claim_expires_after_its_window_and_frees_the_slot() {
+fn a_queued_claim_never_expires_on_time() {
     let mut env = Env::new();
-    let (_, max) = bounds();
-    let s = env.staker(max);
-    let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
-    let a = env.approval(&s.pubkey(), TX, big, TIER_A);
-    env.submit(&a).unwrap();
+    let s = queued_stakers(&mut env, &[TX]).remove(0);
+    let window = env.claim_window();
+    env.warp(10 * window);
     let expire = env.transition_ix(
         &s.pubkey(),
         &TX,
@@ -442,47 +520,73 @@ fn queued_claim_expires_after_its_window_and_frees_the_slot() {
     );
     let anyone = env.funded(unit());
     assert_err(
-        env.send(std::slice::from_ref(&expire), &[&anyone]),
+        env.send(&[expire], &[&anyone]),
         PoolError::QueueNotYetExpired,
     );
-    env.warp(CLAIM_WINDOW_SECS);
-    assert_err(
-        env.send(std::slice::from_ref(&expire), &[&anyone]),
-        PoolError::QueueNotYetExpired,
+    assert_err(env.advance(&s.pubkey(), &TX), PoolError::QueueHeadLive);
+    // Still first in line: released by the next transaction once there is room.
+    env.matured_backer(backing());
+    assert_ne!(
+        env.claim_state(&s.pubkey(), &TX).status,
+        ClaimStatus::Reserved
     );
-    env.warp(1);
-    env.ok(std::slice::from_ref(&expire), &[&anyone]);
+}
+
+#[test]
+fn a_dead_queued_claim_expires_and_the_line_moves_past_it() {
+    let mut env = Env::new();
+    let s = queued_stakers(&mut env, &[TX, TX2]);
+    // The first claim's stake now points elsewhere: it can never be released.
+    let rec = env.stake_record(&s[0].pubkey());
+    env.edit::<StakeRecord>(&rec, |r| r.forfeited = true);
+    // Expiring it frees its stake; its place stays until the head reaches it.
+    let expire = env.transition_ix(
+        &s[0].pubkey(),
+        &TX,
+        safu_pool::instruction::ExpireQueuedClaim {},
+    );
+    let anyone = env.funded(unit());
+    env.ok(&[expire], &[&anyone]);
+    assert_eq!(
+        env.claim_state(&s[0].pubkey(), &TX).status,
+        ClaimStatus::Expired
+    );
+    assert!(env.exists(&env.queue_entry(0)));
+    // The next transaction moves the line past the dead place (upkeep), the one after releases the
+    // second claim.
+    env.matured_backer(4 * backing());
+    assert!(!env.exists(&env.queue_entry(0)));
+    assert_eq!(env.pool_state().queue_head, 1);
+    env.release(&s[1].pubkey(), &TX2).unwrap();
+    // Every place is gone once the line is empty: nothing left to advance.
+    assert!(env.advance(&s[1].pubkey(), &TX2).is_err());
+}
+
+#[test]
+fn advance_expires_a_dead_head_in_one_step() {
+    let mut env = Env::new();
+    let s = queued_stakers(&mut env, &[TX]).remove(0);
+    let rec = env.stake_record(&s.pubkey());
+    env.edit::<StakeRecord>(&rec, |r| r.reserved_claim = None);
+    env.advance(&s.pubkey(), &TX).unwrap();
     assert_eq!(
         env.claim_state(&s.pubkey(), &TX).status,
         ClaimStatus::Expired
     );
-    assert_eq!(env.stake_state(&s.pubkey()).reserved_claim, None);
-    assert_err(
-        env.send(&[expire], &[&anyone]),
-        PoolError::NoSuchQueuedClaim,
-    );
+    let p = env.pool_state();
+    assert_eq!((p.queue_head, p.queue_tail), (1, 1));
 }
 
 #[test]
 fn release_refused_when_the_stake_changed_or_is_suspended() {
     let mut env = Env::new();
-    let (_, max) = bounds();
-    let s = env.staker(max);
-    let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
-    let a = env.approval(&s.pubkey(), TX, big, TIER_A);
-    env.submit(&a).unwrap();
-    env.matured_backer(backing());
+    let s = queued_stakers(&mut env, &[TX]).remove(0);
     let rec = env.stake_record(&s.pubkey());
-    let release = env.transition_ix(
-        &s.pubkey(),
-        &TX,
-        safu_pool::instruction::TryReleaseQueuedClaim {},
-    );
-    let anyone = env.funded(unit());
     let other = Keypair::new().pubkey();
     env.edit::<StakeRecord>(&rec, |r| r.active_claim = Some(other));
+    env.matured_backer(backing());
     assert_err(
-        env.send(std::slice::from_ref(&release), &[&anyone]),
+        env.release(&s.pubkey(), &TX),
         PoolError::WalletHasDifferentActiveClaim,
     );
     env.edit::<StakeRecord>(&rec, |r| {
@@ -490,14 +594,14 @@ fn release_refused_when_the_stake_changed_or_is_suspended() {
         r.forfeited = true;
     });
     assert_err(
-        env.send(std::slice::from_ref(&release), &[&anyone]),
+        env.release(&s.pubkey(), &TX),
         PoolError::QueuedClaimStakeChanged,
     );
     env.edit::<StakeRecord>(&rec, |r| {
         r.forfeited = false;
         r.suspended = true;
     });
-    assert_err(env.send(&[release], &[&anyone]), PoolError::StakeSuspended);
+    assert_err(env.release(&s.pubkey(), &TX), PoolError::StakeSuspended);
 }
 
 // ------------------------------------------------------------------ gate and approval
@@ -516,7 +620,8 @@ fn unlock_after_the_time_gate() {
         env.send(std::slice::from_ref(&unlock), &[&anyone]),
         PoolError::TimeGateNotMet,
     );
-    env.warp(TIME_GATE_SECS);
+    let gate = env.time_gate();
+    env.warp(gate);
     env.ok(std::slice::from_ref(&unlock), &[&anyone]);
     let c = env.claim_state(&s.pubkey(), &TX);
     assert_eq!(
@@ -535,7 +640,8 @@ fn approve_rules() {
         env.send(std::slice::from_ref(&approve), &[&s]),
         PoolError::ClaimNotAwaitingApproval,
     );
-    env.warp(TIME_GATE_SECS);
+    let gate = env.time_gate();
+    env.warp(gate);
     let unlock = env.transition_ix(
         &s.pubkey(),
         &TX,
@@ -566,9 +672,15 @@ fn approve_rules() {
 }
 
 #[test]
-fn approval_moves_unpaid_yield_to_the_protocol() {
+fn approval_keeps_the_claimants_yield_and_burns_their_points() {
     let (mut env, s) = setup();
     awaiting(&mut env, &s);
+    // Points earned over the time gate, burned by the approval.
+    let points = env.view_staker(&s.pubkey()).points;
+    assert_eq!(
+        points,
+        (entitlement() / USDC_UNIT) * (env.time_gate() / SECONDS_PER_DAY) as u64
+    );
     let credit = pool_core::yields::credit(
         unit() / 100,
         entitlement(),
@@ -583,11 +695,29 @@ fn approval_moves_unpaid_yield_to_the_protocol() {
     });
     let ix = env.approve_claim_ix(&s.pubkey(), &TX);
     env.ok(&[ix], &[&s]);
+    // Still set aside and owed to the claimant: the protocol gets none of it.
     let p = env.pool_state();
     assert_eq!(
         (p.staker_yield_reserved, p.protocol_yield_balance),
-        (0, credit.staker_share)
+        (credit.staker_share, 0)
     );
+    let r = env.stake_state(&s.pubkey());
+    assert_eq!((r.yield_owed, r.points), (credit.staker_share, 0));
+    assert_eq!(
+        env.view_staker(&s.pubkey()),
+        safu_pool::instructions::StakerView {
+            yield_owed: credit.staker_share,
+            points: 0
+        }
+    );
+    // Collected any time after: the forfeited stake earns nothing more.
+    env.warp(SECONDS_PER_DAY);
+    let before = env.usdc(&s.pubkey());
+    let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.usdc(&s.pubkey()), before + credit.staker_share);
+    assert_eq!(env.stake_state(&s.pubkey()).yield_owed, 0);
+    assert_eq!(env.view_staker(&s.pubkey()).points, 0);
 }
 
 #[test]
@@ -640,7 +770,8 @@ fn stream_waits_for_cooldown_and_vesting() {
         env.send(std::slice::from_ref(&ix), &[&s]),
         PoolError::ClaimNotActive,
     );
-    env.warp(TIME_GATE_SECS);
+    let gate = env.time_gate();
+    env.warp(gate);
     let unlock = env.transition_ix(
         &s.pubkey(),
         &TX,
@@ -676,17 +807,12 @@ fn stream_capped_per_day_and_resumes_tomorrow() {
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
-    // Today's outflow already at the cap.
-    let cap = {
-        let p = env.pool_state();
-        let c = env.claim_state(&s.pubkey(), &TX);
-        let base = (p.total_staked + p.total_backed).max(c.capacity_snapshot);
-        pool_core::claim::payout_cap(base, p.total_allocated, p.settings().payout_rates()).unwrap()
-    };
+    // Today's share already taken.
     let today = pool_core::claim::day_of(env.now);
-    env.edit::<Pool>(&env.pool(), |p| {
-        p.day = today;
-        p.day_outflow = cap;
+    let claim = env.claim_addr(&s.pubkey(), &TX);
+    env.edit::<safu_pool::state::Claim>(&claim, |c| {
+        c.share_day = today;
+        c.share_left = 0;
     });
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     assert_err(
@@ -699,13 +825,75 @@ fn stream_capped_per_day_and_resumes_tomorrow() {
 }
 
 #[test]
+fn claims_share_the_days_cap_pro_rata_whatever_the_order() {
+    let (mut env, s1) = setup();
+    // The first claim waits uncollected through the second's gate: a window long enough to keep it.
+    let longest = pool_core::settings::SettingKey::InactivitySecs.bounds().1;
+    env.edit::<Pool>(&env.pool(), |p| {
+        p.settings[pool_core::settings::SettingKey::InactivitySecs.index()] = longest
+    });
+    active(&mut env, &s1);
+    let (_, max) = bounds();
+    let s2 = env.staker(max);
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let gate = env.time_gate();
+    env.warp(gate);
+    let a = env.approval(&s2.pubkey(), TX2, entitlement(), TIER_A);
+    env.submit(&a).unwrap();
+    let ix = env.approve_claim_ix(&s2.pubkey(), &TX2);
+    env.ok(&[ix], &[&s2]);
+    env.warp(COOLDOWN_SECS + VESTING_SECS);
+    // A tiny payout rate, so the day's cap is far below what the two are owed.
+    env.edit::<Pool>(&env.pool(), |p| {
+        for k in [
+            pool_core::settings::SettingKey::PayoutLowBps,
+            pool_core::settings::SettingKey::PayoutMidBps,
+            pool_core::settings::SettingKey::PayoutHighBps,
+        ] {
+            p.settings[k.index()] = 1;
+        }
+    });
+    let p = env.pool_state();
+    let capacity = p.total_staked + p.total_backed;
+    let snap_allocated = p.total_allocated;
+    let share = |env: &Env, c: &safu_pool::state::Claim| {
+        let p = env.pool_state();
+        let base = capacity.max(c.capacity_snapshot);
+        let cap =
+            pool_core::claim::payout_cap(base, p.total_allocated, p.settings().payout_rates())
+                .unwrap();
+        pool_core::drip::share(cap, c.entitlement - c.streamed, snap_allocated).unwrap()
+    };
+    // The later claim collects first; the earlier one's share is untouched by it.
+    let (c1, c2) = (
+        env.claim_state(&s1.pubkey(), &TX),
+        env.claim_state(&s2.pubkey(), &TX2),
+    );
+    let (want1, want2) = (share(&env, &c1), share(&env, &c2));
+    assert!(want1 + want2 < (c1.entitlement - c1.streamed) + (c2.entitlement - c2.streamed));
+    for (s, tx) in [(&s2, &TX2), (&s1, &TX)] {
+        let ix = env.stream_ix(&s.pubkey(), tx, &s.pubkey());
+        env.ok(&[ix], &[s]);
+    }
+    let (after1, after2) = (
+        env.claim_state(&s1.pubkey(), &TX),
+        env.claim_state(&s2.pubkey(), &TX2),
+    );
+    assert_eq!(after1.streamed - c1.streamed, want1);
+    assert_eq!(after2.streamed - c2.streamed, want2);
+    // Each took its whole share today: nothing more until tomorrow.
+    let ix = env.stream_ix(&s1.pubkey(), &TX, &s1.pubkey());
+    assert_err(env.send(&[ix], &[&s1]), PoolError::DailyOutflowCapReached);
+}
+
+#[test]
 fn stream_refused_when_liquid_usdc_is_short() {
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
-    // All liquid USDC is set-aside yield: not the claim's to take.
+    // All liquid USDC is rounding reserve: never claim cash.
     let liquid = env.vault_liquid();
-    env.edit::<Pool>(&env.pool(), |p| p.backer_yield_reserved = liquid);
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = liquid);
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
 }
@@ -942,7 +1130,7 @@ fn both_approve(
 #[test]
 fn override_refusals() {
     let (mut env, s) = setup();
-    let cap = pool_core::claim::tier_cap(entitlement(), TIER_C).unwrap();
+    let cap = env.tier_cap(entitlement(), TIER_C);
     assert_err(
         both_approve(&mut env, &s.pubkey(), TX, cap + 1, TIER_C),
         PoolError::EntitlementExceedsTierCap,
@@ -960,7 +1148,7 @@ fn override_refused_when_insolvent_or_completed() {
     let mut env = Env::new();
     let (_, max) = bounds();
     let s = env.staker(max);
-    let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
+    let big = env.tier_cap(max, TIER_A);
     assert_err(
         both_approve(&mut env, &s.pubkey(), TX, big, TIER_A),
         PoolError::Insolvent,
@@ -1030,14 +1218,23 @@ fn override_takes_over_the_stakes_own_queued_claim() {
     let mut env = Env::new();
     let (_, max) = bounds();
     let s = env.staker(max);
-    let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
+    let big = env.tier_cap(max, TIER_A);
     let a = env.approval(&s.pubkey(), TX, big, TIER_A);
+    // Stays queued: the pool cannot hold it. The override's smaller amount fits the stake alone.
     env.submit(&a).unwrap();
-    env.matured_backer(backing());
     both_approve(&mut env, &s.pubkey(), TX, entitlement(), TIER_A).unwrap();
     let r = env.stake_state(&s.pubkey());
     assert_eq!(
         (r.reserved_claim, r.active_claim),
         (None, Some(env.claim_addr(&s.pubkey(), &TX)))
     );
+    // It keeps its place number, so its place can still be dropped and the line moves on.
+    assert_eq!(env.claim_state(&s.pubkey(), &TX).queue_seq, 0);
+    assert_err(env.release(&s.pubkey(), &TX), PoolError::NoSuchQueuedClaim);
+    env.advance(&s.pubkey(), &TX).unwrap();
+    assert_eq!(
+        env.claim_state(&s.pubkey(), &TX).status,
+        ClaimStatus::Active
+    );
+    assert_eq!(env.pool_state().queue_head, 1);
 }

@@ -2,7 +2,7 @@
 
 use pool_core::claim::*;
 use pool_core::params::*;
-use pool_core::settings::Rates;
+use pool_core::settings::{Rates, TierRatios};
 use pool_core::CoreError;
 use proptest::prelude::*;
 
@@ -18,28 +18,57 @@ const PAYOUT: Rates = Rates {
     high: PAYOUT_HIGH_BPS,
 };
 
+/// The default tier ratios (a new pool's settings).
+const RATIOS: TierRatios = TierRatios {
+    a: TIER_A_RATIO,
+    b: TIER_B_RATIO,
+    c: TIER_C_RATIO,
+};
+
 const USDC: u64 = 1_000_000;
 const NOW: i64 = 1_800_000_000;
 
 #[test]
-fn tier_ceilings_are_15_10_5_times_the_stake() {
-    assert_eq!(tier_cap(USDC, TIER_A), Ok(15 * USDC));
-    assert_eq!(tier_cap(USDC, TIER_B), Ok(10 * USDC));
-    assert_eq!(tier_cap(USDC, TIER_C), Ok(5 * USDC));
+fn tier_ceilings_are_the_ratio_times_the_stake() {
+    assert_eq!(tier_cap(USDC, TIER_A, RATIOS), Ok(RATIOS.a * USDC));
+    assert_eq!(tier_cap(USDC, TIER_B, RATIOS), Ok(RATIOS.b * USDC));
+    assert_eq!(tier_cap(USDC, TIER_C, RATIOS), Ok(RATIOS.c * USDC));
     for bad in [0, TIER_C + 1] {
-        assert_eq!(tier_cap(USDC, bad), Err(CoreError::InvalidTier));
+        assert_eq!(tier_cap(USDC, bad, RATIOS), Err(CoreError::InvalidTier));
+        assert_eq!(check_tier(bad), Err(CoreError::InvalidTier));
     }
+}
+
+#[test]
+fn a_stake_keeps_its_ratios_and_takes_any_raise() {
+    let at_stake = RATIOS;
+    // A cut: the stake keeps what it staked under.
+    let cut = TierRatios {
+        a: RATIOS.a - 1,
+        b: RATIOS.b - 1,
+        c: RATIOS.c - 1,
+    };
+    assert_eq!(at_stake.at_least(cut), at_stake);
+    // A raise on one tier reaches the stake on that tier only.
+    let raise = TierRatios {
+        a: RATIOS.a + 1,
+        ..RATIOS
+    };
+    assert_eq!(at_stake.at_least(raise), raise);
 }
 
 #[test]
 fn entitlement_checks() {
     assert_eq!(
-        check_entitlement(0, USDC, TIER_A),
+        check_entitlement(0, USDC, TIER_A, RATIOS),
         Err(CoreError::EntitlementNotPositive)
     );
-    assert_eq!(check_entitlement(5 * USDC, USDC, TIER_C), Ok(()));
     assert_eq!(
-        check_entitlement(5 * USDC + 1, USDC, TIER_C),
+        check_entitlement(RATIOS.c * USDC, USDC, TIER_C, RATIOS),
+        Ok(())
+    );
+    assert_eq!(
+        check_entitlement(RATIOS.c * USDC + 1, USDC, TIER_C, RATIOS),
         Err(CoreError::EntitlementExceedsTierCap)
     );
 }
@@ -48,11 +77,11 @@ fn entitlement_checks() {
 fn hack_time_window() {
     let staked = NOW - 10;
     assert_eq!(
-        check_hack_time(NOW + 1, staked, NOW, NOW),
+        check_hack_time(NOW + 1, staked, NOW, NOW, CLAIM_WINDOW_SECS),
         Err(CoreError::HackTimestampInFuture)
     );
     assert_eq!(
-        check_hack_time(staked - 1, staked, NOW, NOW),
+        check_hack_time(staked - 1, staked, NOW, NOW, CLAIM_WINDOW_SECS),
         Err(CoreError::HackPredatesStake)
     );
     assert_eq!(
@@ -60,7 +89,8 @@ fn hack_time_window() {
             staked,
             staked,
             staked + CLAIM_WINDOW_SECS,
-            staked + CLAIM_WINDOW_SECS
+            staked + CLAIM_WINDOW_SECS,
+            CLAIM_WINDOW_SECS
         ),
         Ok(())
     );
@@ -69,7 +99,8 @@ fn hack_time_window() {
             staked,
             staked,
             staked + CLAIM_WINDOW_SECS + 1,
-            staked + CLAIM_WINDOW_SECS + 1
+            staked + CLAIM_WINDOW_SECS + 1,
+            CLAIM_WINDOW_SECS
         ),
         Err(CoreError::ClaimWindowExpired)
     );
@@ -117,8 +148,12 @@ fn oracle_limit_is_a_tenth_of_stakers_at_least_one() {
 
 #[test]
 fn time_gate() {
-    assert!(!time_gate_met(NOW, NOW + TIME_GATE_SECS - 1));
-    assert!(time_gate_met(NOW, NOW + TIME_GATE_SECS));
+    assert!(!time_gate_met(
+        NOW,
+        NOW + TIME_GATE_SECS - 1,
+        TIME_GATE_SECS
+    ));
+    assert!(time_gate_met(NOW, NOW + TIME_GATE_SECS, TIME_GATE_SECS));
 }
 
 #[test]
@@ -169,7 +204,7 @@ proptest! {
     fn tier_cap_is_monotone_in_stake(s1 in 0u64..=1_000 * USDC, s2 in 0u64..=1_000 * USDC) {
         for t in [TIER_A, TIER_B, TIER_C] {
             let (lo, hi) = (s1.min(s2), s1.max(s2));
-            prop_assert!(tier_cap(lo, t).unwrap() <= tier_cap(hi, t).unwrap());
+            prop_assert!(tier_cap(lo, t, RATIOS).unwrap() <= tier_cap(hi, t, RATIOS).unwrap());
         }
     }
 }

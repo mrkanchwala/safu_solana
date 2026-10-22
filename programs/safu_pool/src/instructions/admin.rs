@@ -1,20 +1,22 @@
-//! Setup and admin: initialize, pause, unpause. The pool cap and every other adjustable number
-//! change through the settings timelock (`settings.rs`).
+//! Setup and admin: initialize, pause, unpause, lower the pool cap. Every other adjustable number
+//! changes through the settings timelock (`settings.rs`); roles and where money goes, through
+//! governance (`governance.rs`).
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use super::now;
-use crate::constants::{CLUSTER_MAINNET, SEED_POOL, SEED_VAULT};
-use crate::errors::PoolError;
-use crate::events::{PausedUntil, PoolInitialized, Unpaused};
-use crate::state::{PendingSetting, Pool, ACCOUNT_VERSION};
+use crate::constants::{CLUSTER_MAINNET, SEED_GOVERNANCE, SEED_POOL, SEED_VAULT};
+use crate::errors::{CoreResultExt, PoolError};
+use crate::events::{PausedUntil, PoolCapLowered, PoolInitialized, Unpaused};
+use crate::state::{Governance, Pool, ACCOUNT_VERSION};
 use pool_core::params::USDC_DECIMALS;
-use pool_core::settings::{self, SettingKey, Settings, SETTING_SLOTS};
+use pool_core::settings::{self, SettingKey, Settings};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitArgs {
     pub co_signer: Pubkey,
+    pub guardian: Pubkey,
     pub oracle: Pubkey,
     pub registry_writer: Pubkey,
     pub treasury: Pubkey,
@@ -48,16 +50,22 @@ pub struct Initialize<'info> {
         token::token_program = token_program,
     )]
     pub vault: Box<Account<'info, TokenAccount>>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + std::mem::size_of::<Governance>(),
+        seeds = [SEED_GOVERNANCE, pool.key().as_ref()],
+        bump,
+    )]
+    pub governance: AccountLoader<'info, Governance>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
 pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
     let admin = ctx.accounts.admin.key();
-    require!(
-        admin != args.oracle && admin != args.co_signer && args.oracle != args.co_signer,
-        PoolError::RoleCollision
-    );
+    super::governance::check_roles_distinct(&admin, &args.co_signer, &args.guardian, &args.oracle)
+        .map_err(|_| error!(PoolError::RoleCollision))?;
     require!(args.cluster <= CLUSTER_MAINNET, PoolError::InvalidCluster);
     require!(
         ctx.accounts.usdc_mint.decimals == USDC_DECIMALS,
@@ -67,43 +75,24 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
     let settings =
         Settings::defaults(args.pool_cap).map_err(|_| error!(PoolError::InvalidPoolCap))?;
 
+    // `init` hands over a zeroed account: set only what is not zero. (Building the whole `Pool` in
+    // one value would not fit the 4 KB stack frame.)
     let pool = &mut ctx.accounts.pool;
-    pool.set_inner(Pool {
-        version: ACCOUNT_VERSION,
-        usdc_mint: ctx.accounts.usdc_mint.key(),
-        vault: ctx.accounts.vault.key(),
-        admin,
-        co_signer: args.co_signer,
-        oracle: args.oracle,
-        registry_writer: args.registry_writer,
-        treasury: args.treasury,
-        cluster: args.cluster,
-        bump: ctx.bumps.pool,
-        vault_bump: ctx.bumps.vault,
-        settings: settings.values,
-        pending_settings: [PendingSetting::default(); SETTING_SLOTS],
-        paused_until: 0,
-        pause_started_at: 0,
-        paused_before: 0,
-        total_staked: 0,
-        total_stakers: 0,
-        total_backed: 0,
-        total_backed_pending: 0,
-        total_allocated: 0,
-        staker_yield_index: 0,
-        backer_yield_index: 0,
-        staker_yield_reserved: 0,
-        backer_yield_reserved: 0,
-        protocol_yield_balance: 0,
-        total_extracted_yield: 0,
-        deployed_book: 0,
-        last_harvest_at: 0,
-        day: 0,
-        day_admitted: 0,
-        day_oracle_count: 0,
-        day_outflow: 0,
-        reserved: [0; 256], // hardcode-ok: spare layout bytes, not a rule
-    });
+    pool.version = ACCOUNT_VERSION;
+    pool.usdc_mint = ctx.accounts.usdc_mint.key();
+    pool.vault = ctx.accounts.vault.key();
+    pool.admin = admin;
+    pool.co_signer = args.co_signer;
+    pool.guardian = args.guardian;
+    pool.oracle = args.oracle;
+    pool.registry_writer = args.registry_writer;
+    pool.treasury = args.treasury;
+    pool.cluster = args.cluster;
+    pool.bump = ctx.bumps.pool;
+    pool.vault_bump = ctx.bumps.vault;
+    pool.settings = settings.values;
+    // Zeroed: no change pending.
+    ctx.accounts.governance.load_init()?;
     emit!(PoolInitialized {
         admin,
         pool_cap: args.pool_cap,
@@ -160,5 +149,20 @@ pub fn unpause(ctx: Context<AdminOnly>) -> Result<()> {
     require!(pool.is_paused(now), PoolError::NotPaused);
     pool.paused_until = now;
     emit!(Unpaused {});
+    Ok(())
+}
+
+/// Lowers the pool cap at once: a safety brake, so no timelock (raising it goes through the
+/// settings timelock). The min stake must stay above zero. Stakes already in are untouched.
+pub fn lower_pool_cap(ctx: Context<AdminOnly>, value: i64) -> Result<()> {
+    let pool = &mut ctx.accounts.pool;
+    let s = pool.settings();
+    s.check_lower_cap(value).core()?;
+    let old_value = s.get(SettingKey::PoolCap);
+    pool.settings[SettingKey::PoolCap.index()] = value;
+    emit!(PoolCapLowered {
+        old_value,
+        new_value: value
+    });
     Ok(())
 }

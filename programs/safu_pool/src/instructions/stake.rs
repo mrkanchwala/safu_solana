@@ -2,16 +2,18 @@
 //! exit take an amount: all of the stake, or a part that leaves at least the min stake.
 
 use anchor_lang::prelude::*;
+use pool_core::settings::SettingKey;
 
 use super::now;
 use anchor_spl::token::TokenAccount;
 
-use crate::constants::{SEED_POOL, SEED_STAKE, SEED_VAULT};
+use crate::constants::{SEED_BACKER, SEED_POOL, SEED_STAKE, SEED_VAULT};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::{BeneficiarySet, EmergencyExited, Staked, Withdrawn, YieldClaimed};
 // Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
+use crate::state::{BackerRecord, Pool, StakeRecord, ACCOUNT_VERSION};
 use crate::vault::{self, *};
-use crate::state::{Pool, StakeRecord, ACCOUNT_VERSION};
+use pool_core::points::STAKER;
 use pool_core::yields;
 
 /// Payouts can never go to a role key (multichain `stake` identity checks), nor to the pool or its
@@ -29,6 +31,45 @@ fn check_beneficiary(pool: &Pool, pool_key: &Pubkey, beneficiary: &Pubkey) -> Re
         PoolError::BeneficiaryIsPoolAccount
     );
     Ok(())
+}
+
+/// Yield this stake is owed now: settled-but-unpaid plus what its principal earned since its index
+/// mark (a forfeited stake earns nothing after the approval, which settled what it had).
+pub(crate) fn staker_owed(pool: &Pool, record: &StakeRecord) -> Result<u64> {
+    let live = if record.forfeited {
+        0
+    } else {
+        yields::owed(
+            record.amount,
+            pool.staker_yield_index,
+            record.yield_index_at,
+        )
+        .core()?
+    };
+    pool_core::add(record.yield_owed, live).core()
+}
+
+/// Banks the points this stake earned since its mark. Run before its principal changes. A forfeited
+/// stake earns none (it left `total_staked` at the approval).
+pub(crate) fn settle_points(pool: &Pool, record: &mut StakeRecord, now: i64) -> Result<()> {
+    let index = pool.points_index(STAKER, now).core()?;
+    if !record.forfeited {
+        let earned =
+            pool_core::points::earned(record.amount, record.points_index_at, index).core()?;
+        record.points = pool_core::add(record.points, earned).core()?;
+    }
+    record.points_index_at = index;
+    Ok(())
+}
+
+/// Pays what the set-aside can of `owed`; the rest stays owed on the record (multichain
+/// 2026-10-20). Moves the yield mark to now. Returns what is paid.
+fn take_staker_yield(pool: &mut Pool, record: &mut StakeRecord, owed: u64) -> u64 {
+    let paid = owed.min(pool.staker_yield_reserved);
+    pool.staker_yield_reserved -= paid;
+    record.yield_owed = owed - paid;
+    record.yield_index_at = pool.staker_yield_index;
+    paid
 }
 
 /// No claim open or queued on this stake, and not forfeited.
@@ -66,16 +107,11 @@ fn settle_exit(
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, amount).core()?;
 
-    // Yield is capped by the set-aside (which a venue loss can leave short of the records' sum).
-    let owed = yields::owed(
-        record.amount,
-        pool.staker_yield_index,
-        record.yield_index_at,
-    )
-    .core()?;
-    let yield_paid = owed.min(pool.staker_yield_reserved);
-    pool.staker_yield_reserved -= yield_paid;
-    record.yield_index_at = pool.staker_yield_index;
+    settle_points(pool, record, now)?;
+    // Yield is capped by the set-aside (which a venue loss can leave short of the records' sum);
+    // what it cannot cover stays owed.
+    let owed = staker_owed(pool, record)?;
+    let yield_paid = take_staker_yield(pool, record, owed);
     record.amount = remaining;
     // Saturating: a venue loss marks total_staked down, which can leave it below the last stake.
     pool.total_staked = pool.total_staked.saturating_sub(amount);
@@ -116,22 +152,43 @@ pub struct Stake<'info> {
         constraint = staker_usdc.owner == staker.key() @ PoolError::WrongTokenAccount,
     )]
     pub staker_usdc: Box<Account<'info, TokenAccount>>,
+    /// The staker's backer record, for a deposit above the max stake (the rest becomes backing).
+    /// Leave it out when the deposit is within the max.
+    #[account(
+        init_if_needed,
+        payer = staker,
+        space = 8 + BackerRecord::INIT_SPACE,
+        seeds = [SEED_BACKER, pool.key().as_ref(), staker.key().as_ref()],
+        bump,
+    )]
+    pub backer_record: Option<Box<Account<'info, BackerRecord>>>,
     pub system_program: Program<'info, System>,
     pub cash: Cash<'info>,
 }
 
-pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()> {
+/// Up to the max stake is staked; the rest becomes backing in the same transfer (never forfeited by
+/// a claim). A pool full for stakes refuses the whole deposit.
+pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()> {
     let now = now()?;
     let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let record = &mut ctx.accounts.stake_record;
+    // An existing record is a live stake, or an empty one kept for its unpaid yield and points: the
+    // second may stake again, unless a claim was ever approved on it.
     if record.staker != Pubkey::default() {
-        require!(!record.forfeited, PoolError::AddressHasApprovedClaim);
-        return err!(PoolError::AlreadyStaked);
+        require!(!record.claim_approved, PoolError::AddressHasApprovedClaim);
+        require!(
+            record.amount == 0 && !record.forfeited,
+            PoolError::AlreadyStaked
+        );
     }
-    pool_core::stake::check_new_stake(amount, pool.total_staked, &pool.settings()).core()?;
+    let (yield_owed, points) = (record.yield_owed, record.points);
+    pool.points_checkpoint(STAKER, now).core()?;
+    let s = pool.settings();
+    let (staked, overflow) =
+        pool_core::stake::split_new_stake(amount, pool.total_staked, &s).core()?;
     check_beneficiary(pool, &pool_key, &beneficiary)?;
 
     let staker = ctx.accounts.staker.key();
@@ -139,21 +196,47 @@ pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()
         version: ACCOUNT_VERSION,
         staker,
         beneficiary,
-        amount,
+        amount: staked,
         yield_index_at: pool.staker_yield_index,
         staked_at: now,
         penalty_locked_until: 0,
         forfeited: false,
         forfeited_by: None,
         suspended: false,
+        tier_a_ratio: s.amount(SettingKey::TierARatio),
+        tier_b_ratio: s.amount(SettingKey::TierBRatio),
+        tier_c_ratio: s.amount(SettingKey::TierCRatio),
+        time_gate_secs: s.get(SettingKey::TimeGateSecs),
+        claim_window_secs: s.get(SettingKey::ClaimWindowSecs),
         active_claim: None,
         reserved_claim: None,
+        yield_owed,
+        points,
+        points_index_at: pool.points_index[STAKER],
+        claim_approved: false,
         bump: ctx.bumps.stake_record,
         reserved: [0; 64],
     });
-    pool.total_staked = pool_core::add(pool.total_staked, amount).core()?;
+    pool.total_staked = pool_core::add(pool.total_staked, staked).core()?;
     pool.total_stakers = pool_core::add(pool.total_stakers, 1).core()?;
-    emit!(Staked { staker, amount });
+    vault::mark_funded(pool)?;
+    emit!(Staked {
+        staker,
+        amount: staked
+    });
+    if overflow > 0 {
+        let backer = ctx
+            .accounts
+            .backer_record
+            .as_mut()
+            .ok_or(PoolError::BackerRecordRequired)?;
+        let bump = ctx
+            .bumps
+            .backer_record
+            .ok_or(PoolError::BackerRecordRequired)?;
+        super::backer::open_record(pool, backer, staker, bump);
+        super::backer::add_backing(pool, backer, overflow, now)?;
+    }
 
     vault::receive(
         pool,
@@ -163,7 +246,6 @@ pub fn stake(ctx: Context<Stake>, amount: u64, beneficiary: Pubkey) -> Result<()
         &vault,
         amount,
     )
-
 }
 
 #[derive(Accounts)]
@@ -203,7 +285,6 @@ pub struct Withdraw<'info> {
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
-    /// Closed by the handler when the whole stake leaves (rent back to the staker).
     #[account(
         mut,
         seeds = [SEED_STAKE, pool.key().as_ref(), staker.key().as_ref()],
@@ -221,9 +302,9 @@ pub struct Withdraw<'info> {
     pub cash: Cash<'info>,
 }
 
-/// `amount` of principal + all unpaid yield to the beneficiary. Taking all of it closes the record
-/// (rent back to the staker).
-pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+/// `amount` of principal + all unpaid yield to the beneficiary. The record stays after a full
+/// withdrawal (unpaid yield and points live on it).
+pub fn withdraw(ctx: &mut Context<Withdraw>, amount: u64) -> Result<()> {
     let now = now()?;
     let pool_info = ctx.accounts.pool.to_account_info();
     let vault = ctx.accounts.vault.to_account_info();
@@ -242,13 +323,7 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     let total = pool_core::add(amount, yield_paid).core()?;
     let to = ctx.accounts.beneficiary_usdc.to_account_info();
     vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, total)?;
-    recheck_capital(pool)?;
-    if remaining == 0 {
-        ctx.accounts
-            .stake_record
-            .close(ctx.accounts.staker.to_account_info())?;
-    }
-    Ok(())
+    recheck_capital(pool)
 }
 
 #[derive(Accounts)]
@@ -259,7 +334,6 @@ pub struct EmergencyExit<'info> {
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
     pub vault: Box<Account<'info, TokenAccount>>,
-    /// Closed by the handler when the whole stake leaves (rent back to the staker).
     #[account(
         mut,
         seeds = [SEED_STAKE, pool.key().as_ref(), staker.key().as_ref()],
@@ -300,13 +374,7 @@ pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
     let total = pool_core::add(amount, yield_paid).core()?;
     let to = ctx.accounts.staker_usdc.to_account_info();
     vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, total)?;
-    recheck_capital(pool)?;
-    if remaining == 0 {
-        ctx.accounts
-            .stake_record
-            .close(ctx.accounts.staker.to_account_info())?;
-    }
-    Ok(())
+    recheck_capital(pool)
 }
 
 #[derive(Accounts)]
@@ -333,26 +401,17 @@ pub struct ClaimYield<'info> {
     pub cash: Cash<'info>,
 }
 
-/// Staker yield to the beneficiary, any time; principal untouched (multichain `claim_yield`).
-pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
-    let now = now()?;
+/// Staker yield to the beneficiary, any time, paused or not; principal, coverage and the time gate
+/// untouched (multichain `claim_yield`). A claim never takes the claimant's yield, so this works with
+/// a claim open or queued, and after one is approved.
+pub fn claim_yield(ctx: &mut Context<ClaimYield>) -> Result<()> {
     let pool_info = ctx.accounts.pool.to_account_info();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
-    require!(!pool.is_paused(now), PoolError::Paused);
     let record = &mut ctx.accounts.stake_record;
-    require!(!record.forfeited, PoolError::StakeForfeited);
-
-    let owed = yields::owed(
-        record.amount,
-        pool.staker_yield_index,
-        record.yield_index_at,
-    )
-    .core()?;
-    let paid = owed.min(pool.staker_yield_reserved);
+    let owed = staker_owed(pool, record)?;
+    let paid = take_staker_yield(pool, record, owed);
     require!(paid > 0, PoolError::NothingToClaim);
-    record.yield_index_at = pool.staker_yield_index;
-    pool.staker_yield_reserved -= paid;
     emit!(YieldClaimed {
         owner: record.staker,
         amount: paid,

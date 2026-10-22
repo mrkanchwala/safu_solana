@@ -18,7 +18,10 @@ fn approval_message_matches_the_backend_vector() {
     };
     let message = encode_message(&Pubkey::new_from_array([1; 32]), 1, &approval);
     // Domain, then fixed-size fields: program id, cluster, staker, tx hash, entitlement, tier, two times.
-    assert_eq!(message.len(), APPROVAL_DOMAIN.len() + 32 + 1 + 32 + 32 + 8 + 1 + 8 + 8);
+    assert_eq!(
+        message.len(),
+        APPROVAL_DOMAIN.len() + 32 + 1 + 32 + 32 + 8 + 1 + 8 + 8
+    );
     let hex: String = approval_hash(&message)
         .iter()
         .map(|b| format!("{b:02x}"))

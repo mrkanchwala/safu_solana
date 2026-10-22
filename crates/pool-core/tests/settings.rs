@@ -82,8 +82,10 @@ fn settings_keep_their_order() {
         s.check_value(SettingKey::MinStakeBps, MAX_STAKE_BPS as i64 + 1),
         Err(CoreError::SettingOrderInvalid)
     );
+    let mut raised = s;
+    raised.values[SettingKey::MinStakeBps.index()] = MAX_STAKE_BPS as i64;
     assert_eq!(
-        s.check_value(SettingKey::MaxStakeBps, MIN_STAKE_BPS as i64 - 1),
+        raised.check_value(SettingKey::MaxStakeBps, MAX_STAKE_BPS as i64 - 1),
         Err(CoreError::SettingOrderInvalid)
     );
     // Bands: low >= mid >= high, for both rate families.
@@ -109,11 +111,12 @@ fn settings_keep_their_order() {
         Err(CoreError::SettingOrderInvalid)
     );
     // A cap so small the min stake rounds to zero.
+    let smallest = (BPS_DENOMINATOR / MIN_STAKE_BPS) as i64;
     assert_eq!(
-        s.check_value(SettingKey::PoolCap, 999),
+        s.check_value(SettingKey::PoolCap, smallest - 1),
         Err(CoreError::SettingOrderInvalid)
     );
-    assert_eq!(s.check_value(SettingKey::PoolCap, 1_000), Ok(()));
+    assert_eq!(s.check_value(SettingKey::PoolCap, smallest), Ok(()));
     // Allowed moves.
     assert_eq!(
         s.check_value(SettingKey::PoolCap, (100 * USDC) as i64),
@@ -166,18 +169,131 @@ fn a_pause_is_never_longer_than_the_gap_after_it() {
 
 #[test]
 fn a_pool_cap_too_small_for_a_min_stake_cannot_start_a_pool() {
-    assert_eq!(Settings::defaults(999), Err(CoreError::SettingOrderInvalid));
-    assert!(Settings::defaults(1_000).is_ok());
+    let smallest = BPS_DENOMINATOR / MIN_STAKE_BPS;
+    assert_eq!(
+        Settings::defaults(smallest - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert!(Settings::defaults(smallest).is_ok());
+}
+
+#[test]
+fn the_cap_goes_up_only_through_the_timelock_and_down_only_at_once() {
+    let s = defaults();
+    let cap = CAP as i64;
+    assert_eq!(s.check_change(SettingKey::PoolCap, cap + 1), Ok(()));
+    for v in [cap, cap - 1] {
+        assert_eq!(
+            s.check_change(SettingKey::PoolCap, v),
+            Err(CoreError::SettingOrderInvalid)
+        );
+    }
+    assert_eq!(s.check_lower_cap(cap - 1), Ok(()));
+    assert_eq!(s.check_lower_cap(cap), Err(CoreError::SettingOrderInvalid));
+    // Never so low the min stake rounds to zero.
+    let smallest = (BPS_DENOMINATOR / MIN_STAKE_BPS) as i64;
+    assert_eq!(
+        s.check_lower_cap(smallest - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    // Every other setting changes either way through the timelock.
+    assert_eq!(
+        s.check_change(SettingKey::CooldownSecs, s.get(SettingKey::CooldownSecs)),
+        Ok(())
+    );
+}
+
+#[test]
+fn tier_ratios_stay_a_over_b_over_c() {
+    let s = defaults();
+    let (a, b, c) = (
+        TIER_A_RATIO as i64,
+        TIER_B_RATIO as i64,
+        TIER_C_RATIO as i64,
+    );
+    assert_eq!(
+        s.check_value(SettingKey::TierARatio, b - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::TierBRatio, a + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::TierBRatio, c - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::TierCRatio, b + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(s.check_value(SettingKey::TierARatio, b), Ok(()));
+    assert_eq!(s.check_value(SettingKey::TierCRatio, b), Ok(()));
+    assert_eq!(
+        s.tier_ratios(),
+        TierRatios {
+            a: TIER_A_RATIO,
+            b: TIER_B_RATIO,
+            c: TIER_C_RATIO
+        }
+    );
+}
+
+#[test]
+fn drip_min_never_above_drip_max() {
+    let s = defaults();
+    // Inside both hard ranges but out of order: the order rule refuses it.
+    let mut tight = s;
+    tight.values[SettingKey::DripMaxSecs.index()] = SettingKey::DripMaxSecs.bounds().0;
+    let max_now = tight.get(SettingKey::DripMaxSecs);
+    assert_eq!(
+        tight.check_value(SettingKey::DripMinSecs, max_now + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    // And max cannot drop below the live min.
+    let mut wide = s;
+    wide.values[SettingKey::DripMinSecs.index()] = SettingKey::DripMinSecs.bounds().1;
+    let min_now = wide.get(SettingKey::DripMinSecs);
+    assert_eq!(
+        wide.check_value(SettingKey::DripMaxSecs, min_now - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(
+        s.check_value(SettingKey::DripMinSecs, DRIP_MAX_SECS),
+        Ok(())
+    );
+}
+
+#[test]
+fn the_claim_window_never_outlasts_the_pause_gap() {
+    // At most one pause can fall inside a filing window (`paused_secs_at` is exact).
+    let mut s = defaults();
+    let gap = s.get(SettingKey::PauseGapSecs);
+    let (_, window_max) = SettingKey::ClaimWindowSecs.bounds();
+    assert!(window_max > gap, "the test needs room above the gap");
+    assert_eq!(
+        s.check_value(SettingKey::ClaimWindowSecs, gap + 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    assert_eq!(s.check_value(SettingKey::ClaimWindowSecs, gap), Ok(()));
+    // And the gap cannot drop below the live window.
+    s.values[SettingKey::PauseGapSecs.index()] = window_max;
+    s.values[SettingKey::ClaimWindowSecs.index()] = window_max;
+    assert_eq!(
+        s.check_value(SettingKey::PauseGapSecs, window_max - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
 }
 
 #[test]
 fn live_settings_drive_the_rules() {
     let mut s = defaults();
     s.values[SettingKey::MinStakeBps.index()] = 20;
+    s.values[SettingKey::MaxStakeBps.index()] = 100;
     s.values[SettingKey::PoolCap.index()] = (100 * USDC) as i64;
     assert_eq!(stake::bounds(&s), Ok((USDC / 5, USDC)));
     assert_eq!(
-        stake::check_new_stake(USDC / 10, 0, &s),
+        stake::split_new_stake(USDC / 10, 0, &s),
         Err(CoreError::StakeOutOfRange)
     );
     assert_eq!(

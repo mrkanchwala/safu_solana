@@ -14,34 +14,42 @@ fn settings(cap: u64) -> Settings {
 }
 
 #[test]
-fn stake_bounds_are_the_default_values_at_a_50_sol_cap() {
-    // 0.05 - 0.5 USDC (default).
-    assert_eq!(stake::bounds(&settings(CAP)), Ok((USDC / 20, USDC / 2)));
+fn stake_bounds_are_the_default_bps_of_the_cap() {
+    let bps = |b: u64| CAP * b / BPS_DENOMINATOR;
+    assert_eq!(
+        stake::bounds(&settings(CAP)),
+        Ok((bps(MIN_STAKE_BPS), bps(MAX_STAKE_BPS)))
+    );
+    // The multichain pool's launch numbers: $10 to $100 at a $100,000 cap.
+    assert_eq!(
+        stake::bounds(&settings(100_000 * USDC)),
+        Ok((10 * USDC, 100 * USDC))
+    );
 }
 
 #[test]
 fn stake_edges() {
-    let (min, max) = stake::bounds(&settings(CAP)).unwrap();
-    assert_eq!(stake::check_new_stake(min, 0, &settings(CAP)), Ok(()));
-    assert_eq!(stake::check_new_stake(max, 0, &settings(CAP)), Ok(()));
+    let s = settings(CAP);
+    let (min, max) = stake::bounds(&s).unwrap();
+    assert_eq!(stake::split_new_stake(min, 0, &s), Ok((min, 0)));
+    assert_eq!(stake::split_new_stake(max, 0, &s), Ok((max, 0)));
+    // Above the max: the max is staked, the rest is backing.
+    assert_eq!(stake::split_new_stake(max + 1, 0, &s), Ok((max, 1)));
+    assert_eq!(stake::split_new_stake(3 * max, 0, &s), Ok((max, 2 * max)));
+    for below in [0, min - 1] {
+        assert_eq!(
+            stake::split_new_stake(below, 0, &s),
+            Err(CoreError::StakeOutOfRange)
+        );
+    }
+    assert_eq!(stake::split_new_stake(max, CAP - max, &s), Ok((max, 0)));
+    // A pool full for stakes refuses the whole deposit, overflow included.
     assert_eq!(
-        stake::check_new_stake(min - 1, 0, &settings(CAP)),
-        Err(CoreError::StakeOutOfRange)
+        stake::split_new_stake(max, CAP - max + 1, &s),
+        Err(CoreError::PoolCapExceeded)
     );
     assert_eq!(
-        stake::check_new_stake(max + 1, 0, &settings(CAP)),
-        Err(CoreError::StakeOutOfRange)
-    );
-    assert_eq!(
-        stake::check_new_stake(0, 0, &settings(CAP)),
-        Err(CoreError::StakeOutOfRange)
-    );
-    assert_eq!(
-        stake::check_new_stake(max, CAP - max, &settings(CAP)),
-        Ok(())
-    );
-    assert_eq!(
-        stake::check_new_stake(max, CAP - max + 1, &settings(CAP)),
+        stake::split_new_stake(2 * max, CAP - max + 1, &s),
         Err(CoreError::PoolCapExceeded)
     );
 }
@@ -72,7 +80,14 @@ fn credit_all_to_protocol_when_nobody_is_in() {
 #[test]
 fn credit_default_split_gives_everything_to_stakers_and_backers() {
     // 100% / 100% by default: 3:1 capacity split, nothing to the protocol beyond dust.
-    let c = yields::credit(4_000_000, 3 * USDC, USDC, STAKER_YIELD_BPS, BACKER_YIELD_BPS).unwrap();
+    let c = yields::credit(
+        4_000_000,
+        3 * USDC,
+        USDC,
+        STAKER_YIELD_BPS,
+        BACKER_YIELD_BPS,
+    )
+    .unwrap();
     assert_eq!(c.staker_share, 3_000_000);
     assert_eq!(c.backer_share, 1_000_000);
     assert_eq!(c.protocol_share, 0);
@@ -102,16 +117,25 @@ fn harvest_limit_is_10bp_per_day() {
 
 #[test]
 fn buffer_and_push_lines() {
-    assert_eq!(liquidity::buffer(10 * USDC), Ok(2 * USDC));
+    assert_eq!(liquidity::buffer(10 * USDC, MAX_DEPLOY_BPS), Ok(2 * USDC));
     // Idle 5 USDC, nothing open, nothing deployed: pushes up to the 80% line (8 USDC) -> 5.
-    assert_eq!(liquidity::push_amount(5 * USDC, 0, 10 * USDC, 0), Ok(5 * USDC));
+    assert_eq!(
+        liquidity::push_amount(5 * USDC, 0, 10 * USDC, 0, MAX_DEPLOY_BPS),
+        Ok(5 * USDC)
+    );
     // Already at the line.
-    assert_eq!(liquidity::push_amount(5 * USDC, 0, 10 * USDC, 8 * USDC), Ok(0));
+    assert_eq!(
+        liquidity::push_amount(5 * USDC, 0, 10 * USDC, 8 * USDC, MAX_DEPLOY_BPS),
+        Ok(0)
+    );
     // Below AUTO_PUSH_MIN_BPS of capacity: skipped.
-    assert_eq!(liquidity::push_amount(USDC / 20, 0, 10 * USDC, 0), Ok(0));
+    assert_eq!(
+        liquidity::push_amount(USDC / 20, 0, 10 * USDC, 0, MAX_DEPLOY_BPS),
+        Ok(0)
+    );
     // Open claims keep their cash.
     assert_eq!(
-        liquidity::push_amount(5 * USDC, 4 * USDC, 10 * USDC, 0),
+        liquidity::push_amount(5 * USDC, 4 * USDC, 10 * USDC, 0, MAX_DEPLOY_BPS),
         Ok(USDC)
     );
     assert_eq!(liquidity::free_liquid(5, 7), 0);
@@ -133,8 +157,8 @@ proptest! {
 
     #[test]
     fn push_never_crosses_the_deploy_line_or_open_claims(free in 0u64..=100 * USDC, alloc in 0u64..=100 * USDC, cap in 0u64..=100 * USDC, book in 0u64..=100 * USDC) {
-        let p = liquidity::push_amount(free, alloc, cap, book).unwrap();
+        let p = liquidity::push_amount(free, alloc, cap, book, MAX_DEPLOY_BPS).unwrap();
         prop_assert!(p <= free.saturating_sub(alloc));
-        prop_assert!(book + p <= (cap as u128 * DEPLOY_BPS as u128 / BPS_DENOMINATOR as u128) as u64 || p == 0);
+        prop_assert!(book + p <= (cap as u128 * MAX_DEPLOY_BPS as u128 / BPS_DENOMINATOR as u128) as u64 || p == 0);
     }
 }

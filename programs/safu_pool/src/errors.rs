@@ -12,7 +12,7 @@ pub enum PoolError {
     NotAdmin,
     #[msg("Signer is not the upgrade authority of this program")]
     NotUpgradeAuthority,
-    #[msg("Admin, oracle and co-signer must be three different keys")]
+    #[msg("Admin, co-signer, guardian and oracle must be four different keys")]
     RoleCollision,
     #[msg("Unknown cluster tag")]
     InvalidCluster,
@@ -64,8 +64,12 @@ pub enum PoolError {
     BackerAmountExceedsBalance,
     #[msg("No backer withdrawal pending")]
     NoBackerWithdrawal,
-    #[msg("Backer notice period has not passed")]
-    BackerNoticeNotPassed,
+    #[msg("Nothing to collect yet: the drip has not unlocked more, or today's share is taken")]
+    NothingToCollectYet,
+    #[msg("Open claims need all free capital today; the drip resumes once capital frees up")]
+    BackerCapitalNotFree,
+    #[msg("Too many deposits waiting to count; wait for one to count first")]
+    TooManyPendingDeposits,
     #[msg("Open claims need this capital right now; take out less, or try again later")]
     CapitalNotFree,
     #[msg("Signer is not the registry writer")]
@@ -129,7 +133,7 @@ pub enum PoolError {
     QueuedClaimStakeChanged,
     #[msg("Queued claim still does not fit")]
     QueueReleaseNotYetEligible,
-    #[msg("Queued claim is still inside its claim window")]
+    #[msg("Queued claim can still be released")]
     QueueNotYetExpired,
     #[msg("Claim is not waiting on the time gate")]
     ClaimNotPending,
@@ -195,6 +199,47 @@ pub enum PoolError {
     SettingNotReady,
     #[msg("Token account does not belong to the expected owner")]
     WrongTokenAccount,
+    // Governance (multichain `governance.rs`).
+    #[msg("Signer is not the admin, co-signer or guardian")]
+    GovCallerNotRole,
+    #[msg("A role has no say in its own replacement")]
+    GovTargetCannotApprove,
+    #[msg("A change of this kind is already pending; cancel it first")]
+    GovChangePending,
+    #[msg("No change of this kind is pending")]
+    GovNoPendingChange,
+    #[msg("Change differs from the pending one")]
+    GovChangeMismatch,
+    #[msg("A recovery proposal takes no approvals")]
+    GovSoloProposal,
+    #[msg("This role already voted")]
+    GovAlreadyApproved,
+    #[msg("Recovery is only for replacing another role")]
+    GovRecoveryRoleOnly,
+    #[msg("A role cannot cancel its own replacement")]
+    GovCannotCancel,
+    #[msg("Change is not approved, or its waiting time has not passed")]
+    GovNotReady,
+    #[msg("Admin, co-signer, guardian and oracle must be four different keys")]
+    GovRoleNotDistinct,
+    #[msg("Yield venue cannot change while money is deployed in it")]
+    VenueChangeWhileDeployed,
+    #[msg("Deploy share is above the ceiling")]
+    DeployBpsTooHigh,
+    #[msg("The new key must sign its own installation")]
+    GovNewKeyMustSign,
+    #[msg("Only the first claim in line can be released")]
+    NotFirstInQueue,
+    #[msg("The first claim in line is still waiting; release it instead")]
+    QueueHeadLive,
+    #[msg("Queue account does not match the line")]
+    WrongQueueEntry,
+    #[msg("Upkeep accounts missing or wrong: pass the queue head and the watch places")]
+    UpkeepAccountsMissing,
+    #[msg("Watch account does not match the watch list")]
+    WrongWatchEntry,
+    #[msg("A deposit above the max stake needs the backer record account")]
+    BackerRecordRequired,
 }
 
 impl From<CoreError> for PoolError {
