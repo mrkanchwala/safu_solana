@@ -1,4 +1,4 @@
-//! Points (dollar-days), yield kept as owed, and the views (multichain `points.rs`, B1 rules on
+//! Points (dollar-days), yield kept as owed, and the views (multichain `points.rs`, same rules on
 //! yield). Every number comes from the live settings and params, so each test holds in both the
 //! normal and the demo build.
 
