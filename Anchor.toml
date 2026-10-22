@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-safu_pool = "Aa6ncthjKmWaDX91jrY3HeUdHfP2fnhaPLQAPPVsG686"
+safu_pool = "6nE296ZjUgVifngxv1Z5jWp4xvBexaBiepFHA8UVYC7X"
 
 [programs.devnet]
-safu_pool = "Aa6ncthjKmWaDX91jrY3HeUdHfP2fnhaPLQAPPVsG686"
+safu_pool = "6nE296ZjUgVifngxv1Z5jWp4xvBexaBiepFHA8UVYC7X"
 
 [provider]
 cluster = "localnet"

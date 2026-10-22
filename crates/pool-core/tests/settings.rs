@@ -5,8 +5,8 @@ use pool_core::settings::*;
 use pool_core::{check_capital_free, stake, CoreError};
 use proptest::prelude::*;
 
-const SOL: u64 = 1_000_000_000;
-const CAP: u64 = 50 * SOL;
+const USDC: u64 = 1_000_000;
+const CAP: u64 = 50 * USDC;
 
 fn defaults() -> Settings {
     Settings::defaults(CAP).unwrap()
@@ -116,11 +116,11 @@ fn settings_keep_their_order() {
     assert_eq!(s.check_value(SettingKey::PoolCap, 1_000), Ok(()));
     // Allowed moves.
     assert_eq!(
-        s.check_value(SettingKey::PoolCap, (100 * SOL) as i64),
+        s.check_value(SettingKey::PoolCap, (100 * USDC) as i64),
         Ok(())
     );
     assert_eq!(
-        s.check_value(SettingKey::PoolCap, (10 * SOL) as i64),
+        s.check_value(SettingKey::PoolCap, (10 * USDC) as i64),
         Ok(())
     );
     assert_eq!(
@@ -137,7 +137,7 @@ fn a_pause_is_never_longer_than_the_gap_after_it() {
     let (gap_min, _) = SettingKey::PauseGapSecs.bounds();
     assert_eq!(gap_min, CLAIM_WINDOW_SECS);
     assert!(pause_max <= gap_min);
-    let s = Settings::defaults(100 * SOL).unwrap();
+    let s = Settings::defaults(100 * USDC).unwrap();
     assert_eq!(
         s.check_value(SettingKey::PauseGapSecs, CLAIM_WINDOW_SECS - 1),
         Err(CoreError::SettingOutOfBounds)
@@ -174,10 +174,10 @@ fn a_pool_cap_too_small_for_a_min_stake_cannot_start_a_pool() {
 fn live_settings_drive_the_rules() {
     let mut s = defaults();
     s.values[SettingKey::MinStakeBps.index()] = 20;
-    s.values[SettingKey::PoolCap.index()] = (100 * SOL) as i64;
-    assert_eq!(stake::bounds(&s), Ok((SOL / 5, SOL)));
+    s.values[SettingKey::PoolCap.index()] = (100 * USDC) as i64;
+    assert_eq!(stake::bounds(&s), Ok((USDC / 5, USDC)));
     assert_eq!(
-        stake::check_new_stake(SOL / 10, 0, &s),
+        stake::check_new_stake(USDC / 10, 0, &s),
         Err(CoreError::StakeOutOfRange)
     );
     assert_eq!(
@@ -196,7 +196,7 @@ fn live_settings_drive_the_rules() {
 fn a_stake_can_be_taken_out_in_full_or_in_part() {
     let s = defaults();
     let (min, _) = stake::bounds(&s).unwrap();
-    let stake_amt = SOL / 2;
+    let stake_amt = USDC / 2;
     assert_eq!(stake::check_withdraw(stake_amt, stake_amt, &s), Ok(0));
     assert_eq!(
         stake::check_withdraw(stake_amt - min, stake_amt, &s),
@@ -219,8 +219,8 @@ fn a_stake_can_be_taken_out_in_full_or_in_part() {
 #[test]
 fn a_stake_below_a_raised_min_can_still_leave_in_full() {
     let mut s = defaults();
-    s.values[SettingKey::MinStakeBps.index()] = 100; // min = max = 0.5 SOL
-    let small = SOL / 10;
+    s.values[SettingKey::MinStakeBps.index()] = 100; // min = max = 0.5 USDC
+    let small = USDC / 10;
     assert_eq!(stake::check_withdraw(small, small, &s), Ok(0));
     assert_eq!(
         stake::check_withdraw(small / 2, small, &s),
@@ -331,7 +331,7 @@ proptest! {
     }
 
     #[test]
-    fn a_partial_withdrawal_never_leaves_a_dust_stake(stake_amt in 1u64..10 * SOL, amount in 1u64..10 * SOL) {
+    fn a_partial_withdrawal_never_leaves_a_dust_stake(stake_amt in 1u64..10 * USDC, amount in 1u64..10 * USDC) {
         let s = defaults();
         let (min, _) = stake::bounds(&s).unwrap();
         if let Ok(left) = stake::check_withdraw(amount, stake_amt, &s) {

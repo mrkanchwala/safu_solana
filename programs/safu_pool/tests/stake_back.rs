@@ -6,36 +6,33 @@ mod common;
 use common::*;
 use safu_pool::constants::*;
 use safu_pool::errors::PoolError;
-use safu_pool::state::{CoveredWallet, Pool, StakeRecord, StakerWallets, ACCOUNT_VERSION};
+use safu_pool::state::{CoveredWallet, Pool, StakeRecord, StakerWallets};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
 // ------------------------------------------------------------------ initialize
 
 #[test]
-fn initialize_sets_roles_marinade_and_funds_the_vault() {
+fn initialize_sets_roles_usdc_and_an_empty_vault_owned_by_the_pool() {
     let env = Env::new();
     let p = env.pool_state();
     assert_eq!(p.admin, env.admin.pubkey());
     assert_eq!(p.oracle, env.oracle.pubkey());
     assert_eq!(p.settings().pool_cap(), env.cfg.pool_cap);
-    assert_eq!(p.marinade_state, env.cfg.marinade_state);
-    assert_eq!(p.msol_mint, env.cfg.msol_mint);
-    assert_eq!(p.pool_msol, env.pool_msol());
-    assert_eq!(env.lamports(&env.vault()), env.rent_floor());
+    assert_eq!((p.usdc_mint, p.vault), (env.usdc_mint, env.vault()));
+    let v = env.svm.get_account(&env.vault()).unwrap();
+    assert_eq!(v.owner, TOKEN);
+    // Token account layout: mint, then owner (the authority that can move it) = the pool PDA.
+    assert_eq!(&v.data[..32], env.usdc_mint.as_ref());
+    assert_eq!(&v.data[32..64], env.pool().as_ref());
     assert_eq!(env.vault_liquid(), 0);
 }
 
 #[test]
 fn initialize_only_by_upgrade_authority() {
     let mut env = Env::uninitialized();
-    let intruder = env.funded(10 * SOL);
-    let ix = env.init_ix(
-        &intruder.pubkey(),
-        env.init_args(),
-        env.cfg.marinade_state,
-        env.cfg.msol_mint,
-    );
+    let intruder = env.funded(10 * unit());
+    let ix = env.init_ix(&intruder.pubkey(), env.init_args(), env.usdc_mint);
     assert_err(
         env.send(&[ix], &[&intruder]),
         PoolError::NotUpgradeAuthority,
@@ -53,12 +50,7 @@ fn initialize_refuses_overlapping_roles() {
             _ => args.co_signer = args.oracle,
         }
         let admin = env.admin.insecure_clone();
-        let ix = env.init_ix(
-            &admin.pubkey(),
-            args,
-            env.cfg.marinade_state,
-            env.cfg.msol_mint,
-        );
+        let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
         assert_err(env.send(&[ix], &[&admin]), PoolError::RoleCollision);
     }
 }
@@ -69,69 +61,43 @@ fn initialize_refuses_unknown_cluster_and_tiny_cap() {
     let admin = env.admin.insecure_clone();
     let mut args = env.init_args();
     args.cluster = CLUSTER_MAINNET + 1;
-    let ix = env.init_ix(
-        &admin.pubkey(),
-        args,
-        env.cfg.marinade_state,
-        env.cfg.msol_mint,
-    );
+    let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
     assert_err(env.send(&[ix], &[&admin]), PoolError::InvalidCluster);
 
     let mut args = env.init_args();
     // Smallest cap whose min stake rounds to zero.
     args.pool_cap = BPS_DENOMINATOR / MIN_STAKE_BPS - 1;
-    let ix = env.init_ix(
-        &admin.pubkey(),
-        args,
-        env.cfg.marinade_state,
-        env.cfg.msol_mint,
-    );
+    let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
     assert_err(env.send(&[ix], &[&admin]), PoolError::InvalidPoolCap);
 }
 
 #[test]
-fn initialize_refuses_a_fake_marinade_state() {
+fn initialize_refuses_a_mint_with_other_decimals() {
     let mut env = Env::uninitialized();
     let admin = env.admin.insecure_clone();
-    // The mSOL mint is a real account but not owned by Marinade.
-    let ix = env.init_ix(
-        &admin.pubkey(),
-        env.init_args(),
-        env.cfg.msol_mint,
-        env.cfg.msol_mint,
-    );
-    assert_err(env.send(&[ix], &[&admin]), PoolError::WrongMarinadeAccount);
+    let mint = Keypair::new().pubkey();
+    let decimals = pool_core::params::USDC_DECIMALS + 1;
+    set_token_program_account(&mut env.svm, mint, mint_data(decimals, 0));
+    let ix = env.init_ix(&admin.pubkey(), env.init_args(), mint);
+    assert_err(env.send(&[ix], &[&admin]), PoolError::WrongMint);
 }
 
 #[test]
-fn initialize_refuses_a_mint_that_is_not_marinades() {
+fn initialize_refuses_a_mint_not_owned_by_classic_spl_token() {
+    // A Token-2022 mint (or anything else) could carry transfer fees or hooks: refused by owner.
     let mut env = Env::uninitialized();
     let admin = env.admin.insecure_clone();
-    // A token mint of our own making.
-    let fake = Keypair::new();
-    let mut mint = env.svm.get_account(&env.cfg.msol_mint).unwrap();
-    mint.data[4..36].copy_from_slice(fake.pubkey().as_ref());
-    env.svm.set_account(fake.pubkey(), mint).unwrap();
-    let ix = env.init_ix(
-        &admin.pubkey(),
-        env.init_args(),
-        env.cfg.marinade_state,
-        fake.pubkey(),
-    );
-    assert_err(env.send(&[ix], &[&admin]), PoolError::WrongMarinadeAccount);
-}
-
-#[test]
-fn marinade_fixture_layout_matches_pool_core() {
-    // The layout facts in pool_core::marinade, checked against the dumped devnet account.
-    let env = Env::uninitialized();
-    let d = env.svm.get_account(&env.cfg.marinade_state).unwrap().data;
-    assert_eq!(d[..8], pool_core::marinade::ACCOUNT_STATE);
-    assert_eq!(
-        &d[pool_core::marinade::STATE_MSOL_MINT..][..32],
-        env.cfg.msol_mint.as_ref()
-    );
-    assert!(d.len() >= pool_core::marinade::STATE_MIN_LEN);
+    let mint = Keypair::new().pubkey();
+    let data = mint_data(pool_core::params::USDC_DECIMALS, 0);
+    let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
+    let other_program = Keypair::new().pubkey();
+    env.svm
+        .set_account(mint, solana_account::Account { lamports, data, owner: other_program, executable: false, rent_epoch: 0 })
+        .unwrap();
+    let ix = env.init_ix(&admin.pubkey(), env.init_args(), mint);
+    let err = env.send(&[ix], &[&admin]).expect_err("must fail");
+    let code = anchor_lang::error::ErrorCode::AccountOwnedByWrongProgram as u32;
+    assert!(err.contains(&format!("Custom({code})")), "{err}");
 }
 
 // ------------------------------------------------------------------ admin
@@ -142,7 +108,7 @@ fn pause_blocks_stake_and_expires_on_its_own() {
     let admin = env.admin.insecure_clone();
     let ix = env.admin_ix(safu_pool::instruction::Pause {});
     env.ok(&[ix], &[&admin]);
-    let s = env.funded(SOL);
+    let s = env.funded(unit());
     let (min, _) = bounds();
     let ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
     assert_err(
@@ -156,7 +122,7 @@ fn pause_blocks_stake_and_expires_on_its_own() {
 #[test]
 fn only_admin_pauses_and_unpause_needs_a_pause() {
     let mut env = Env::new();
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let ix = env.ix(
         safu_pool::accounts::AdminOnly {
             admin: other.pubkey(),
@@ -181,7 +147,7 @@ fn pool_cap_changes_through_the_settings_timelock() {
 // ------------------------------------------------------------------ stake
 
 #[test]
-fn stake_moves_sol_into_the_vault_and_books_it() {
+fn stake_moves_usdc_into_the_vault_and_books_it() {
     let mut env = Env::new();
     let (_, max) = bounds();
     let s = env.staker(max);
@@ -192,14 +158,28 @@ fn stake_moves_sol_into_the_vault_and_books_it() {
     );
     let p = env.pool_state();
     assert_eq!((p.total_staked, p.total_stakers), (max, 1));
-    // `DEPLOY_BPS` of it is staked through Marinade, the rest stays liquid.
-    let deployed = pool_core::liquidity::push_amount(max, 0, max, 0).unwrap();
-    assert!(deployed > 0);
-    assert_eq!(
-        (p.deployed_book, env.vault_liquid()),
-        (deployed, max - deployed)
-    );
-    assert!(p.deployed_msol > 0);
+    assert_eq!((env.vault_liquid(), env.usdc(&s.pubkey())), (max, 0));
+}
+
+#[test]
+fn stake_refuses_someone_elses_usdc_or_another_mint() {
+    let mut env = Env::new();
+    let (min, _) = bounds();
+    let s = env.funded(min);
+    let other = env.funded(min);
+    // Another wallet's USDC account as the source.
+    let mut ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
+    let src = ix.accounts.iter().position(|a| a.pubkey == env.ata(&s.pubkey())).unwrap();
+    ix.accounts[src].pubkey = env.ata(&other.pubkey());
+    assert_err(env.send(&[ix], &[&s]), PoolError::WrongTokenAccount);
+    // A token account of another mint, owned by the staker.
+    let fake_mint = Keypair::new().pubkey();
+    set_token_program_account(&mut env.svm, fake_mint, mint_data(pool_core::params::USDC_DECIMALS, 0));
+    let fake = Keypair::new().pubkey();
+    set_token_program_account(&mut env.svm, fake, token_data(&fake_mint, &s.pubkey(), min));
+    let mut ix = env.stake_ix(&s.pubkey(), min, s.pubkey());
+    ix.accounts[src].pubkey = fake;
+    assert_err(env.send(&[ix], &[&s]), PoolError::WrongMint);
 }
 
 #[test]
@@ -251,7 +231,7 @@ fn forfeited_address_can_never_stake_again() {
 fn beneficiary_cannot_be_a_role() {
     let mut env = Env::new();
     let (min, _) = bounds();
-    let s = env.funded(SOL);
+    let s = env.funded(unit());
     for (who, e) in [
         (env.oracle.pubkey(), PoolError::BeneficiaryIsOracle),
         (env.admin.pubkey(), PoolError::BeneficiaryIsAdmin),
@@ -297,11 +277,11 @@ fn set_beneficiary_blocked_while_a_claim_is_open_or_queued() {
 #[test]
 fn withdraw_pays_the_beneficiary_and_closes_the_record() {
     let mut env = Env::new();
-    env.marinade_liquidity_at_target();
     let (_, max) = bounds();
     // Enough for two stakes: the first withdrawal goes to the beneficiary, not back here.
-    let s = env.funded(2 * max + SOL);
+    let s = env.funded(2 * max);
     let ben = Keypair::new().pubkey();
+    env.open_usdc(&ben);
     let ix = env.stake_ix(&s.pubkey(), max, ben);
     env.ok(&[ix], &[&s]);
     let rec = env.stake_record(&s.pubkey());
@@ -309,21 +289,12 @@ fn withdraw_pays_the_beneficiary_and_closes_the_record() {
     let before = env.lamports(&s.pubkey());
     let ix = env.withdraw_ix(&s.pubkey(), &ben);
     env.ok(&[ix], &[&s]);
-    // The staked part came back through Marinade; the beneficiary paid that unstake's fee.
-    assert!(env.lamports(&ben) <= max && env.lamports(&ben) + Env::max_unstake_fee(max) >= max);
+    assert_eq!(env.usdc(&ben), max);
     assert!(!env.exists(&rec));
-    // Rent comes back to the staker (the fee is paid by the staker too).
+    // Rent (SOL) comes back to the staker, less this transaction's fee.
     assert!(env.lamports(&s.pubkey()) > before + rent - SOL / 1_000);
     let p = env.pool_state();
-    assert_eq!(
-        (
-            p.total_staked,
-            p.total_stakers,
-            p.deployed_msol,
-            p.deployed_book
-        ),
-        (0, 0, 0, 0)
-    );
+    assert_eq!((p.total_staked, p.total_stakers, env.vault_liquid()), (0, 0, 0));
     // The address can stake again: the record is re-created.
     let ix = env.stake_ix(&s.pubkey(), max, s.pubkey());
     env.ok(&[ix], &[&s]);
@@ -334,7 +305,9 @@ fn withdraw_to_the_wrong_beneficiary_refused() {
     let mut env = Env::new();
     let (min, _) = bounds();
     let s = env.staker(min);
-    let ix = env.withdraw_ix(&s.pubkey(), &Keypair::new().pubkey());
+    let other = Keypair::new().pubkey();
+    env.open_usdc(&other);
+    let ix = env.withdraw_ix(&s.pubkey(), &other);
     assert_err(env.send(&[ix], &[&s]), PoolError::WrongBeneficiary);
 }
 
@@ -353,7 +326,6 @@ fn withdraw_refused_while_paused() {
 #[test]
 fn withdraw_refused_when_forfeited_claimed_queued_or_penalty_locked() {
     let mut env = Env::new();
-    env.marinade_liquidity_at_target();
     let (min, _) = bounds();
     let s = env.staker(min);
     let rec = env.stake_record(&s.pubkey());
@@ -389,40 +361,22 @@ fn withdraw_refused_when_forfeited_claimed_queued_or_penalty_locked() {
 }
 
 #[test]
-fn withdraw_refused_when_liquid_sol_is_short() {
+fn withdraw_never_spends_the_yield_set_aside() {
     let mut env = Env::new();
     let (min, _) = bounds();
     let s = env.staker(min);
-    // Nothing in Marinade to unstake, and the set-aside yield is not the stake's to take.
-    env.edit::<Pool>(&env.pool(), |p| {
-        p.deployed_msol = 0;
-        p.staker_yield_reserved = 1;
-    });
+    // The vault holds exactly the stake; set-aside yield is not the stake's to take.
+    env.edit::<Pool>(&env.pool(), |p| p.staker_yield_reserved = 1);
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
 }
 
 #[test]
-fn withdraw_unstakes_the_shortfall_and_leaves_the_set_aside() {
-    let mut env = Env::new();
-    env.marinade_liquidity_at_target();
-    let (min, _) = bounds();
-    let s = env.staker(min);
-    let set_aside = env.vault_liquid();
-    env.edit::<Pool>(&env.pool(), |p| p.staker_yield_reserved = set_aside);
-    let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
-    env.ok(&[ix], &[&s]);
-    assert_eq!(env.pool_state().staker_yield_reserved, set_aside);
-    assert!(env.vault_liquid() >= set_aside);
-}
-
-#[test]
 fn withdraw_pays_unpaid_yield_from_the_set_aside() {
     let mut env = Env::new();
-    env.marinade_liquidity_at_target();
     let (_, max) = bounds();
     let s = env.staker(max);
-    // One credit of 1% on the stake: index + set-aside + the SOL behind it.
+    // One credit of 1% on the stake: index + set-aside + the USDC behind it.
     let credit =
         pool_core::yields::credit(max / 100, max, 0, STAKER_YIELD_BPS, BACKER_YIELD_BPS).unwrap();
     env.edit::<Pool>(&env.pool(), |p| {
@@ -430,21 +384,17 @@ fn withdraw_pays_unpaid_yield_from_the_set_aside() {
         p.staker_yield_reserved += credit.staker_share;
     });
     let v = env.vault();
-    env.svm.airdrop(&v, credit.staker_share).unwrap();
+    env.add_token(&v, credit.staker_share);
     let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
-    let before = env.lamports(&s.pubkey());
+    let before = env.usdc(&s.pubkey());
     env.ok(&[ix], &[&s]);
-    assert!(
-        env.lamports(&s.pubkey()) + Env::max_unstake_fee(max) >= before + max + credit.staker_share
-    );
-    let p = env.pool_state();
-    assert_eq!((p.staker_yield_reserved, p.deployed_msol), (0, 0));
+    assert_eq!(env.usdc(&s.pubkey()), before + max + credit.staker_share);
+    assert_eq!(env.pool_state().staker_yield_reserved, 0);
 }
 
 #[test]
 fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
     let mut env = Env::new();
-    env.marinade_liquidity_at_target();
     let (min, _) = bounds();
     let s = env.staker(min);
     let ix = env.emergency_exit_ix(&s.pubkey());
@@ -463,9 +413,9 @@ fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
         PoolError::PenaltyLockActive,
     );
     env.edit::<StakeRecord>(&rec, |r| r.penalty_locked_until = 0);
-    let before = env.lamports(&s.pubkey());
+    let before = env.usdc(&s.pubkey());
     env.ok(&[ix], &[&s]);
-    assert!(env.lamports(&s.pubkey()) + Env::max_unstake_fee(min) > before + min);
+    assert_eq!(env.usdc(&s.pubkey()), before + min);
     assert!(!env.exists(&rec));
 }
 
@@ -474,11 +424,11 @@ fn emergency_exit_only_while_paused_and_honours_the_penalty_lock() {
 #[test]
 fn backing_counts_only_after_maturity() {
     let mut env = Env::new();
-    let b = env.funded(10 * SOL);
-    let ix = env.back_ix(&b.pubkey(), 2 * SOL);
+    let b = env.funded(10 * unit());
+    let ix = env.back_ix(&b.pubkey(), 2 * unit());
     env.ok(&[ix], &[&b]);
     let p = env.pool_state();
-    assert_eq!((p.total_backed, p.total_backed_pending), (0, 2 * SOL));
+    assert_eq!((p.total_backed, p.total_backed_pending), (0, 2 * unit()));
     let m = env.mature_ix(&b.pubkey());
     assert_err(
         env.send(std::slice::from_ref(&m), &[&b]),
@@ -486,51 +436,51 @@ fn backing_counts_only_after_maturity() {
     );
     env.warp(BACKER_MATURITY_SECS);
     // Permissionless: anyone can mature it.
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     env.ok(std::slice::from_ref(&m), &[&anyone]);
     let p = env.pool_state();
-    assert_eq!((p.total_backed, p.total_backed_pending), (2 * SOL, 0));
+    assert_eq!((p.total_backed, p.total_backed_pending), (2 * unit(), 0));
     assert_err(env.send(&[m], &[&anyone]), PoolError::NoPendingBacking);
 }
 
 #[test]
 fn top_up_restarts_the_wait_for_the_whole_pending_amount() {
     let mut env = Env::new();
-    let b = env.funded(10 * SOL);
-    let ix = env.back_ix(&b.pubkey(), SOL);
+    let b = env.funded(10 * unit());
+    let ix = env.back_ix(&b.pubkey(), unit());
     env.ok(std::slice::from_ref(&ix), &[&b]);
     env.warp(BACKER_MATURITY_SECS - 1);
     env.ok(&[ix], &[&b]);
     env.warp(1);
     let m = env.mature_ix(&b.pubkey());
     assert_err(env.send(&[m], &[&b]), PoolError::BackingNotMature);
-    assert_eq!(env.backer_state(&b.pubkey()).pending_amount, 2 * SOL);
+    assert_eq!(env.backer_state(&b.pubkey()).pending_amount, 2 * unit());
 }
 
 #[test]
 fn back_refuses_zero_and_pause() {
     let mut env = Env::new();
-    let b = env.funded(10 * SOL);
+    let b = env.funded(10 * unit());
     let ix = env.back_ix(&b.pubkey(), 0);
     assert_err(env.send(&[ix], &[&b]), PoolError::AmountNotPositive);
     let admin = env.admin.insecure_clone();
     let p = env.admin_ix(safu_pool::instruction::Pause {});
     env.ok(&[p], &[&admin]);
-    let ix = env.back_ix(&b.pubkey(), SOL);
+    let ix = env.back_ix(&b.pubkey(), unit());
     assert_err(env.send(&[ix], &[&b]), PoolError::Paused);
 }
 
 #[test]
 fn backer_withdrawal_request_rules() {
     let mut env = Env::new();
-    let b = env.matured_backer(2 * SOL);
+    let b = env.matured_backer(2 * unit());
     let req = |env: &Env, a| env.request_backer_ix(&b.pubkey(), a);
     assert_err(
         env.send(&[req(&env, 0)], &[&b]),
         PoolError::AmountNotPositive,
     );
     assert_err(
-        env.send(&[req(&env, 2 * SOL + 1)], &[&b]),
+        env.send(&[req(&env, 2 * unit() + 1)], &[&b]),
         PoolError::BackerAmountExceedsBalance,
     );
     let cancel = env.backer_only_ix(
@@ -541,13 +491,13 @@ fn backer_withdrawal_request_rules() {
         env.send(std::slice::from_ref(&cancel), &[&b]),
         PoolError::NoBackerWithdrawal,
     );
-    env.ok(&[req(&env, SOL)], &[&b]);
+    env.ok(&[req(&env, unit())], &[&b]);
     assert_err(
-        env.send(&[req(&env, SOL)], &[&b]),
+        env.send(&[req(&env, unit())], &[&b]),
         PoolError::BackerWithdrawalPending,
     );
     // Still counted during the notice (rule 2).
-    assert_eq!(env.pool_state().total_backed, 2 * SOL);
+    assert_eq!(env.pool_state().total_backed, 2 * unit());
     env.ok(&[cancel], &[&b]);
     assert_eq!(env.backer_state(&b.pubkey()).withdraw_amount, 0);
 }
@@ -555,13 +505,13 @@ fn backer_withdrawal_request_rules() {
 #[test]
 fn backer_withdrawal_waits_for_notice_and_free_capital() {
     let mut env = Env::new();
-    let b = env.matured_backer(2 * SOL);
+    let b = env.matured_backer(2 * unit());
     let complete = env.complete_backer_ix(&b.pubkey());
     assert_err(
         env.send(std::slice::from_ref(&complete), &[&b]),
         PoolError::NoBackerWithdrawal,
     );
-    let req = env.request_backer_ix(&b.pubkey(), SOL);
+    let req = env.request_backer_ix(&b.pubkey(), unit());
     env.ok(&[req], &[&b]);
     assert_err(
         env.send(std::slice::from_ref(&complete), &[&b]),
@@ -569,27 +519,27 @@ fn backer_withdrawal_waits_for_notice_and_free_capital() {
     );
     env.warp(BACKER_NOTICE_SECS);
     // Open claims need more than what would be left (rule 3).
-    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = SOL + 1);
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = unit() + 1);
     assert_err(
         env.send(std::slice::from_ref(&complete), &[&b]),
         PoolError::CapitalNotFree,
     );
-    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = SOL);
-    let before = env.lamports(&b.pubkey());
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = unit());
+    let before = env.usdc(&b.pubkey());
     env.ok(&[complete], &[&b]);
-    assert!(env.lamports(&b.pubkey()) > before + SOL - SOL / 1_000);
-    assert_eq!(env.pool_state().total_backed, SOL);
-    assert_eq!(env.backer_state(&b.pubkey()).amount, SOL);
+    assert_eq!(env.usdc(&b.pubkey()), before + unit());
+    assert_eq!(env.pool_state().total_backed, unit());
+    assert_eq!(env.backer_state(&b.pubkey()).amount, unit());
 }
 
 #[test]
 fn backer_withdrawal_works_while_paused() {
     let mut env = Env::new();
-    let b = env.matured_backer(SOL);
+    let b = env.matured_backer(unit());
     let admin = env.admin.insecure_clone();
     let p = env.admin_ix(safu_pool::instruction::Pause {});
     env.ok(&[p], &[&admin]);
-    let req = env.request_backer_ix(&b.pubkey(), SOL);
+    let req = env.request_backer_ix(&b.pubkey(), unit());
     env.ok(&[req], &[&b]);
     env.warp(BACKER_NOTICE_SECS);
     let complete = env.complete_backer_ix(&b.pubkey());
@@ -600,9 +550,9 @@ fn backer_withdrawal_works_while_paused() {
 #[test]
 fn anyone_can_count_matured_backing() {
     let mut env = Env::new();
-    let b = env.funded(10 * SOL);
-    let crank = env.funded(SOL);
-    let back = env.back_ix(&b.pubkey(), SOL);
+    let b = env.funded(10 * unit());
+    let crank = env.funded(unit());
+    let back = env.back_ix(&b.pubkey(), unit());
     env.ok(&[back], &[&b]);
     let mature = env.mature_ix(&b.pubkey());
     assert_err(
@@ -611,8 +561,8 @@ fn anyone_can_count_matured_backing() {
     );
     env.warp(BACKER_MATURITY_SECS);
     env.ok(&[mature], &[&crank]);
-    assert_eq!(env.backer_state(&b.pubkey()).amount, SOL);
-    assert_eq!(env.pool_state().total_backed, SOL);
+    assert_eq!(env.backer_state(&b.pubkey()).amount, unit());
+    assert_eq!(env.pool_state().total_backed, unit());
 }
 
 // ------------------------------------------------------------------ covered wallets
@@ -633,52 +583,13 @@ fn register_up_to_the_limit() {
     let w: StakerWallets = env.read(&env.staker_wallets(&staker));
     assert_eq!(w.count, MAX_COVERED_WALLETS);
     assert_eq!(
-        w.hashes(),
+        w.hashes().to_vec(),
         (0..MAX_COVERED_WALLETS).map(hash).collect::<Vec<_>>()
     );
     let c: CoveredWallet = env.read(&env.covered(&hash(0)));
     assert_eq!(c.staker, staker);
     let ix = env.register_ix(&writer.pubkey(), staker, hash(MAX_COVERED_WALLETS));
     assert_err(env.send(&[ix], &[&writer]), PoolError::StakerLimitReached);
-}
-
-/// Accounts written by the 1-wallet build (devnet today) keep working: same size, slot 1 and
-/// `bump` in place, and the 2nd wallet lands in what used to be `reserved`.
-#[test]
-fn a_one_wallet_account_from_the_old_layout_takes_a_second_wallet() {
-    use anchor_lang::Discriminator;
-    let mut env = Env::new();
-    let writer = env.writer.insecure_clone();
-    let staker = Keypair::new().pubkey();
-    let ix = env.register_ix(&writer.pubkey(), staker, hash(1));
-    env.ok(&[ix], &[&writer]);
-    let address = env.staker_wallets(&staker);
-    let bump = env.read::<StakerWallets>(&address).bump;
-    // Old layout: version, staker, count, wallet_hashes[1], bump, reserved[64].
-    let mut old = StakerWallets::DISCRIMINATOR.to_vec();
-    old.push(ACCOUNT_VERSION);
-    old.extend_from_slice(staker.as_ref());
-    old.push(1);
-    old.extend_from_slice(&hash(1));
-    old.push(bump);
-    old.extend_from_slice(&[0u8; 64]);
-    let mut acc = env.svm.get_account(&address).unwrap();
-    assert_eq!(
-        acc.data, old,
-        "a 1-wallet account is byte-identical to the old layout"
-    );
-    acc.data = old;
-    env.svm.set_account(address, acc).unwrap();
-    let ix = env.register_ix(&writer.pubkey(), staker, hash(2));
-    env.ok(&[ix], &[&writer]);
-    let w: StakerWallets = env.read(&address);
-    assert_eq!((w.count, w.bump), (2, bump));
-    assert_eq!(w.hashes(), vec![hash(1), hash(2)]);
-    assert!(w.reserved.iter().all(|b| *b == 0));
-    assert_eq!(
-        env.read::<CoveredWallet>(&env.covered(&hash(2))).staker,
-        staker
-    );
 }
 
 #[test]
@@ -700,19 +611,21 @@ fn a_wallet_belongs_to_one_staker_forever() {
 #[test]
 fn only_the_registry_writer_registers() {
     let mut env = Env::new();
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let ix = env.register_ix(&other.pubkey(), Keypair::new().pubkey(), hash(1));
     assert_err(env.send(&[ix], &[&other]), PoolError::NotRegistryWriter);
 }
 
 #[test]
 fn a_donation_to_the_vault_changes_no_stake() {
-    // Extra SOL only ever looks like surplus.
+    // Extra USDC only ever looks like surplus.
     let mut env = Env::new();
     let (min, _) = bounds();
     env.staker(min);
     let v = env.vault();
-    env.svm.airdrop(&v, SOL).unwrap();
+    env.add_token(&v, unit());
     let p = env.pool_state();
     assert_eq!((p.total_staked, p.total_allocated), (min, 0));
+    // It sits above everything owed: protocol surplus, never stake.
+    assert_eq!(env.vault_liquid(), min + unit());
 }

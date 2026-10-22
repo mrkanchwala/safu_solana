@@ -21,12 +21,12 @@ use crate::approval::{self, ClaimApproval};
 use crate::constants::{SEED_CLAIM, SEED_OVERRIDE, SEED_POOL, SEED_STAKE, SEED_VAULT};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::*;
-use crate::leg;
 use crate::state::{
     Claim, ClaimStatus, OverrideRequest, Pool, RevokedApproval, StakeRecord, ACCOUNT_VERSION,
 };
-// Glob: `#[derive(Accounts)]` on a struct holding `MarinadeLeg` needs its generated client modules.
-use crate::marinade::*;
+// Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
+use crate::vault::{self, *};
+use anchor_spl::token::TokenAccount;
 
 // ------------------------------------------------------------------ shared steps
 
@@ -477,26 +477,28 @@ pub struct ClaimStream<'info> {
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     #[account(mut, seeds = [SEED_CLAIM, pool.key().as_ref(), staker.key().as_ref(), claim.tx_hash.as_ref()], bump = claim.bump, has_one = staker)]
     pub claim: Box<Account<'info, Claim>>,
     #[account(
         seeds = [SEED_STAKE, pool.key().as_ref(), staker.key().as_ref()],
         bump = stake_record.bump,
-        has_one = beneficiary @ PoolError::WrongBeneficiary,
     )]
     pub stake_record: Box<Account<'info, StakeRecord>>,
-    /// CHECK: must be the stake's beneficiary (`has_one` above); only receives SOL.
-    #[account(mut)]
-    pub beneficiary: UncheckedAccount<'info>,
-    pub system_program: Program<'info, System>,
-    pub leg: MarinadeLeg<'info>,
+    /// The stake's beneficiary's USDC account (any token account it owns).
+    #[account(
+        mut,
+        constraint = beneficiary_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
+        constraint = beneficiary_usdc.owner == stake_record.beneficiary @ PoolError::WrongBeneficiary,
+    )]
+    pub beneficiary_usdc: Box<Account<'info, TokenAccount>>,
+    pub cash: Cash<'info>,
 }
 
 /// Pays what has vested, up to today's payout cap, to the beneficiary.
 pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
+    let pool_info = ctx.accounts.pool.to_account_info();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
@@ -545,10 +547,8 @@ pub fn claim_stream(ctx: Context<ClaimStream>) -> Result<()> {
         amount
     });
 
-    // If cash is short, Marinade unstakes the rest; the beneficiary pays that unstake's fee.
-    let to = ctx.accounts.beneficiary.to_account_info();
-    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, amount)?;
-    Ok(())
+    let to = ctx.accounts.beneficiary_usdc.to_account_info();
+    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, amount)
 }
 
 // ------------------------------------------------------------------ admin: cancel, suspend, revoke
@@ -562,17 +562,12 @@ pub struct CancelClaim<'info> {
     pub claim: Box<Account<'info, Claim>>,
     #[account(mut, seeds = [SEED_STAKE, pool.key().as_ref(), claim.staker.as_ref()], bump = stake_record.bump)]
     pub stake_record: Box<Account<'info, StakeRecord>>,
-    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
-    pub leg: MarinadeLeg<'info>,
 }
 
 /// False-positive reversal. An approved (forfeited) stake is restored under the penalty lock, less
 /// what the claim already paid out; before approval nothing was forfeited, so there is no penalty.
 pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
-    let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     let claim_key = ctx.accounts.claim.key();
     let claim = &mut ctx.accounts.claim;
@@ -586,8 +581,6 @@ pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     release_allocation(pool, claim.entitlement - claim.streamed);
     let stake = &mut ctx.accounts.stake_record;
     if claim.status == ClaimStatus::Active {
-        // Growth so far belongs to the stakes in before this one returns (multichain call site).
-        leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
         // What the claim already paid out stays paid and comes off the stake. The
         // rest may sit below the min stake; it can still leave in full.
         let restored = claim.stake.saturating_sub(claim.streamed);

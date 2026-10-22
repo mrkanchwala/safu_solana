@@ -16,14 +16,14 @@ use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at
 use crate::constants::{APPROVAL_DOMAIN, SEED_REVOKED};
 use crate::errors::PoolError;
 
-/// What the oracle attests. The program never reads a price: the oracle converts the loss to
-/// lamports off-chain and the program bounds it by the tier ceiling.
+/// What the oracle attests. The program never reads a price: the oracle prices the loss in USD
+/// off-chain, signs it in USDC base units, and the program bounds it by the tier ceiling.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClaimApproval {
     pub staker: Pubkey,
     /// Hash of the drain transaction (any chain), as the claim id's second half.
     pub tx_hash: [u8; 32],
-    /// Lamports.
+    /// USDC base units (6 decimals).
     pub entitlement: u64,
     pub tier: u8,
     pub hack_timestamp: i64,

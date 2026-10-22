@@ -1,7 +1,7 @@
 //! Stateful program fuzz: random sequences of every liquidity path (stake, partial and whole
-//! withdraw, emergency exit, backing and its withdrawal, claims end to end, yield, harvest,
-//! rebalance, treasury, pause, settings through the timelock, Marinade rewards and liquidity,
-//! covered-wallet registration) against the real program and Marinade in LiteSVM. Ordinary refusals are expected and ignored;
+//! withdraw, emergency exit, backing and its withdrawal, claims end to end, yield, treasury,
+//! pause, settings through the timelock, donations to the vault, covered-wallet registration)
+//! against the real program in LiteSVM, all in USDC. Ordinary refusals are expected and ignored;
 //! the books are checked after every step, success or not.
 //!
 //! Ignored in normal runs. On the VPS:
@@ -80,13 +80,6 @@ struct World {
     next_tx: u64,
     /// Claim money paid out (entitlement streamed), the one thing allowed to leave the books short.
     paid: u64,
-    /// Marinade loss marked off `total_staked` but left in the stake records: it
-    /// lets the books run short as well, so it is counted and allowed, not failed.
-    unassigned_loss: u64,
-    last_unassigned: u64,
-    /// Every Marinade loss the pool booked, from its `DeploymentLoss` events. With no stakers left
-    /// to mark it off (`total_staked` saturates at zero) it shows only here.
-    marinade_loss: u64,
     max_gap: u64,
     trace: Vec<String>,
 }
@@ -112,13 +105,12 @@ impl World {
         let mut env = Env::new();
         let mut stakers = Vec::new();
         for _ in 0..STAKERS {
-            let kp = env.funded(200 * SOL);
-            stakers.push(Staker {
-                kp,
-                beneficiary: Keypair::new().pubkey(),
-            });
+            let kp = env.funded(200 * unit());
+            let beneficiary = Keypair::new().pubkey();
+            env.open_usdc(&beneficiary);
+            stakers.push(Staker { kp, beneficiary });
         }
-        let backers = (0..BACKERS).map(|_| env.funded(500 * SOL)).collect();
+        let backers = (0..BACKERS).map(|_| env.funded(500 * unit())).collect();
         World {
             env,
             rng: Rng(seed.max(1)),
@@ -127,9 +119,6 @@ impl World {
             claims: Vec::new(),
             next_tx: 1,
             paid: 0,
-            unassigned_loss: 0,
-            last_unassigned: 0,
-            marinade_loss: 0,
             max_gap: 0,
             trace: Vec::new(),
         }
@@ -188,26 +177,7 @@ impl World {
         ixs: &[anchor_lang::solana_program::instruction::Instruction],
         who: &Keypair,
     ) -> bool {
-        // Counts any Marinade loss the pool booked (`DeploymentLoss` events).
-        use anchor_lang::Discriminator;
-        use base64::Engine;
-        let Ok(logs) = self.env.send_logs(ixs, &[who]) else {
-            return false;
-        };
-        let disc = safu_pool::events::DeploymentLoss::DISCRIMINATOR;
-        for line in logs {
-            let Some(b64) = line.strip_prefix("Program data: ") else {
-                continue;
-            };
-            let Ok(d) = base64::engine::general_purpose::STANDARD.decode(b64) else {
-                continue;
-            };
-            if d.len() >= disc.len() + 8 && &d[..disc.len()] == disc {
-                let at = disc.len();
-                self.marinade_loss += u64::from_le_bytes(d[at..at + 8].try_into().unwrap());
-            }
-        }
-        true
+        self.env.send_logs(ixs, &[who]).is_ok()
     }
 
     /// A claim not yet finished (mostly), so claim steps reach the whole path.
@@ -263,7 +233,7 @@ impl World {
             2 | 3 => {
                 let stake = self.stake_rec(si).map(|r| r.amount).unwrap_or(0);
                 let a = self.amount(stake);
-                let before = self.env.lamports(&ben);
+                let before = self.env.usdc(&ben);
                 let ix = self.env.withdraw_part_ix(&spk, &ben, a);
                 let ok = self.send(&[ix], &sk);
                 let did = Did::CapitalOut {
@@ -285,7 +255,7 @@ impl World {
                 ("claim_yield", self.send(&[ix], &sk), Did::Other)
             }
             6 => {
-                let a = self.rng.range(1, 60 * SOL);
+                let a = self.rng.range(1, 60 * unit());
                 let ix = self.env.back_ix(&bpk, a);
                 ("back", self.send(&[ix], &bk), Did::Other)
             }
@@ -316,7 +286,7 @@ impl World {
             }
             10 | 11 => {
                 let amount = self.backer_rec(bi).map(|r| r.withdraw_amount).unwrap_or(0);
-                let before = self.env.lamports(&bpk);
+                let before = self.env.usdc(&bpk);
                 let ix = self.env.complete_backer_ix(&bpk);
                 let ok = self.send(&[ix], &bk);
                 let did = Did::CapitalOut {
@@ -435,14 +405,6 @@ impl World {
                 }
                 None => ("expire", false, Did::Other),
             },
-            23 => {
-                let ix = if self.rng.chance(50) {
-                    self.env.upkeep_ix(safu_pool::instruction::Harvest {})
-                } else {
-                    self.env.upkeep_ix(safu_pool::instruction::Rebalance {})
-                };
-                ("harvest_or_rebalance", self.send(&[ix], &admin), Did::Other)
-            }
             24 => {
                 let p = self.pool();
                 let a = [1, p.protocol_yield_balance, p.protocol_yield_balance + 1]
@@ -488,16 +450,12 @@ impl World {
                 let ix = self.env.execute_setting_ix(key);
                 ("execute_setting", self.send(&[ix], &admin), Did::Other)
             }
-            29 => {
-                match self.rng.below(3) {
-                    0 => self.env.marinade_rewards(self.rng.range(1, 30)),
-                    1 => self.env.marinade_liquidity_at_target(),
-                    _ => {
-                        let l = self.rng.range(0, 5_000 * SOL);
-                        self.env.set_marinade_liquidity(l)
-                    }
-                }
-                ("marinade_moves", true, Did::Other)
+            23 | 29 => {
+                // Someone sends USDC straight to the vault: never stake, only surplus.
+                let v = self.env.vault();
+                let a = self.rng.range(1, 50 * unit());
+                self.env.add_token(&v, a);
+                ("donation", true, Did::Other)
             }
             39 => {
                 // The backend's registry write: any staker, a hash from the small set.
@@ -536,7 +494,7 @@ impl World {
             }
             for h in w.hashes() {
                 let c: CoveredWallet = self.env.read(&self.env.covered(&h));
-                if c.staker != pk || c.wallet_hash != h {
+                if c.staker != pk || c.wallet_hash != *h {
                     return Err(format!("listed wallet {:?} belongs to {}", h[0], c.staker));
                 }
             }
@@ -570,7 +528,6 @@ impl World {
         did: &Did,
         pre: &Pool,
         pre_assets: u64,
-        pre_msol: u64,
     ) -> Result<(), String> {
         self.check_covered_wallets()?;
         let p = self.pool();
@@ -582,16 +539,8 @@ impl World {
                 "set-aside yield not in cash: liquid {liquid} < reserved {reserved}"
             ));
         }
-        let msol = self.env.pool_msol_amount();
-        if msol < p.deployed_msol {
-            return Err(format!(
-                "mSOL on the books {} > held {msol}",
-                p.deployed_msol
-            ));
-        }
 
-        // Stakes: live records carry at least total_staked (a Marinade loss marks it down), and
-        // the staker count is exact.
+        // Stakes: live records sum to total_staked exactly (no loss path), count exact.
         let (mut sum, mut count) = (0u64, 0u64);
         for i in 0..STAKERS {
             if let Some(r) = self.stake_rec(i) {
@@ -604,7 +553,7 @@ impl World {
                 }
             }
         }
-        if sum < p.total_staked || count != p.total_stakers {
+        if sum != p.total_staked || count != p.total_stakers {
             return Err(format!(
                 "stakes: records {sum}/{count}, pool {}/{}",
                 p.total_staked, p.total_stakers
@@ -661,22 +610,12 @@ impl World {
             + p.total_backed_pending
             + reserved
             + p.protocol_yield_balance;
-        let unassigned = sum.saturating_sub(p.total_staked);
-        self.unassigned_loss += unassigned.saturating_sub(self.last_unassigned);
-        self.last_unassigned = unassigned;
         let gap = owed.saturating_sub(assets);
         self.max_gap = self.max_gap.max(gap);
-        if gap > self.paid + self.marinade_loss {
+        if gap > self.paid {
             return Err(format!(
-                "books {owed} > held {assets} + claims paid {} + Marinade loss {}",
-                self.paid, self.marinade_loss
-            ));
-        }
-        // Every loss that left the stake records full was booked as a Marinade loss.
-        if self.unassigned_loss > self.marinade_loss {
-            return Err(format!(
-                "stake records exceed total_staked by {} with only {} Marinade loss booked",
-                self.unassigned_loss, self.marinade_loss
+                "books {owed} > held {assets} + claims paid {}",
+                self.paid
             ));
         }
         // Settings stay in range and in order.
@@ -691,7 +630,7 @@ impl World {
             // Only the two exits move money out while paused: a staker's emergency exit and a
             // backer's completed withdrawal ("works while paused", the backer's emergency exit).
             let exit = matches!(did, Did::Emergency | Did::CapitalOut { staker: None, .. });
-            if was_paused && !exit && (assets < pre_assets || msol < pre_msol) {
+            if was_paused && !exit && assets < pre_assets {
                 return Err(format!(
                     "{name} moved money while paused: {pre_assets} -> {assets}"
                 ));
@@ -717,13 +656,10 @@ impl World {
                             return Err(format!("dust stake {left} < min {min}"));
                         }
                     }
-                    // Paid at least the principal less Marinade's own max fee.
-                    // (Stakers only: their payout goes to a separate address; a backer pays
-                    // its own transaction fee.)
-                    let got = self.env.lamports(beneficiary).saturating_sub(*before);
-                    let floor = amount - amount * lp_max_fee_bps(&self.env) / 10_000;
-                    if staker.is_some() && got < floor {
-                        return Err(format!("{name} paid {got} < floor {floor} for {amount}"));
+                    // Paid exactly the principal, in USDC, to the right account.
+                    let got = self.env.usdc(beneficiary).saturating_sub(*before);
+                    if got != *amount {
+                        return Err(format!("{name} paid {got} for {amount}"));
                     }
                 }
                 Did::Pause => {
@@ -743,22 +679,15 @@ impl World {
     }
 }
 
-fn lp_max_fee_bps(env: &Env) -> u64 {
-    let d = env.svm.get_account(&env.cfg.marinade_state).unwrap().data;
-    let o = pool_core::marinade::STATE_LP_MAX_FEE_BPS;
-    u64::from(u32::from_le_bytes(d[o..o + 4].try_into().unwrap()))
-}
-
-/// (largest gap, unassigned loss) of one episode.
+/// Largest books-over-holdings gap of one episode.
 fn run_episode(
     seed: u64,
     stats: &mut BTreeMap<&'static str, (u64, u64)>,
-) -> Result<(u64, u64), String> {
+) -> Result<u64, String> {
     let mut w = World::new(seed);
     for i in 0..STEPS {
         let pre = w.pool();
         let pre_assets = w.assets();
-        let pre_msol = w.env.pool_msol_amount();
         let (name, ok, did) = w.step();
         let e = stats.entry(name).or_default();
         e.0 += 1;
@@ -777,19 +706,19 @@ fn run_episode(
                 + p.protocol_yield_balance;
             let held = w.assets();
             println!(
-                "{i:>3} {name:<28} {} held {held} owed {owed} diff {} | liquid {} book {} msol {}/{} staked {} backed {} pend {} yS {} yB {} prot {} alloc {} paused {}",
-                ok as u8, held as i128 - owed as i128, w.env.vault_liquid(), p.deployed_book, p.deployed_msol,
-                w.env.pool_msol_amount(), p.total_staked, p.total_backed, p.total_backed_pending,
+                "{i:>3} {name:<28} {} held {held} owed {owed} diff {} | liquid {} book {} staked {} backed {} pend {} yS {} yB {} prot {} alloc {} paused {}",
+                ok as u8, held as i128 - owed as i128, w.env.vault_liquid(), p.deployed_book,
+                p.total_staked, p.total_backed, p.total_backed_pending,
                 p.staker_yield_reserved, p.backer_yield_reserved, p.protocol_yield_balance, p.total_allocated,
                 p.is_paused(w.env.now) as u8
             );
         }
-        if let Err(msg) = w.check(name, ok, &did, &pre, pre_assets, pre_msol) {
+        if let Err(msg) = w.check(name, ok, &did, &pre, pre_assets) {
             let tail = w.trace[w.trace.len().saturating_sub(40)..].join("\n");
             return Err(format!("seed {seed} step {i}: {msg}\n{tail}"));
         }
     }
-    Ok((w.max_gap, w.marinade_loss))
+    Ok(w.max_gap)
 }
 
 #[test]
@@ -815,17 +744,11 @@ fn fuzz_pool() {
     println!("fuzz: base seed {base}, {secs}s, demo build {DEMO_BUILD}");
     let end = Instant::now() + Duration::from_secs(secs);
     let mut stats = BTreeMap::new();
-    let (mut n, mut max_gap, mut loss_eps, mut first_loss) = (0u64, 0u64, 0u64, None);
+    let (mut n, mut max_gap) = (0u64, 0u64);
     let mut failure = None;
     while Instant::now() < end && n < episodes {
         match run_episode(base.wrapping_add(n), &mut stats) {
-            Ok((g, loss)) => {
-                max_gap = max_gap.max(g);
-                if loss > 0 {
-                    loss_eps += 1;
-                    first_loss.get_or_insert(base.wrapping_add(n));
-                }
-            }
+            Ok(g) => max_gap = max_gap.max(g),
             Err(e) => {
                 failure = Some(e);
                 break;
@@ -834,10 +757,9 @@ fn fuzz_pool() {
         n += 1;
     }
     println!(
-        "episodes {n}, steps {}, largest books-over-holdings gap {max_gap} lamports",
+        "episodes {n}, steps {}, largest books-over-holdings gap {max_gap} USDC base units",
         n * STEPS as u64
     );
-    println!("Marinade loss booked in {loss_eps} episodes (first seed {first_loss:?})");
     for (name, (tried, went)) in &stats {
         println!("  {name:<28} tried {tried:>7}  went through {went:>7}");
     }

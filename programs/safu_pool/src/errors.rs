@@ -18,8 +18,8 @@ pub enum PoolError {
     InvalidCluster,
     #[msg("Pool cap is too small for the stake bounds")]
     InvalidPoolCap,
-    #[msg("Marinade account does not match the pool's Marinade")]
-    WrongMarinadeAccount,
+    #[msg("Mint is not the pool's USDC, or not a classic SPL Token mint with USDC decimals")]
+    WrongMint,
     #[msg("Pool is paused")]
     Paused,
     #[msg("Pool is not paused")]
@@ -50,7 +50,7 @@ pub enum PoolError {
     PenaltyLockActive,
     #[msg("Beneficiary account does not match the stake")]
     WrongBeneficiary,
-    #[msg("Not enough liquid SOL in the pool right now")]
+    #[msg("Not enough liquid USDC in the pool right now")]
     InsufficientLiquidity,
     #[msg("Amount must be above zero")]
     AmountNotPositive,
@@ -165,11 +165,7 @@ pub enum PoolError {
     Insolvent,
     #[msg("Revocation account does not match this approval")]
     WrongRevocationAccount,
-    // Marinade leg and yield.
-    #[msg("Marinade's unstake fee is above the pool's limit")]
-    UnstakeFeeTooHigh,
-    #[msg("Liquid SOL is already at target and nothing is idle")]
-    NothingToRebalance,
+    // Yield.
     #[msg("No yield to claim")]
     NothingToClaim,
     #[msg("Amount is above the protocol's revenue or the pool's surplus")]
@@ -197,6 +193,8 @@ pub enum PoolError {
     SettingAlreadyApproved,
     #[msg("Change is not approved, or its waiting time has not passed")]
     SettingNotReady,
+    #[msg("Token account does not belong to the expected owner")]
+    WrongTokenAccount,
 }
 
 impl From<CoreError> for PoolError {

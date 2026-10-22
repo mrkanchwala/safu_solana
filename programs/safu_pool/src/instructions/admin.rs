@@ -5,12 +5,11 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use super::now;
-use crate::constants::{CLUSTER_MAINNET, NATIVE_SOL_MINT, SEED_MSOL, SEED_POOL, SEED_VAULT};
+use crate::constants::{CLUSTER_MAINNET, SEED_POOL, SEED_VAULT};
 use crate::errors::PoolError;
 use crate::events::{PausedUntil, PoolInitialized, Unpaused};
-use crate::marinade;
 use crate::state::{PendingSetting, Pool, ACCOUNT_VERSION};
-use crate::vault;
+use pool_core::params::USDC_DECIMALS;
 use pool_core::settings::{self, SettingKey, Settings, SETTING_SLOTS};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
@@ -36,24 +35,19 @@ pub struct Initialize<'info> {
     pub program_data: Account<'info, ProgramData>,
     #[account(init, payer = admin, space = 8 + Pool::INIT_SPACE, seeds = [SEED_POOL], bump)]
     pub pool: Box<Account<'info, Pool>>,
-    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump)]
-    pub vault: SystemAccount<'info>,
-    /// CHECK: must be executable and the owner of `marinade_state` (checked in the handler).
-    #[account(executable)]
-    pub marinade_program: UncheckedAccount<'info>,
-    /// CHECK: owner, discriminator and length checked by `marinade::read_state`.
-    pub marinade_state: UncheckedAccount<'info>,
-    pub msol_mint: Box<Account<'info, Mint>>,
+    /// USDC. `Account<Mint>` with `Program<Token>` means a classic SPL Token mint (no Token-2022
+    /// transfer fees or hooks); decimals checked in the handler.
+    pub usdc_mint: Box<Account<'info, Mint>>,
     #[account(
         init,
         payer = admin,
-        seeds = [SEED_MSOL, pool.key().as_ref()],
+        seeds = [SEED_VAULT, pool.key().as_ref()],
         bump,
-        token::mint = msol_mint,
-        token::authority = vault,
+        token::mint = usdc_mint,
+        token::authority = pool,
         token::token_program = token_program,
     )]
-    pub pool_msol: Box<Account<'info, TokenAccount>>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -65,44 +59,24 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
         PoolError::RoleCollision
     );
     require!(args.cluster <= CLUSTER_MAINNET, PoolError::InvalidCluster);
+    require!(
+        ctx.accounts.usdc_mint.decimals == USDC_DECIMALS,
+        PoolError::WrongMint
+    );
     // Default settings at this cap; a cap too small for a non-zero min stake is refused.
     let settings =
         Settings::defaults(args.pool_cap).map_err(|_| error!(PoolError::InvalidPoolCap))?;
 
-    let state = marinade::read_state(
-        &ctx.accounts.marinade_state,
-        &ctx.accounts.marinade_program.key(),
-    )?;
-    require_keys_eq!(
-        state.msol_mint,
-        ctx.accounts.msol_mint.key(),
-        PoolError::WrongMarinadeAccount
-    );
-
-    // The vault must exist and stay rent-exempt: fund its floor once, here.
-    let floor = vault::rent_floor()?;
-    let top_up = floor.saturating_sub(ctx.accounts.vault.lamports());
-    if top_up > 0 {
-        vault::receive(
-            &ctx.accounts.admin.to_account_info(),
-            &ctx.accounts.vault.to_account_info(),
-            top_up,
-        )?;
-    }
-
     let pool = &mut ctx.accounts.pool;
     pool.set_inner(Pool {
         version: ACCOUNT_VERSION,
-        asset_mint: NATIVE_SOL_MINT,
+        usdc_mint: ctx.accounts.usdc_mint.key(),
+        vault: ctx.accounts.vault.key(),
         admin,
         co_signer: args.co_signer,
         oracle: args.oracle,
         registry_writer: args.registry_writer,
         treasury: args.treasury,
-        marinade_program: ctx.accounts.marinade_program.key(),
-        marinade_state: ctx.accounts.marinade_state.key(),
-        msol_mint: ctx.accounts.msol_mint.key(),
-        pool_msol: ctx.accounts.pool_msol.key(),
         cluster: args.cluster,
         bump: ctx.bumps.pool,
         vault_bump: ctx.bumps.vault,
@@ -122,7 +96,6 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
         backer_yield_reserved: 0,
         protocol_yield_balance: 0,
         total_extracted_yield: 0,
-        deployed_msol: 0,
         deployed_book: 0,
         last_harvest_at: 0,
         day: 0,

@@ -16,9 +16,10 @@ use crate::events::{
     Backed, BackerWithdrawalCancelled, BackerWithdrawalRequested, BackerWithdrawn, BackingMatured,
     YieldClaimed,
 };
-use crate::leg;
-// Glob: `#[derive(Accounts)]` on a struct holding `MarinadeLeg` needs its generated client modules.
-use crate::marinade::*;
+use anchor_spl::token::TokenAccount;
+
+// Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
+use crate::vault::{self, *};
 use crate::state::{BackerRecord, Pool, ACCOUNT_VERSION};
 use pool_core::settings::SettingKey;
 use pool_core::{add, sub, yields};
@@ -57,7 +58,7 @@ pub struct Back<'info> {
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = backer,
@@ -66,19 +67,25 @@ pub struct Back<'info> {
         bump,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
+    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it (rule 1:
+    /// only to the depositing address).
+    #[account(
+        mut,
+        constraint = backer_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
+        constraint = backer_usdc.owner == backer.key() @ PoolError::WrongTokenAccount,
+    )]
+    pub backer_usdc: Box<Account<'info, TokenAccount>>,
     pub system_program: Program<'info, System>,
-    pub leg: MarinadeLeg<'info>,
+    pub cash: Cash<'info>,
 }
 
 /// Deposit. A top-up while earlier money is maturing restarts the wait for the whole pending amount.
 pub fn back(ctx: Context<Back>, amount: u64) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     require!(amount > 0, PoolError::AmountNotPositive);
-    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let record = &mut ctx.accounts.backer_record;
     if record.backer == Pubkey::default() {
         record.version = ACCOUNT_VERSION;
@@ -99,37 +106,29 @@ pub fn back(ctx: Context<Back>, amount: u64) -> Result<()> {
         matures_at
     });
 
-    crate::vault::receive(&ctx.accounts.backer.to_account_info(), &vault, amount)?;
-    leg::push_idle(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
-    Ok(())
+    vault::receive(
+        pool,
+        &ctx.accounts.cash,
+        &ctx.accounts.backer_usdc.to_account_info(),
+        &ctx.accounts.backer.to_account_info(),
+        &vault,
+        amount,
+    )
 }
 
 #[derive(Accounts)]
 pub struct MatureBacking<'info> {
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
-    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
     #[account(mut, seeds = [SEED_BACKER, pool.key().as_ref(), backer_record.backer.as_ref()], bump = backer_record.bump)]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    pub leg: MarinadeLeg<'info>,
 }
 
 /// Permissionless. Until someone calls it, capacity is undercounted (the safe direction).
 pub fn mature_backing(ctx: Context<MatureBacking>) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
-    let vault = ctx.accounts.vault.to_account_info();
     let record = &mut ctx.accounts.backer_record;
     require!(record.pending_amount > 0, PoolError::NoPendingBacking);
-    // Growth so far belongs to the capacity before this money counts.
-    leg::harvest(
-        &mut ctx.accounts.pool,
-        &pool_key,
-        &ctx.accounts.leg,
-        &vault,
-        now,
-    )?;
     let moved = settle(&mut ctx.accounts.pool, record, now)?;
     require!(moved > 0, PoolError::BackingNotMature);
     Ok(())
@@ -140,8 +139,6 @@ pub struct RequestBackerWithdrawal<'info> {
     pub backer: Signer<'info>,
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
-    #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
     #[account(
         mut,
         seeds = [SEED_BACKER, pool.key().as_ref(), backer.key().as_ref()],
@@ -149,7 +146,6 @@ pub struct RequestBackerWithdrawal<'info> {
         has_one = backer,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    pub leg: MarinadeLeg<'info>,
 }
 
 #[derive(Accounts)]
@@ -169,23 +165,12 @@ pub struct BackerOnly<'info> {
 /// Starts the notice on matured money. Works while paused.
 pub fn request_backer_withdrawal(ctx: Context<RequestBackerWithdrawal>, amount: u64) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
-    let vault = ctx.accounts.vault.to_account_info();
     require!(amount > 0, PoolError::AmountNotPositive);
     let record = &mut ctx.accounts.backer_record;
     require!(
         record.withdraw_amount == 0,
         PoolError::BackerWithdrawalPending
     );
-    // Settling may mature pending money: growth so far belongs to the capacity before it counts
-    // (as `mature_backing`). The harvest skips itself while paused.
-    leg::harvest(
-        &mut ctx.accounts.pool,
-        &pool_key,
-        &ctx.accounts.leg,
-        &vault,
-        now,
-    )?;
     settle(&mut ctx.accounts.pool, record, now)?;
     require!(
         amount <= record.amount,
@@ -228,7 +213,7 @@ pub struct CompleteBackerWithdrawal<'info> {
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         seeds = [SEED_BACKER, pool.key().as_ref(), backer.key().as_ref()],
@@ -236,15 +221,22 @@ pub struct CompleteBackerWithdrawal<'info> {
         has_one = backer,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    pub system_program: Program<'info, System>,
-    pub leg: MarinadeLeg<'info>,
+    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it (rule 1:
+    /// only to the depositing address).
+    #[account(
+        mut,
+        constraint = backer_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
+        constraint = backer_usdc.owner == backer.key() @ PoolError::WrongTokenAccount,
+    )]
+    pub backer_usdc: Box<Account<'info, TokenAccount>>,
+    pub cash: Cash<'info>,
 }
 
 /// Pays a requested withdrawal once the notice has passed, if the capital is free and liquid.
 /// On failure nothing changes. Unpaid yield goes out with it. Works while paused.
 pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
+    let pool_info = ctx.accounts.pool.to_account_info();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     let record = &mut ctx.accounts.backer_record;
@@ -254,7 +246,6 @@ pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Res
         now >= record.withdraw_ready_at,
         PoolError::BackerNoticeNotPassed
     );
-    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, amount).core()?;
 
@@ -273,10 +264,10 @@ pub fn complete_backer_withdrawal(ctx: Context<CompleteBackerWithdrawal>) -> Res
     });
 
     let total = add(amount, yield_paid).core()?;
-    let to = ctx.accounts.backer.to_account_info();
-    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, total)?;
-    // An unstake inside pay_out can mark a Marinade loss off total_staked: re-check that the capital
-    // that left was still free afterwards, or the whole withdrawal reverts.
+    let to = ctx.accounts.backer_usdc.to_account_info();
+    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, total)?;
+    // Re-check that the capital that left was still free afterwards, or the whole withdrawal
+    // reverts (a venue withdrawal that books a loss must never let it pass).
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, 0).core()?;
     Ok(())
@@ -289,7 +280,7 @@ pub struct ClaimBackerYield<'info> {
     #[account(mut, seeds = [SEED_POOL], bump = pool.bump)]
     pub pool: Box<Account<'info, Pool>>,
     #[account(mut, seeds = [SEED_VAULT, pool.key().as_ref()], bump = pool.vault_bump)]
-    pub vault: SystemAccount<'info>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         seeds = [SEED_BACKER, pool.key().as_ref(), backer.key().as_ref()],
@@ -297,17 +288,24 @@ pub struct ClaimBackerYield<'info> {
         has_one = backer,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    pub leg: MarinadeLeg<'info>,
+    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it (rule 1:
+    /// only to the depositing address).
+    #[account(
+        mut,
+        constraint = backer_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
+        constraint = backer_usdc.owner == backer.key() @ PoolError::WrongTokenAccount,
+    )]
+    pub backer_usdc: Box<Account<'info, TokenAccount>>,
+    pub cash: Cash<'info>,
 }
 
 /// Backer yield, any time; principal untouched (multichain `claim_backer_yield`).
 pub fn claim_backer_yield(ctx: Context<ClaimBackerYield>) -> Result<()> {
     let now = now()?;
-    let pool_key = ctx.accounts.pool.key();
+    let pool_info = ctx.accounts.pool.to_account_info();
     let vault = ctx.accounts.vault.to_account_info();
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
-    leg::harvest(pool, &pool_key, &ctx.accounts.leg, &vault, now)?;
     let record = &mut ctx.accounts.backer_record;
     settle(pool, record, now)?;
     let paid = record.yield_owed.min(pool.backer_yield_reserved);
@@ -320,7 +318,6 @@ pub fn claim_backer_yield(ctx: Context<ClaimBackerYield>) -> Result<()> {
         backer: true
     });
 
-    let to = ctx.accounts.backer.to_account_info();
-    leg::pay_out(pool, &pool_key, &ctx.accounts.leg, &vault, &to, paid)?;
-    Ok(())
+    let to = ctx.accounts.backer_usdc.to_account_info();
+    vault::pay_out(pool, &pool_info, &ctx.accounts.cash, &vault, &to, paid)
 }

@@ -74,18 +74,21 @@ pub const BACKER_NOTICE_SECS: i64 = clock(30 * SECONDS_PER_DAY, SECONDS_PER_MINU
 // -----------------------------------------------------------------------
 // Stake bounds, as bps of the pool cap (setting defaults; the cap starts at the deploy value in
 // `config/` and is a setting too).
-// Solana values: 0.05-0.5 SOL at a 50 SOL cap. Multichain: 1 / 10.
 // -----------------------------------------------------------------------
 
 pub const MIN_STAKE_BPS: u64 = 10;
 pub const MAX_STAKE_BPS: u64 = 100;
 
-/// Covered wallets per staker, forever, any mix of chains. Solana pool: 2. Multichain: 3.
-pub const MAX_COVERED_WALLETS: u8 = 2;
+/// Covered wallets per staker, forever, any mix of chains (Solana, Ethereum, Stellar). Same as
+/// multichain.
+pub const MAX_COVERED_WALLETS: u8 = 3;
 
 /// Drain transactions one claim may list. The program sees one claim either way: the claim API checks
-/// this, and the site reads it from the IDL. Solana pool: 5. Multichain: 20.
-pub const MAX_TXIDS_PER_CLAIM: u8 = 5;
+/// this, and the site reads it from the IDL. Same as multichain.
+pub const MAX_TXIDS_PER_CLAIM: u8 = 20;
+
+/// USDC decimals. `initialize` refuses a mint with any other.
+pub const USDC_DECIMALS: u8 = 6;
 
 // -----------------------------------------------------------------------
 // Tiers: coverage = stake x ratio x TIER_COVERAGE_BPS / BPS_DENOMINATOR. Tier codes 1=A, 2=B, 3=C.
@@ -122,14 +125,14 @@ pub const PAYOUT_EMPTY_POOL_BPS: u64 = 100;
 pub const ORACLE_DAILY_LIMIT_DIVISOR: u64 = 10;
 
 // -----------------------------------------------------------------------
-// Marinade leg (multichain: DeFindex vault)
+// Yield leg (multichain: DeFindex vault)
 // -----------------------------------------------------------------------
 
-/// Share of capacity above reserved money that sits in mSOL. Fixed (multichain: `MAX_DEPLOY_BPS`).
+/// Share of capacity above reserved money that sits in the yield venue. Fixed (multichain: `MAX_DEPLOY_BPS`).
 pub const DEPLOY_BPS: u64 = 8_000;
-/// Idle SOL is staked only once it is at least this share of capacity.
+/// Idle USDC is deployed only once it is at least this share of capacity.
 pub const AUTO_PUSH_MIN_BPS: u64 = 100;
-/// Most a rebalance may lose to Marinade's fee or rate, bps of the expected amount.
+/// Most a rebalance may lose to the venue's rate, bps of the expected amount.
 pub const MAX_REBALANCE_SLIPPAGE_BPS: u64 = 500;
 /// Most growth one harvest may book, per day since the last harvest, bps of book value.
 pub const HARVEST_MAX_GROWTH_BPS_PER_DAY: u64 = 10;

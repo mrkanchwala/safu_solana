@@ -165,43 +165,13 @@ pub struct StakeUnsuspended {
     pub staker: Pubkey,
 }
 
-// Marinade leg and yield.
-#[event]
-pub struct Deployed {
-    pub lamports: u64,
-    pub msol: u64,
-}
-/// mSOL received below the expected amount by more than the rebalance limit (multichain `PushBelowFloor`).
-#[event]
-pub struct DeployBelowFloor {
-    pub lamports: u64,
-    pub msol: u64,
-    pub min_msol: u64,
-}
-#[event]
-pub struct Unstaked {
-    pub msol: u64,
-    pub expected: u64,
-    pub received: u64,
-    pub payee_fee: u64,
-}
-/// The pool's part of an unstake fee above the growth that came back: marked off `total_staked`
-/// (multichain `DeploymentShortfall`).
-#[event]
-pub struct DeploymentLoss {
-    pub loss: u64,
-}
+// Yield.
 #[event]
 pub struct YieldCredited {
     pub amount: u64,
     pub staker_share: u64,
     pub backer_share: u64,
     pub protocol_share: u64,
-}
-#[event]
-pub struct Harvested {
-    pub msol: u64,
-    pub received: u64,
 }
 #[event]
 pub struct YieldClaimed {

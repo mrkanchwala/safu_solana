@@ -1,4 +1,4 @@
-//! SAFU Staking on Solana: a SOL protection pool, staked through Marinade.
+//! SAFU Staking on Solana: a USDC protection pool.
 //!
 //! Stakers and backers only. Rules follow the multichain protection pool; every number comes from
 //! `pool-core`. See `docs/PORT_MAP.md` for what was ported, what changed and what was left out.
@@ -11,14 +11,13 @@ pub mod errors;
 pub mod events;
 pub mod instructions;
 pub mod leg;
-pub mod marinade;
 pub mod state;
 pub mod vault;
 
 use approval::ClaimApproval;
 use instructions::*;
 
-declare_id!("Aa6ncthjKmWaDX91jrY3HeUdHfP2fnhaPLQAPPVsG686");
+declare_id!("6nE296ZjUgVifngxv1Z5jWp4xvBexaBiepFHA8UVYC7X");
 
 #[program]
 pub mod safu_pool {
@@ -89,13 +88,7 @@ pub mod safu_pool {
         instructions::backer::claim_backer_yield(ctx)
     }
 
-    // Marinade leg and protocol revenue.
-    pub fn harvest(ctx: Context<Upkeep>) -> Result<()> {
-        instructions::upkeep::harvest(ctx)
-    }
-    pub fn rebalance(ctx: Context<Upkeep>) -> Result<()> {
-        instructions::upkeep::rebalance(ctx)
-    }
+    // Protocol revenue.
     pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
         instructions::upkeep::withdraw_yield(ctx, amount)
     }

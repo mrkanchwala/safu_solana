@@ -86,8 +86,10 @@ pub const TIER_B_RATIO: u64 = p::TIER_B_RATIO;
 pub const TIER_C_RATIO: u64 = p::TIER_C_RATIO;
 #[constant]
 pub const TIER_COVERAGE_BPS: u64 = p::TIER_COVERAGE_BPS;
+#[constant]
+pub const USDC_DECIMALS: u8 = p::USDC_DECIMALS;
 
-// Marinade leg and yield indexes.
+// Yield leg and yield indexes.
 #[constant]
 pub const DEPLOY_BPS: u64 = p::DEPLOY_BPS;
 /// Clients read it from the IDL to show yield owed (`pool_core::yields::owed`).
@@ -99,8 +101,6 @@ pub const YIELD_INDEX_PRECISION: u128 = p::YIELD_INDEX_PRECISION;
 pub const SEED_POOL: &[u8] = b"pool";
 #[constant]
 pub const SEED_VAULT: &[u8] = b"vault";
-#[constant]
-pub const SEED_MSOL: &[u8] = b"msol";
 #[constant]
 pub const SEED_STAKE: &[u8] = b"stake";
 #[constant]
@@ -116,13 +116,10 @@ pub const SEED_COVERED: &[u8] = b"covered";
 #[constant]
 pub const SEED_STAKER_WALLETS: &[u8] = b"staker_wallets";
 
-/// The pool's asset today (`Pool::asset_mint`): the native SOL mint address.
-pub const NATIVE_SOL_MINT: Pubkey =
-    anchor_lang::prelude::pubkey!("So11111111111111111111111111111111111111112"); // hardcode-ok: the network's native mint, not a deploy value
-
-// Oracle approval domain tag (version it when the message layout changes).
+// Oracle approval domain tag (version it when the message layout or the entitlement unit changes).
+// USDC pool: entitlement in USDC base units, a new tag so no SOL-pool approval can ever match.
 #[constant]
-pub const APPROVAL_DOMAIN: &[u8] = b"SAFU_CLAIM_APPROVAL_SOLANA_V1";
+pub const APPROVAL_DOMAIN: &[u8] = b"SAFU_CLAIM_APPROVAL_SOLANA_USDC_V1";
 
 // Cluster tag, fixed at `initialize` and signed into every oracle approval.
 #[constant]
@@ -131,26 +128,3 @@ pub const CLUSTER_LOCALNET: u8 = 0;
 pub const CLUSTER_DEVNET: u8 = 1;
 #[constant]
 pub const CLUSTER_MAINNET: u8 = 2;
-
-// Marinade facts clients need (re-exported from `pool_core::marinade`, never retyped): the leg's
-// PDA seeds, the `State` offsets of the two token accounts it reads, and the fee inputs the site
-// shows before a payout that needs an instant unstake.
-use pool_core::marinade as m;
-#[constant]
-pub const MARINADE_SEED_LIQ_POOL_SOL_LEG: &[u8] = m::SEED_LIQ_POOL_SOL_LEG;
-#[constant]
-pub const MARINADE_SEED_LIQ_POOL_MSOL_LEG_AUTHORITY: &[u8] = m::SEED_LIQ_POOL_MSOL_LEG_AUTHORITY;
-#[constant]
-pub const MARINADE_SEED_RESERVE: &[u8] = m::SEED_RESERVE;
-#[constant]
-pub const MARINADE_SEED_MSOL_MINT_AUTHORITY: &[u8] = m::SEED_MSOL_MINT_AUTHORITY;
-#[constant]
-pub const MARINADE_STATE_TREASURY_MSOL: u64 = m::STATE_TREASURY_MSOL as u64;
-#[constant]
-pub const MARINADE_STATE_LIQ_POOL_MSOL_LEG: u64 = m::STATE_LIQ_POOL_MSOL_LEG as u64;
-#[constant]
-pub const MARINADE_STATE_LP_LIQUIDITY_TARGET: u64 = m::STATE_LP_LIQUIDITY_TARGET as u64;
-#[constant]
-pub const MARINADE_STATE_LP_MAX_FEE_BPS: u64 = m::STATE_LP_MAX_FEE_BPS as u64;
-#[constant]
-pub const MARINADE_STATE_LP_MIN_FEE_BPS: u64 = m::STATE_LP_MIN_FEE_BPS as u64;

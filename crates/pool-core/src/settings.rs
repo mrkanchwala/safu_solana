@@ -63,7 +63,7 @@ pub enum SettingKey {
     ApproveWindowSecs = 16,
     /// An active claim with no collection for this long can be expired by anyone.
     InactivitySecs = 17,
-    /// Most SOL all stakes together may hold, in lamports.
+    /// Most USDC all stakes together may hold, in USDC base units (6 decimals).
     PoolCap = 18,
 }
 
@@ -188,7 +188,7 @@ impl Settings {
         self.values[key.index()]
     }
 
-    /// A bps or lamport setting. Bounds keep every one of them non-negative.
+    /// A bps or USDC-amount setting. Bounds keep every one of them non-negative.
     pub fn amount(&self, key: SettingKey) -> u64 {
         self.get(key).max(0) as u64
     }

@@ -15,12 +15,14 @@ use solana_signer::Signer;
 const TX: [u8; 32] = [7; 32];
 const TX2: [u8; 32] = [8; 32];
 /// Backer capital so claims are solvent and under the stress cap.
-const BACKING: u64 = 40 * SOL;
+fn backing() -> u64 {
+    40 * unit()
+}
 
 /// Pool with matured backing and one max-size staker (beneficiary = itself).
 fn setup() -> (Env, Keypair) {
     let mut env = Env::new();
-    env.matured_backer(BACKING);
+    env.matured_backer(backing());
     let (_, max) = bounds();
     let s = env.staker(max);
     (env, s)
@@ -89,14 +91,15 @@ fn full_claim_flow_pays_the_beneficiary_in_full() {
     let r = env.stake_state(&s.pubkey());
     assert!(r.forfeited);
     let c = env.claim_state(&s.pubkey(), &TX);
-    assert_eq!(c.capacity_snapshot, BACKING + entitlement());
+    assert_eq!(c.capacity_snapshot, backing() + entitlement());
 
     env.warp(COOLDOWN_SECS + VESTING_SECS / 2);
-    let before = env.lamports(&s.pubkey());
+    let before = env.usdc(&s.pubkey());
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     env.ok(std::slice::from_ref(&ix), &[&s]);
     let half = entitlement() / 2;
-    assert!(env.lamports(&s.pubkey()) + SOL / 1_000 > before + half);
+    // Half the vesting window: half the entitlement, give or take one base unit of rounding.
+    assert!(env.usdc(&s.pubkey()).abs_diff(before + half) <= 1);
     env.warp(VESTING_SECS);
     env.ok(&[ix], &[&s]);
     let c = env.claim_state(&s.pubkey(), &TX);
@@ -113,7 +116,7 @@ fn full_claim_flow_pays_the_beneficiary_in_full() {
 fn only_the_oracle_submits() {
     let (mut env, s) = setup();
     let a = env.approval(&s.pubkey(), TX, entitlement(), TIER_A);
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let ed = ed25519_ix(&env.oracle.insecure_clone(), &env.message(&a), [0, 0, 0]);
     let ix = env.submit_ix(&other.pubkey(), &a);
     assert_err(env.send(&[ed, ix], &[&other]), PoolError::NotOracle);
@@ -155,7 +158,7 @@ fn revoked_approval_refused() {
 }
 
 #[test]
-fn sol_sent_to_the_revocation_address_does_not_block_the_approval() {
+fn lamports_sent_to_the_revocation_address_does_not_block_the_approval() {
     let (mut env, s) = setup();
     let a = env.approval(&s.pubkey(), TX, entitlement(), TIER_A);
     // Anyone can send SOL to the (derivable) revocation address; only a real revocation record counts.
@@ -195,7 +198,7 @@ fn revoke_rules() {
     let hash = approval_hash(&env.message(&a));
     let ix = env.revoke_ix(&admin.pubkey(), &a, hash);
     assert_err(env.send(&[ix], &[&admin]), PoolError::SignatureExpired);
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let a = env.approval(&s.pubkey(), TX, entitlement(), TIER_A);
     let hash = approval_hash(&env.message(&a));
     let ix = env.revoke_ix(&other.pubkey(), &a, hash);
@@ -356,12 +359,12 @@ fn insolvent_claim_is_queued_then_released_when_capital_arrives() {
         &TX,
         safu_pool::instruction::TryReleaseQueuedClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     assert_err(
         env.send(std::slice::from_ref(&release), &[&anyone]),
         PoolError::QueueReleaseNotYetEligible,
     );
-    env.matured_backer(BACKING);
+    env.matured_backer(backing());
     env.ok(std::slice::from_ref(&release), &[&anyone]);
     let r = env.stake_state(&s.pubkey());
     assert_eq!((r.active_claim, r.reserved_claim), (Some(claim), None));
@@ -391,7 +394,7 @@ fn oracle_daily_limit_queues_instead_of_losing_the_claim() {
         &TX2,
         safu_pool::instruction::TryReleaseQueuedClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     env.ok(&[release], &[&anyone]);
     assert_eq!(env.pool_state().day_oracle_count, 1);
 }
@@ -400,11 +403,11 @@ fn oracle_daily_limit_queues_instead_of_losing_the_claim() {
 fn stress_cap_queues_and_resets_the_next_day() {
     let mut env = Env::new();
     // Small backing: stress cap (25%) below one tier-A claim.
-    env.matured_backer(4 * SOL);
+    env.matured_backer(4 * unit());
     let (_, max) = bounds();
     let s = env.staker(max);
     let cap =
-        pool_core::claim::stress_cap(4 * SOL + max, 0, env.pool_state().settings().admit_rates())
+        pool_core::claim::stress_cap(4 * unit() + max, 0, env.pool_state().settings().admit_rates())
             .unwrap();
     let a = env.approval(&s.pubkey(), TX, cap + 1, TIER_A);
     env.submit(&a).unwrap();
@@ -417,7 +420,7 @@ fn stress_cap_queues_and_resets_the_next_day() {
         &TX,
         safu_pool::instruction::TryReleaseQueuedClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     assert_err(
         env.send(&[release], &[&anyone]),
         PoolError::QueueReleaseNotYetEligible,
@@ -437,7 +440,7 @@ fn queued_claim_expires_after_its_window_and_frees_the_slot() {
         &TX,
         safu_pool::instruction::ExpireQueuedClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     assert_err(
         env.send(std::slice::from_ref(&expire), &[&anyone]),
         PoolError::QueueNotYetExpired,
@@ -468,14 +471,14 @@ fn release_refused_when_the_stake_changed_or_is_suspended() {
     let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
     let a = env.approval(&s.pubkey(), TX, big, TIER_A);
     env.submit(&a).unwrap();
-    env.matured_backer(BACKING);
+    env.matured_backer(backing());
     let rec = env.stake_record(&s.pubkey());
     let release = env.transition_ix(
         &s.pubkey(),
         &TX,
         safu_pool::instruction::TryReleaseQueuedClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     let other = Keypair::new().pubkey();
     env.edit::<StakeRecord>(&rec, |r| r.active_claim = Some(other));
     assert_err(
@@ -508,7 +511,7 @@ fn unlock_after_the_time_gate() {
         &TX,
         safu_pool::instruction::UnlockPendingClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     assert_err(
         env.send(std::slice::from_ref(&unlock), &[&anyone]),
         PoolError::TimeGateNotMet,
@@ -567,7 +570,7 @@ fn approval_moves_unpaid_yield_to_the_protocol() {
     let (mut env, s) = setup();
     awaiting(&mut env, &s);
     let credit = pool_core::yields::credit(
-        SOL / 100,
+        unit() / 100,
         entitlement(),
         0,
         STAKER_YIELD_BPS,
@@ -604,7 +607,7 @@ fn unapproved_claim_expires_and_releases_its_reservation() {
         &TX,
         safu_pool::instruction::ExpirePendingApproval {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     assert_err(
         env.send(std::slice::from_ref(&expire), &[&anyone]),
         PoolError::ApprovalWindowNotExpired,
@@ -658,7 +661,9 @@ fn stream_goes_only_to_the_beneficiary_and_not_while_suspended() {
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
-    let ix = env.stream_ix(&s.pubkey(), &TX, &Keypair::new().pubkey());
+    let other = Keypair::new().pubkey();
+    env.open_usdc(&other);
+    let ix = env.stream_ix(&s.pubkey(), &TX, &other);
     assert_err(env.send(&[ix], &[&s]), PoolError::WrongBeneficiary);
     let rec = env.stake_record(&s.pubkey());
     env.edit::<StakeRecord>(&rec, |r| r.suspended = true);
@@ -694,16 +699,13 @@ fn stream_capped_per_day_and_resumes_tomorrow() {
 }
 
 #[test]
-fn stream_refused_when_liquid_sol_is_short() {
+fn stream_refused_when_liquid_usdc_is_short() {
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
-    // All liquid SOL is set-aside yield and nothing is in Marinade to unstake.
+    // All liquid USDC is set-aside yield: not the claim's to take.
     let liquid = env.vault_liquid();
-    env.edit::<Pool>(&env.pool(), |p| {
-        p.backer_yield_reserved = liquid;
-        p.deployed_msol = 0;
-    });
+    env.edit::<Pool>(&env.pool(), |p| p.backer_yield_reserved = liquid);
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     assert_err(env.send(&[ix], &[&s]), PoolError::InsufficientLiquidity);
 }
@@ -717,7 +719,7 @@ fn stale_claim_returns_the_unpaid_rest() {
         &TX,
         safu_pool::instruction::ExpireStaleClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     env.warp(COOLDOWN_SECS + COLLECTION_INACTIVITY_SECS);
     assert_err(
         env.send(std::slice::from_ref(&expire), &[&anyone]),
@@ -752,7 +754,7 @@ fn stale_sweep_refused_on_a_fully_paid_claim_record() {
         &TX,
         safu_pool::instruction::ExpireStaleClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     assert_err(
         env.send(&[expire], &[&anyone]),
         PoolError::ClaimFullyStreamed,
@@ -848,7 +850,7 @@ fn cancel_before_approval_has_no_penalty() {
 fn only_admin_cancels() {
     let (mut env, s) = setup();
     pending(&mut env, &s);
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let ix = env.cancel_claim_ix(&other.pubkey(), &s.pubkey(), &TX);
     assert_err(env.send(&[ix], &[&other]), PoolError::NotAdmin);
 }
@@ -909,7 +911,7 @@ fn override_needs_both_signers_then_executes() {
 #[test]
 fn override_roles_and_cancel() {
     let (mut env, s) = setup();
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let ix = env.override_ix(&other.pubkey(), &s.pubkey(), TX, entitlement(), TIER_A);
     assert_err(env.send(&[ix], &[&other]), PoolError::NotAdminOrCoSigner);
     let admin = env.admin.insecure_clone();
@@ -985,7 +987,7 @@ fn override_on_a_forfeited_stake_only_for_the_claim_that_forfeited_it() {
         &TX,
         safu_pool::instruction::ExpireStaleClaim {},
     );
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     env.ok(&[expire], &[&anyone]);
     assert_eq!(
         env.stake_state(&s.pubkey()).forfeited_by,
@@ -1031,7 +1033,7 @@ fn override_takes_over_the_stakes_own_queued_claim() {
     let big = pool_core::claim::tier_cap(max, TIER_A).unwrap();
     let a = env.approval(&s.pubkey(), TX, big, TIER_A);
     env.submit(&a).unwrap();
-    env.matured_backer(BACKING);
+    env.matured_backer(backing());
     both_approve(&mut env, &s.pubkey(), TX, entitlement(), TIER_A).unwrap();
     let r = env.stake_state(&s.pubkey());
     assert_eq!(

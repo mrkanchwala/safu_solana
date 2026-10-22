@@ -3,7 +3,7 @@
 use crate::settings::{SettingKey, Settings};
 use crate::{add, apply_bps, sub, CoreError, Result};
 
-/// `(min, max)` stake in lamports under the live settings.
+/// `(min, max)` stake in USDC base units under the live settings.
 pub fn bounds(s: &Settings) -> Result<(u64, u64)> {
     let cap = s.pool_cap();
     Ok((

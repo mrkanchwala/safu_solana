@@ -1,7 +1,7 @@
 [package]
 name = "safu_pool"
 version = "0.1.0"
-description = "SAFU Staking on Solana: SOL protection pool, staked through Marinade"
+description = "SAFU Staking on Solana: USDC protection pool"
 license.workspace = true
 edition.workspace = true
 

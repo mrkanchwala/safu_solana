@@ -1,6 +1,7 @@
-//! LiteSVM harness shared by every test file. Marinade runs as the real program, loaded with its
-//! devnet accounts from `tests/fixtures/` (dumped 2026-09-30). Deploy values come from
-//! `config/pool.devnet.json`, rule numbers from `pool_core::params`: nothing is retyped here.
+//! LiteSVM harness shared by every test file. USDC is a 6-decimal classic SPL Token mint created per
+//! test; token accounts are written straight into the bank at their associated-token addresses.
+//! Deploy values come from `config/pool.devnet.json`, rule numbers from `pool_core::params`:
+//! nothing is retyped here.
 #![allow(dead_code)]
 
 use anchor_lang::solana_program::bpf_loader_upgradeable;
@@ -9,7 +10,6 @@ use anchor_lang::{
     solana_program::instruction::Instruction,
     AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
 };
-use base64::Engine;
 use litesvm::LiteSVM;
 pub use pool_core::settings::SettingKey;
 use safu_pool::approval::{approval_hash, encode_message, ClaimApproval};
@@ -28,76 +28,56 @@ use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use std::str::FromStr;
 
+/// Lamports in one SOL: transaction fees and rent only. Every pool amount is USDC.
 pub const SOL: u64 = 1_000_000_000;
+/// One USDC in base units, from the one decimals definition (`pool_core::params::USDC_DECIMALS`).
+pub const USDC: u64 = 10u64.pow(pool_core::params::USDC_DECIMALS as u32);
 /// Any fixed start time; every test moves the clock from here.
 pub const START: i64 = 1_800_000_000;
 pub const SYSTEM: Pubkey = solana_system_interface::program::ID;
 pub const TOKEN: Pubkey = spl_token_interface::ID;
+pub const ATA_PROGRAM: Pubkey =
+    anchor_lang::prelude::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 pub const ED25519: Pubkey =
     anchor_lang::prelude::pubkey!("Ed25519SigVerify111111111111111111111111111");
 pub const IX_SYSVAR: Pubkey =
     anchor_lang::prelude::pubkey!("Sysvar1nstructions1111111111111111111111111");
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/pool.devnet.json");
 
 pub struct Config {
     pub pool_cap: u64,
     pub compute_unit_limit: u64,
-    pub marinade_program: Pubkey,
-    pub marinade_state: Pubkey,
-    pub msol_mint: Pubkey,
 }
 
 pub fn config() -> Config {
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(CONFIG).unwrap()).unwrap();
-    let key = |s: &serde_json::Value| Pubkey::from_str(s.as_str().unwrap()).unwrap();
     Config {
-        pool_cap: v["poolCapLamports"].as_u64().unwrap(),
+        pool_cap: v["poolCapUsdc"].as_u64().unwrap(),
         compute_unit_limit: v["computeUnitLimit"].as_u64().unwrap(),
-        marinade_program: key(&v["marinade"]["program"]),
-        marinade_state: key(&v["marinade"]["state"]),
-        msol_mint: key(&v["marinade"]["msolMint"]),
     }
 }
 
-/// Loads a `solana account --output json` dump.
-fn load_fixture(svm: &mut LiteSVM, name: &str) -> Pubkey {
-    let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(format!("{FIXTURES}/{name}.json")).unwrap())
-            .unwrap();
-    let a = &v["account"];
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(a["data"][0].as_str().unwrap())
-        .unwrap();
-    let key = Pubkey::from_str(v["pubkey"].as_str().unwrap()).unwrap();
-    svm.set_account(
-        key,
-        Account {
-            lamports: a["lamports"].as_u64().unwrap(),
-            data,
-            owner: Pubkey::from_str(a["owner"].as_str().unwrap()).unwrap(),
-            executable: a["executable"].as_bool().unwrap(),
-            rent_epoch: 0,
-        },
-    )
-    .unwrap();
-    key
+/// SPL Token `Mint` (82 bytes): no mint authority needed in tests, the harness writes balances.
+pub fn mint_data(decimals: u8, supply: u64) -> Vec<u8> {
+    let mut d = vec![0u8; 82];
+    d[36..44].copy_from_slice(&supply.to_le_bytes());
+    d[44] = decimals;
+    d[45] = 1; // initialized
+    d
 }
 
-pub const MARINADE_FIXTURES: [&str; 8] = [
-    "marinade_state",
-    "marinade_msol_mint",
-    "marinade_liq_sol_leg",
-    "marinade_msol_leg",
-    "marinade_reserve",
-    "marinade_treasury_msol",
-    "marinade_st_mint_auth",
-    "marinade_msol_leg_auth",
-];
+/// SPL Token `Account` (165 bytes), initialized, no delegate, not native.
+pub fn token_data(mint: &Pubkey, owner: &Pubkey, amount: u64) -> Vec<u8> {
+    let mut d = vec![0u8; 165];
+    d[..32].copy_from_slice(mint.as_ref());
+    d[32..64].copy_from_slice(owner.as_ref());
+    d[64..72].copy_from_slice(&amount.to_le_bytes());
+    d[108] = 1; // AccountState::Initialized
+    d
+}
 
 pub fn pda(seeds: &[&[u8]]) -> Pubkey {
     Pubkey::find_program_address(seeds, &safu_pool::ID).0
@@ -125,6 +105,8 @@ pub fn set_upgrade_authority(svm: &mut LiteSVM, program_id: &Pubkey, authority: 
 pub struct Env {
     pub svm: LiteSVM,
     pub cfg: Config,
+    /// This test's USDC mint.
+    pub usdc_mint: Pubkey,
     pub admin: Keypair,
     pub co_signer: Keypair,
     pub oracle: Keypair,
@@ -134,7 +116,7 @@ pub struct Env {
 }
 
 impl Env {
-    /// Programs and Marinade loaded, clock set, roles funded; pool not initialized.
+    /// Program and USDC mint loaded, clock set, roles funded; pool not initialized.
     pub fn uninitialized() -> Env {
         let mut svm = LiteSVM::new();
         let cfg = config();
@@ -143,14 +125,8 @@ impl Env {
             include_bytes!("../../../../target/deploy/safu_pool.so"),
         )
         .unwrap();
-        svm.add_program(
-            cfg.marinade_program,
-            &std::fs::read(format!("{FIXTURES}/marinade.so")).unwrap(),
-        )
-        .unwrap();
-        for f in MARINADE_FIXTURES {
-            load_fixture(&mut svm, f);
-        }
+        let usdc_mint = Keypair::new().pubkey();
+        set_token_program_account(&mut svm, usdc_mint, mint_data(pool_core::params::USDC_DECIMALS, 0));
         let mut clock: Clock = svm.get_sysvar();
         clock.unix_timestamp = START;
         svm.set_sysvar(&clock);
@@ -165,16 +141,20 @@ impl Env {
             svm.airdrop(&k.pubkey(), 100 * SOL).unwrap();
         }
         set_upgrade_authority(&mut svm, &safu_pool::ID, &admin.pubkey());
-        Env {
+        let mut env = Env {
             svm,
             cfg,
+            usdc_mint,
             admin,
             co_signer,
             oracle,
             writer,
             treasury,
             now: START,
-        }
+        };
+        let t = env.treasury.pubkey();
+        env.open_usdc(&t);
+        env
     }
 
     /// Initialized with the devnet config.
@@ -182,12 +162,7 @@ impl Env {
         let mut env = Env::uninitialized();
         let args = env.init_args();
         let admin = env.admin.insecure_clone();
-        let ix = env.init_ix(
-            &admin.pubkey(),
-            args,
-            env.cfg.marinade_state,
-            env.cfg.msol_mint,
-        );
+        let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
         env.ok(&[ix], &[&admin]);
         env
     }
@@ -207,8 +182,7 @@ impl Env {
         &self,
         admin: &Pubkey,
         args: safu_pool::instructions::InitArgs,
-        marinade_state: Pubkey,
-        msol_mint: Pubkey,
+        usdc_mint: Pubkey,
     ) -> Instruction {
         let pool = self.pool();
         self.ix(
@@ -217,11 +191,8 @@ impl Env {
                 program: safu_pool::ID,
                 program_data: programdata(&safu_pool::ID),
                 pool,
+                usdc_mint,
                 vault: self.vault(),
-                marinade_program: self.cfg.marinade_program,
-                marinade_state,
-                msol_mint,
-                pool_msol: self.pool_msol(),
                 token_program: TOKEN,
                 system_program: SYSTEM,
             },
@@ -245,35 +216,6 @@ impl Env {
     pub fn vault(&self) -> Pubkey {
         pda(&[SEED_VAULT, self.pool().as_ref()])
     }
-    /// Marinade accounts for the pool's calls: PDAs from the configured state with the seeds in
-    /// `pool_core::marinade`, the mSOL leg and treasury read from the state account itself.
-    pub fn leg(&self) -> safu_pool::accounts::MarinadeLeg {
-        use pool_core::marinade as m;
-        let state = self.cfg.marinade_state;
-        let marinade_pda = |seed: &[u8]| {
-            Pubkey::find_program_address(&[state.as_ref(), seed], &self.cfg.marinade_program).0
-        };
-        let data = self.svm.get_account(&state).expect("marinade state").data;
-        let at = |o: usize| Pubkey::try_from(&data[o..o + 32]).unwrap();
-        safu_pool::accounts::MarinadeLeg {
-            marinade_program: self.cfg.marinade_program,
-            marinade_state: state,
-            msol_mint: self.cfg.msol_mint,
-            liq_pool_sol_leg: marinade_pda(m::SEED_LIQ_POOL_SOL_LEG),
-            liq_pool_msol_leg: at(m::STATE_LIQ_POOL_MSOL_LEG),
-            liq_pool_msol_leg_authority: marinade_pda(m::SEED_LIQ_POOL_MSOL_LEG_AUTHORITY),
-            reserve: marinade_pda(m::SEED_RESERVE),
-            msol_mint_authority: marinade_pda(m::SEED_MSOL_MINT_AUTHORITY),
-            treasury_msol: at(m::STATE_TREASURY_MSOL),
-            pool_msol: self.pool_msol(),
-            token_program: TOKEN,
-            system_program: SYSTEM,
-        }
-    }
-
-    pub fn pool_msol(&self) -> Pubkey {
-        pda(&[SEED_MSOL, self.pool().as_ref()])
-    }
     pub fn stake_record(&self, staker: &Pubkey) -> Pubkey {
         pda(&[SEED_STAKE, self.pool().as_ref(), staker.as_ref()])
     }
@@ -285,6 +227,20 @@ impl Env {
     }
     pub fn covered(&self, hash: &[u8; 32]) -> Pubkey {
         pda(&[SEED_COVERED, self.pool().as_ref(), hash.as_ref()])
+    }
+    /// `owner`'s USDC account: the associated-token address, as wallets use.
+    pub fn ata(&self, owner: &Pubkey) -> Pubkey {
+        Pubkey::find_program_address(
+            &[owner.as_ref(), TOKEN.as_ref(), self.usdc_mint.as_ref()],
+            &ATA_PROGRAM,
+        )
+        .0
+    }
+    pub fn cash(&self) -> safu_pool::accounts::Cash {
+        safu_pool::accounts::Cash {
+            usdc_mint: self.usdc_mint,
+            token_program: TOKEN,
+        }
     }
 
     // ---- sending
@@ -345,10 +301,45 @@ impl Env {
         self.svm.expire_blockhash();
     }
 
-    pub fn funded(&mut self, lamports: u64) -> Keypair {
+    /// A new wallet with `usdc` USDC in its USDC account and SOL for fees and rent.
+    pub fn funded(&mut self, usdc: u64) -> Keypair {
         let k = Keypair::new();
-        self.svm.airdrop(&k.pubkey(), lamports).unwrap();
+        self.svm.airdrop(&k.pubkey(), 10 * SOL).unwrap();
+        self.set_usdc(&k.pubkey(), usdc);
         k
+    }
+
+    /// Writes `owner`'s USDC balance (creating its account if needed).
+    pub fn set_usdc(&mut self, owner: &Pubkey, amount: u64) {
+        let (mint, ata) = (self.usdc_mint, self.ata(owner));
+        set_token_program_account(&mut self.svm, ata, token_data(&mint, owner, amount));
+    }
+
+    /// Opens an empty USDC account for `owner` if it has none (a fresh beneficiary).
+    pub fn open_usdc(&mut self, owner: &Pubkey) {
+        if !self.exists(&self.ata(owner)) {
+            self.set_usdc(owner, 0);
+        }
+    }
+
+    /// USDC in `owner`'s USDC account (0 if it has none).
+    pub fn usdc(&self, owner: &Pubkey) -> u64 {
+        self.token_amount(&self.ata(owner))
+    }
+
+    /// Adds `amount` to a token account's balance in place (a donation, or yield arriving).
+    pub fn add_token(&mut self, account: &Pubkey, amount: u64) {
+        let mut a = self.svm.get_account(account).expect("token account exists");
+        let now = u64::from_le_bytes(a.data[64..72].try_into().unwrap());
+        a.data[64..72].copy_from_slice(&(now + amount).to_le_bytes());
+        self.svm.set_account(*account, a).unwrap();
+    }
+
+    pub fn token_amount(&self, account: &Pubkey) -> u64 {
+        self.svm
+            .get_account(account)
+            .map(|a| u64::from_le_bytes(a.data[64..72].try_into().unwrap()))
+            .unwrap_or(0)
     }
 
     pub fn lamports(&self, a: &Pubkey) -> u64 {
@@ -392,12 +383,9 @@ impl Env {
         self.read(&self.backer_record(backer))
     }
 
-    /// Rent-exempt minimum of a data-less account, as the program computes it.
-    pub fn rent_floor(&self) -> u64 {
-        self.svm.minimum_balance_for_rent_exemption(0)
-    }
+    /// USDC in the vault.
     pub fn vault_liquid(&self) -> u64 {
-        self.lamports(&self.vault()) - self.rent_floor()
+        self.token_amount(&self.vault())
     }
 
     // ---- instruction builders
@@ -419,8 +407,9 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
+                staker_usdc: self.ata(staker),
                 system_program: SYSTEM,
-                leg: self.leg(),
+                cash: self.cash(),
             },
             safu_pool::instruction::Stake {
                 amount,
@@ -446,9 +435,8 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
-                beneficiary: *beneficiary,
-                system_program: SYSTEM,
-                leg: self.leg(),
+                beneficiary_usdc: self.ata(beneficiary),
+                cash: self.cash(),
             },
             safu_pool::instruction::Withdraw { amount },
         )
@@ -466,8 +454,8 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
-                system_program: SYSTEM,
-                leg: self.leg(),
+                staker_usdc: self.ata(staker),
+                cash: self.cash(),
             },
             safu_pool::instruction::EmergencyExit { amount },
         )
@@ -491,8 +479,9 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 backer_record: self.backer_record(backer),
+                backer_usdc: self.ata(backer),
                 system_program: SYSTEM,
-                leg: self.leg(),
+                cash: self.cash(),
             },
             safu_pool::instruction::Back { amount },
         )
@@ -502,9 +491,7 @@ impl Env {
         self.ix(
             safu_pool::accounts::MatureBacking {
                 pool: self.pool(),
-                vault: self.vault(),
                 backer_record: self.backer_record(backer),
-                leg: self.leg(),
             },
             safu_pool::instruction::MatureBacking {},
         )
@@ -515,9 +502,7 @@ impl Env {
             safu_pool::accounts::RequestBackerWithdrawal {
                 backer: *backer,
                 pool: self.pool(),
-                vault: self.vault(),
                 backer_record: self.backer_record(backer),
-                leg: self.leg(),
             },
             safu_pool::instruction::RequestBackerWithdrawal { amount },
         )
@@ -541,8 +526,8 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 backer_record: self.backer_record(backer),
-                system_program: SYSTEM,
-                leg: self.leg(),
+                backer_usdc: self.ata(backer),
+                cash: self.cash(),
             },
             safu_pool::instruction::CompleteBackerWithdrawal {},
         )
@@ -677,9 +662,8 @@ impl Env {
                 vault: self.vault(),
                 claim: self.claim_addr(staker, tx),
                 stake_record: self.stake_record(staker),
-                beneficiary: *beneficiary,
-                system_program: SYSTEM,
-                leg: self.leg(),
+                beneficiary_usdc: self.ata(beneficiary),
+                cash: self.cash(),
             },
             safu_pool::instruction::ClaimStream {},
         )
@@ -692,8 +676,6 @@ impl Env {
                 pool: self.pool(),
                 claim: self.claim_addr(staker, tx),
                 stake_record: self.stake_record(staker),
-                vault: self.vault(),
-                leg: self.leg(),
             },
             safu_pool::instruction::CancelClaim {},
         )
@@ -774,92 +756,13 @@ impl Env {
 
     /// Matured backer money of `amount`: capacity for claims.
     pub fn matured_backer(&mut self, amount: u64) -> Keypair {
-        let b = self.funded(amount + SOL);
+        let b = self.funded(amount);
         let ix = self.back_ix(&b.pubkey(), amount);
         self.ok(&[ix], &[&b]);
         self.warp(BACKER_MATURITY_SECS);
         let m = self.mature_ix(&b.pubkey());
         self.ok(&[m], &[&b]);
         b
-    }
-
-    fn marinade_u64(&self, offset: usize) -> u64 {
-        let d = self.svm.get_account(&self.cfg.marinade_state).unwrap().data;
-        u64::from_le_bytes(d[offset..offset + 8].try_into().unwrap())
-    }
-
-    /// Sets the SOL in Marinade's liquidity pool (above its rent floor).
-    pub fn set_marinade_liquidity(&mut self, lamports: u64) {
-        let leg = self.leg().liq_pool_sol_leg;
-        let mut a = self.svm.get_account(&leg).unwrap();
-        a.lamports = lamports + self.rent_floor();
-        self.svm.set_account(leg, a).unwrap();
-    }
-
-    /// Marinade's liquidity pool filled to its target: the unstake fee is at its minimum (normal
-    /// conditions). The devnet dump sits far below target (fee near the maximum).
-    pub fn marinade_liquidity_at_target(&mut self) {
-        let target = self.marinade_u64(pool_core::marinade::STATE_LP_LIQUIDITY_TARGET);
-        self.set_marinade_liquidity(target);
-    }
-
-    /// Marinade's fee in bps for unstaking `lamports` now, by its own formula.
-    pub fn marinade_fee_bps(&self, lamports: u64) -> u32 {
-        use pool_core::marinade as m;
-        let d = self.svm.get_account(&self.cfg.marinade_state).unwrap().data;
-        let u32_at = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
-        let available = self.lamports(&self.leg().liq_pool_sol_leg) - self.rent_floor();
-        m::unstake_fee_bps(
-            available.saturating_sub(lamports),
-            self.marinade_u64(m::STATE_LP_LIQUIDITY_TARGET),
-            u32_at(m::STATE_LP_MIN_FEE_BPS),
-            u32_at(m::STATE_LP_MAX_FEE_BPS),
-        )
-    }
-
-    pub fn msol_price(&self) -> u64 {
-        self.marinade_u64(pool_core::marinade::STATE_MSOL_PRICE)
-    }
-
-    /// Staking rewards of `bps` land, as at a Marinade epoch update: the SOL behind all mSOL grows
-    /// (added to its reserve balance, which Marinade pays unstakes from) and the cached
-    /// `msol_price` is recomputed from it.
-    pub fn marinade_rewards(&mut self, bps: u64) {
-        use pool_core::marinade as m;
-        let supply = self.marinade_u64(m::STATE_MSOL_SUPPLY);
-        let price = self.msol_price();
-        let behind = pool_core::leg::msol_value(supply, price).unwrap();
-        let reward = pool_core::apply_bps(behind, bps).unwrap();
-        let reserve = self.marinade_u64(m::STATE_AVAILABLE_RESERVE_BALANCE) + reward;
-        let new_price =
-            pool_core::mul_div_floor(behind + reward, m::PRICE_DENOMINATOR as u64, supply).unwrap();
-        let key = self.cfg.marinade_state;
-        let mut a = self.svm.get_account(&key).unwrap();
-        for (o, v) in [
-            (m::STATE_AVAILABLE_RESERVE_BALANCE, reserve),
-            (m::STATE_MSOL_PRICE, new_price),
-        ] {
-            a.data[o..o + 8].copy_from_slice(&v.to_le_bytes());
-        }
-        self.svm.set_account(key, a).unwrap();
-    }
-
-    /// Most Marinade may keep of `amount` under the pool's unstake fee limit.
-    pub fn max_unstake_fee(amount: u64) -> u64 {
-        pool_core::apply_bps(amount, pool_core::params::MAX_REBALANCE_SLIPPAGE_BPS).unwrap()
-    }
-
-    // ---- Marinade leg and yield
-
-    pub fn upkeep_ix(&self, data: impl InstructionData) -> Instruction {
-        self.ix(
-            safu_pool::accounts::Upkeep {
-                pool: self.pool(),
-                vault: self.vault(),
-                leg: self.leg(),
-            },
-            data,
-        )
     }
 
     pub fn claim_yield_ix(&self, staker: &Pubkey, beneficiary: &Pubkey) -> Instruction {
@@ -869,8 +772,8 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 stake_record: self.stake_record(staker),
-                beneficiary: *beneficiary,
-                leg: self.leg(),
+                beneficiary_usdc: self.ata(beneficiary),
+                cash: self.cash(),
             },
             safu_pool::instruction::ClaimYield {},
         )
@@ -883,7 +786,8 @@ impl Env {
                 pool: self.pool(),
                 vault: self.vault(),
                 backer_record: self.backer_record(backer),
-                leg: self.leg(),
+                backer_usdc: self.ata(backer),
+                cash: self.cash(),
             },
             safu_pool::instruction::ClaimBackerYield {},
         )
@@ -895,19 +799,11 @@ impl Env {
                 admin: *admin,
                 pool: self.pool(),
                 vault: self.vault(),
-                treasury: *treasury,
-                leg: self.leg(),
+                treasury_usdc: self.ata(treasury),
+                cash: self.cash(),
             },
             safu_pool::instruction::WithdrawYield { amount },
         )
-    }
-
-    /// The pool's mSOL, from its token account.
-    pub fn pool_msol_amount(&self) -> u64 {
-        let a = self.svm.get_account(&self.pool_msol()).unwrap();
-        anchor_spl::token::TokenAccount::try_deserialize(&mut &a.data[..])
-            .unwrap()
-            .amount
     }
 
     pub fn pause(&mut self) {
@@ -979,7 +875,7 @@ impl Env {
 
     /// A funded staker with a live stake of `amount` (beneficiary = itself).
     pub fn staker(&mut self, amount: u64) -> Keypair {
-        let k = self.funded(amount + SOL);
+        let k = self.funded(amount);
         let ix = self.stake_ix(&k.pubkey(), amount, k.pubkey());
         self.ok(&[ix], &[&k]);
         k
@@ -1030,4 +926,27 @@ pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolErro
 pub fn bounds() -> (u64, u64) {
     pool_core::stake::bounds(&pool_core::settings::Settings::defaults(config().pool_cap).unwrap())
         .unwrap()
+}
+
+/// The tests' money unit: twice the largest stake the default settings allow (the same ratio the
+/// tests were written at). Every pool-sized amount in the tests is a multiple of it, so changing the
+/// pool cap or the stake percentages rescales the tests instead of breaking them.
+pub fn unit() -> u64 {
+    2 * bounds().1
+}
+
+/// Writes an account owned by the SPL Token program (mint or token account), rent-exempt.
+pub fn set_token_program_account(svm: &mut LiteSVM, key: Pubkey, data: Vec<u8>) {
+    let lamports = svm.minimum_balance_for_rent_exemption(data.len());
+    svm.set_account(
+        key,
+        Account {
+            lamports,
+            data,
+            owner: TOKEN,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
 }

@@ -1,4 +1,4 @@
-//! pool-core: every rule of the SAFU Solana pool as a pure function over integers.
+//! pool-core: every rule of the SAFU Solana USDC pool as a pure function over integers.
 //!
 //! The Anchor program (`programs/safu_pool`) owns accounts, signers and CPIs, and calls in here for
 //! every number, so no formula is written twice. Rules follow the multichain protection pool.
@@ -9,9 +9,7 @@
 #![no_std]
 
 pub mod claim;
-pub mod leg;
 pub mod liquidity;
-pub mod marinade;
 pub mod params;
 pub mod settings;
 pub mod stake;
@@ -74,7 +72,7 @@ pub fn capacity(total_staked: u64, total_backed: u64) -> Result<u64> {
 /// Only free capital can leave, whoever takes it (staker withdraw, emergency exit, backer
 /// withdrawal). After taking `amount` of principal out, open claims (`total_allocated`)
 /// must still fit in capacity. Yield is never capital and is not checked.
-/// Saturating: a Marinade loss can mark `total_staked` below the principal a stake still owes, and
+/// Saturating: a yield-venue loss can mark `total_staked` below the principal a stake still owes, and
 /// the capacity left is then zero, not an error (the last staker out can still leave with no open
 /// claims).
 pub fn check_capital_free(total_allocated: u64, capacity: u64, amount: u64) -> Result<()> {

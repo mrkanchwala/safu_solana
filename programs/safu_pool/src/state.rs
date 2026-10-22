@@ -25,15 +25,16 @@ pub const PENDING_NONE: u8 = 0;
 pub const PENDING_PROPOSED: u8 = 1;
 pub const PENDING_APPROVED: u8 = 2;
 
-/// The one pool. PDA `[SEED_POOL]`. Holds roles, Marinade addresses, settings, totals, yield books
-/// and the current day's counters (only today is ever read).
+/// The one pool. PDA `[SEED_POOL]`. Holds roles, the USDC mint and vault, settings, totals, yield
+/// books and the current day's counters (only today is ever read). Also the vault's authority.
 #[account]
 #[derive(InitSpace)]
 pub struct Pool {
     pub version: u8,
-    /// What the pool holds and pays in. The native SOL mint today; a later upgrade can move the
-    /// pool to another asset (e.g. USDC) and migrate, without a new pool.
-    pub asset_mint: Pubkey,
+    /// What the pool holds and pays in: USDC (classic SPL Token, 6 decimals), fixed at `initialize`.
+    pub usdc_mint: Pubkey,
+    /// The pool's USDC token account, PDA `[SEED_VAULT, pool]`, authority = this pool.
+    pub vault: Pubkey,
     pub admin: Pubkey,
     pub co_signer: Pubkey,
     /// Signs `submit_claim` and the Ed25519 approval in front of it.
@@ -42,11 +43,6 @@ pub struct Pool {
     pub registry_writer: Pubkey,
     /// Receives protocol revenue (`withdraw_yield`).
     pub treasury: Pubkey,
-    pub marinade_program: Pubkey,
-    pub marinade_state: Pubkey,
-    pub msol_mint: Pubkey,
-    /// The pool's mSOL token account, owned by the vault PDA.
-    pub pool_msol: Pubkey,
     /// Fixed at `initialize`, signed into every oracle approval.
     pub cluster: u8,
     pub bump: u8,
@@ -82,9 +78,8 @@ pub struct Pool {
     pub protocol_yield_balance: u64,
     pub total_extracted_yield: u64,
 
-    /// mSOL the pool holds on its books (a donation to the token account is not counted).
-    pub deployed_msol: u64,
-    /// SOL cost of `deployed_msol` (book value, never marked to market).
+    /// USDC cost of the yield position (book value, never marked to market). Zero until the yield
+    /// venue is wired.
     pub deployed_book: u64,
     pub last_harvest_at: i64,
 
@@ -133,7 +128,7 @@ impl Pool {
 pub struct StakeRecord {
     pub version: u8,
     pub staker: Pubkey,
-    /// Receives withdrawals, yield and claim payouts.
+    /// Receives withdrawals, yield and claim payouts, into its own USDC token account.
     pub beneficiary: Pubkey,
     /// Principal; a partial withdrawal lowers it (and with it the coverage ceiling). Kept (not
     /// zeroed) when forfeited: the override path reads it.
@@ -184,36 +179,19 @@ pub struct StakerWallets {
     pub version: u8,
     pub staker: Pubkey,
     pub count: u8,
-    /// Slot 1. Fixed at one entry: the layout before the 2nd slot existed, kept in place so accounts
-    /// written by the 1-wallet build still read correctly.
-    pub wallet_hashes: [[u8; 32]; 1],
+    /// Registered wallet hashes in order; the first `count` are in use.
+    pub wallet_hashes: [[u8; 32]; MAX_COVERED_WALLETS as usize],
     pub bump: u8,
-    /// Slot 2, taken from the old `reserved` (old accounts read zeros here; `count` governs).
-    pub wallet_hash_2: [u8; 32],
     /// Room for fields a later upgrade adds.
-    pub reserved: [u8; 32],
+    pub reserved: [u8; 64],
 }
 
 impl StakerWallets {
-    /// Covered wallet slot `i` (0-based, below `MAX_COVERED_WALLETS`).
-    pub fn slot_mut(&mut self, i: usize) -> &mut [u8; 32] {
-        match i {
-            0 => &mut self.wallet_hashes[0],
-            _ => &mut self.wallet_hash_2,
-        }
-    }
-
     /// The registered wallet hashes, in order.
-    pub fn hashes(&self) -> Vec<[u8; 32]> {
-        [self.wallet_hashes[0], self.wallet_hash_2]
-            .into_iter()
-            .take(self.count as usize)
-            .collect()
+    pub fn hashes(&self) -> &[[u8; 32]] {
+        &self.wallet_hashes[..self.count as usize]
     }
 }
-
-// Two slots exist; raising the limit past that needs another slot taken from `reserved`.
-const _: () = assert!(MAX_COVERED_WALLETS == 2);
 
 /// One covered wallet, bound to one staker forever. PDA `[SEED_COVERED, pool, wallet_hash]`.
 /// `wallet_hash = sha256(chain_id || normalized address)`, computed by the backend.

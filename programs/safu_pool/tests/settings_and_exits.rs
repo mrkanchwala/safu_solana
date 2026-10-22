@@ -40,7 +40,7 @@ fn transition(
     data: impl anchor_lang::InstructionData,
 ) -> Result<(), String> {
     let ix = env.transition_ix(&s.pubkey(), tx, data);
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     env.send(&[ix], &[&anyone])
 }
 
@@ -70,7 +70,7 @@ fn try_pause(env: &mut Env) -> Result<(), String> {
 /// A backed pool and one max staker whose claim waits for approval.
 fn awaiting_claim() -> (Env, Keypair) {
     let mut env = Env::new();
-    env.matured_backer(40 * SOL);
+    env.matured_backer(40 * unit());
     let s = env.staker(max_stake());
     env.warp(TIME_GATE_SECS);
     let a = env.approval(&s.pubkey(), TX, max_stake(), TIER_A);
@@ -144,7 +144,7 @@ fn a_setting_changes_only_after_propose_cosign_and_the_timelock() {
     assert_err(env.send(&[ix], &[&admin]), PoolError::NoPendingSetting);
 
     // Only the admin proposes.
-    let other = env.funded(SOL);
+    let other = env.funded(unit());
     let ix = env.ix(
         safu_pool::accounts::AdminOnly {
             admin: other.pubkey(),
@@ -187,7 +187,7 @@ fn a_setting_changes_only_after_propose_cosign_and_the_timelock() {
 
     // Then anyone executes.
     env.warp(1);
-    let anyone = env.funded(SOL);
+    let anyone = env.funded(unit());
     let ix = env.execute_setting_ix(key);
     env.ok(&[ix], &[&anyone]);
     assert_eq!(env.setting(K::PauseGapSecs), value);
@@ -202,7 +202,7 @@ fn either_signer_can_cancel_a_pending_change_nobody_else() {
     for canceller in [&admin, &co] {
         let ix = env.propose_ix(key, PAUSE_GAP_SECS * 2);
         env.ok(&[ix], &[&admin]);
-        let other = env.funded(SOL);
+        let other = env.funded(unit());
         let ix = env.cancel_setting_ix(&other.pubkey(), key);
         assert_err(env.send(&[ix], &[&other]), PoolError::NotAdminOrCoSigner);
         let ix = env.cancel_setting_ix(&canceller.pubkey(), key);
@@ -270,7 +270,7 @@ fn stake_bounds_and_pool_cap_follow_the_live_settings() {
     let mut env = Env::new();
     let old_min = min_stake();
     env.set_setting(K::MinStakeBps, (MIN_STAKE_BPS * 2) as i64);
-    let k = env.funded(SOL);
+    let k = env.funded(unit());
     let ix = env.stake_ix(&k.pubkey(), old_min, k.pubkey());
     assert_err(env.send(&[ix], &[&k]), PoolError::StakeOutOfRange);
     let ix = env.stake_ix(&k.pubkey(), old_min * 2, k.pubkey());
@@ -281,7 +281,7 @@ fn stake_bounds_and_pool_cap_follow_the_live_settings() {
     let staked = env.pool_state().total_staked;
     env.set_setting(K::PoolCap, staked as i64);
     let (_, new_max) = pool_core::stake::bounds(&env.pool_state().settings()).unwrap();
-    let k2 = env.funded(SOL);
+    let k2 = env.funded(unit());
     let ix = env.stake_ix(&k2.pubkey(), new_max, k2.pubkey());
     assert_err(env.send(&[ix], &[&k2]), PoolError::PoolCapExceeded);
     assert_eq!(env.stake_state(&k.pubkey()).amount, old_min * 2);
@@ -293,8 +293,8 @@ fn backer_waits_follow_the_live_settings() {
     env.set_setting(K::BackerNoticeSecs, 0);
     let (maturity_min, _) = K::BackerMaturitySecs.bounds();
     env.set_setting(K::BackerMaturitySecs, maturity_min);
-    let b = env.funded(2 * SOL);
-    let ix = env.back_ix(&b.pubkey(), SOL);
+    let b = env.funded(2 * unit());
+    let ix = env.back_ix(&b.pubkey(), unit());
     env.ok(&[ix], &[&b]);
     assert_eq!(
         env.backer_state(&b.pubkey()).pending_matures_at,
@@ -304,7 +304,7 @@ fn backer_waits_follow_the_live_settings() {
     let ix = env.mature_ix(&b.pubkey());
     env.ok(&[ix], &[&b]);
     // No notice: request and complete in one go.
-    let ix = env.request_backer_ix(&b.pubkey(), SOL);
+    let ix = env.request_backer_ix(&b.pubkey(), unit());
     env.ok(&[ix], &[&b]);
     let ix = env.complete_backer_ix(&b.pubkey());
     env.ok(&[ix], &[&b]);
@@ -318,7 +318,7 @@ fn daily_payout_rate_follows_the_live_settings() {
     for key in [K::PayoutHighBps, K::PayoutMidBps, K::PayoutLowBps] {
         env.set_setting(key, 1);
     }
-    env.matured_backer(40 * SOL);
+    env.matured_backer(40 * unit());
     let s = env.staker(max_stake());
     env.warp(TIME_GATE_SECS);
     let a = env.approval(&s.pubkey(), TX, max_stake(), TIER_A);
@@ -334,42 +334,6 @@ fn daily_payout_rate_follows_the_live_settings() {
     assert_eq!(
         env.claim_state(&s.pubkey(), &TX).streamed,
         pool_core::apply_bps(base, 1).unwrap()
-    );
-}
-
-#[test]
-fn yield_split_follows_the_live_settings() {
-    let mut env = Env::new();
-    env.marinade_liquidity_at_target();
-    env.set_setting(K::StakerYieldBps, 0);
-    env.matured_backer(40 * SOL);
-    env.staker(max_stake());
-    env.warp(SECONDS_PER_DAY);
-    env.marinade_rewards(50);
-    let before = env.pool_state();
-    let ix = env.upkeep_ix(safu_pool::instruction::Harvest {});
-    let anyone = env.funded(SOL);
-    env.ok(&[ix], &[&anyone]);
-    let after = env.pool_state();
-    let amount = after.total_extracted_yield - before.total_extracted_yield;
-    assert!(amount > 0);
-    // Stakers get nothing at 0 bps; backers still get their full share.
-    assert_eq!(after.staker_yield_reserved, before.staker_yield_reserved);
-    let c = pool_core::yields::credit(
-        amount,
-        before.total_staked,
-        before.total_backed,
-        0,
-        BACKER_YIELD_BPS,
-    )
-    .unwrap();
-    assert_eq!(
-        after.backer_yield_reserved - before.backer_yield_reserved,
-        c.backer_share
-    );
-    assert_eq!(
-        after.protocol_yield_balance - before.protocol_yield_balance,
-        c.protocol_share
     );
 }
 
@@ -561,7 +525,7 @@ fn a_pause_does_not_use_up_a_queued_claims_window() {
 #[test]
 fn a_hack_during_a_long_pause_can_still_be_claimed_after_it() {
     let mut env = Env::new();
-    env.matured_backer(40 * SOL);
+    env.matured_backer(40 * unit());
     let s = env.staker(max_stake());
     env.warp(10);
     let hack = env.now;
@@ -579,7 +543,7 @@ fn a_hack_during_a_long_pause_can_still_be_claimed_after_it() {
 #[test]
 fn a_window_already_closed_before_a_pause_stays_closed() {
     let mut env = Env::new();
-    env.matured_backer(40 * SOL);
+    env.matured_backer(40 * unit());
     let s = env.staker(max_stake());
     env.warp(10);
     let hack = env.now;
@@ -597,18 +561,17 @@ fn a_window_already_closed_before_a_pause_stays_closed() {
 #[test]
 fn a_part_of_a_stake_can_be_withdrawn_and_coverage_follows_it() {
     let mut env = Env::new();
-    env.marinade_liquidity_at_target();
-    env.matured_backer(40 * SOL);
+    env.matured_backer(40 * unit());
     let m = max_stake();
     let s = env.staker(m);
-    let before = env.lamports(&s.pubkey());
+    let before = env.usdc(&s.pubkey());
     withdraw(&mut env, &s, m / 2).unwrap();
     let r = env.stake_state(&s.pubkey());
     assert_eq!(r.amount, m / 2);
     assert_eq!(r.yield_index_at, env.pool_state().staker_yield_index);
     let p = env.pool_state();
     assert_eq!((p.total_staked, p.total_stakers), (m / 2, 1));
-    assert!(env.lamports(&s.pubkey()) >= before + m / 2 - Env::max_unstake_fee(m / 2));
+    assert_eq!(env.usdc(&s.pubkey()), before + m / 2);
 
     // The ceiling is now on half the stake.
     env.warp(TIME_GATE_SECS);
@@ -730,14 +693,14 @@ fn a_pause_cannot_be_used_to_take_capital_claims_need() {
 #[test]
 fn a_full_emergency_exit_closes_the_record() {
     let mut env = Env::new();
-    env.marinade_liquidity_at_target();
     let s = env.staker(max_stake());
     env.pause();
-    let before = env.lamports(&s.pubkey());
+    let (before, sol_before) = (env.usdc(&s.pubkey()), env.lamports(&s.pubkey()));
     emergency(&mut env, &s, max_stake()).unwrap();
     assert!(!env.exists(&env.stake_record(&s.pubkey())));
-    // The payee pays Marinade's unstake fee (up to its maximum) and gets the record's rent back.
-    assert!(env.lamports(&s.pubkey()) + Env::max_unstake_fee(max_stake()) > before + max_stake());
+    // The whole stake back in USDC, and the record's rent back in SOL.
+    assert_eq!(env.usdc(&s.pubkey()), before + max_stake());
+    assert!(env.lamports(&s.pubkey()) > sol_before);
 }
 
 #[test]
@@ -792,7 +755,7 @@ fn protocol_yield_cannot_move_while_paused() {
 #[test]
 fn beneficiary_can_never_be_the_pool_or_its_vault() {
     let mut env = Env::new();
-    let k = env.funded(SOL);
+    let k = env.funded(unit());
     for bad in [env.pool(), env.vault()] {
         let ix = env.stake_ix(&k.pubkey(), max_stake(), bad);
         assert_err(env.send(&[ix], &[&k]), PoolError::BeneficiaryIsPoolAccount);
@@ -809,13 +772,13 @@ fn every_record_carries_a_version_and_the_pool_its_asset() {
     let (mut env, s) = awaiting_claim();
     let p: Pool = env.pool_state();
     assert_eq!(
-        (p.version, p.asset_mint),
-        (ACCOUNT_VERSION, NATIVE_SOL_MINT)
+        (p.version, p.usdc_mint),
+        (ACCOUNT_VERSION, env.usdc_mint)
     );
     assert!(p.reserved.iter().all(|b| *b == 0));
     assert_eq!(env.stake_state(&s.pubkey()).version, ACCOUNT_VERSION);
     assert_eq!(env.claim_state(&s.pubkey(), &TX).version, ACCOUNT_VERSION);
-    let b = env.matured_backer(SOL);
+    let b = env.matured_backer(unit());
     assert_eq!(env.backer_state(&b.pubkey()).version, ACCOUNT_VERSION);
     let writer = env.writer.insecure_clone();
     let ix = env.register_ix(&writer.pubkey(), s.pubkey(), [9; 32]);
