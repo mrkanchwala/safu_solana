@@ -176,12 +176,7 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
     let now = now()?;
     let pool_key = ctx.accounts.pool.key();
     let vault = ctx.accounts.vault.to_account_info();
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        vault.clone(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let record = &mut ctx.accounts.stake_record;
@@ -321,12 +316,7 @@ pub struct Withdraw<'info> {
 /// withdrawal (unpaid yield and points live on it).
 pub fn withdraw(ctx: &mut Context<Withdraw>, amount: u64) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     money.harvest(pool, now)?;
@@ -377,12 +367,7 @@ pub struct EmergencyExit<'info> {
 /// penalty lock, so a pause cannot be used to leave a false-positive penalty early.
 pub fn emergency_exit(ctx: Context<EmergencyExit>, amount: u64) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     require!(pool.is_paused(now), PoolError::NotPaused);
 
@@ -430,12 +415,7 @@ pub struct ClaimYield<'info> {
 /// a claim open or queued, and after one is approved.
 pub fn claim_yield(ctx: &mut Context<ClaimYield>) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     money.harvest(pool, now)?;
     let record = &mut ctx.accounts.stake_record;

@@ -69,18 +69,10 @@ pub struct ProvideLiquidity<'info> {
     pub cash: Cash<'info>,
 }
 
-fn money<'a, 'info>(
-    pool: &Account<'info, Pool>,
-    vault: &Account<'info, TokenAccount>,
-    cash: &'a Cash<'info>,
-) -> Result<Money<'a, 'info>> {
-    Money::new(pool, pool.to_account_info(), vault.to_account_info(), cash)
-}
-
 /// Permissionless, best effort: takes the venue's growth above book value as yield.
 pub fn harvest(ctx: Context<LegCall>) -> Result<()> {
     let now = now()?;
-    let mut m = money(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
+    let mut m = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     m.harvest_alone(&mut ctx.accounts.pool, now)?;
     Ok(())
 }
@@ -88,7 +80,7 @@ pub fn harvest(ctx: Context<LegCall>) -> Result<()> {
 /// Permissionless: deposits idle cash up to the `deploy_bps` line.
 pub fn auto_deploy_liquidity(ctx: Context<LegCall>) -> Result<()> {
     let now = now()?;
-    let mut m = money(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
+    let mut m = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     m.keeper_deploy(&mut ctx.accounts.pool, now)?;
     Ok(())
 }
@@ -96,7 +88,7 @@ pub fn auto_deploy_liquidity(ctx: Context<LegCall>) -> Result<()> {
 /// Permissionless: brings cash back for open claims, or deployment back under the line.
 pub fn ensure_liquidity(ctx: Context<LegCall>) -> Result<()> {
     let now = now()?;
-    let mut m = money(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
+    let mut m = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     m.keeper_rebalance(&mut ctx.accounts.pool, now)?;
     Ok(())
 }
@@ -108,7 +100,7 @@ pub fn provide_liquidity(
     min_out: u64,
 ) -> Result<()> {
     let now = now()?;
-    let mut m = money(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
+    let mut m = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     m.admin_provide(&mut ctx.accounts.pool, collateral, min_out, now)?;
     Ok(())
 }

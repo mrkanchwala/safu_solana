@@ -47,12 +47,7 @@ pub struct WithdrawYield<'info> {
 pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {
     let now = super::now()?;
     let vault = ctx.accounts.vault.to_account_info();
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        vault.clone(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     require!(amount > 0, PoolError::AmountNotPositive);

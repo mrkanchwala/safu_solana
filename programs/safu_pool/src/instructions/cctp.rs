@@ -72,6 +72,33 @@ fn identity_seeds<'a>(
     [SEED_CCTP_IDENTITY, pool.as_ref(), mode, domain, owner, bump]
 }
 
+/// Calls `program_id` with `accounts` in order, each with whether it is writable. Signers are this
+/// transaction's own plus `pda`, which this program signs as with `seeds`.
+fn invoke_as(
+    program_id: Pubkey,
+    accounts: &[(AccountInfo<'_>, bool)],
+    pda: &Pubkey,
+    data: Vec<u8>,
+    seeds: &[&[u8]],
+) -> Result<()> {
+    let metas = accounts
+        .iter()
+        .map(|(a, writable)| AccountMeta {
+            pubkey: a.key(),
+            is_signer: a.is_signer || a.key() == *pda,
+            is_writable: *writable,
+        })
+        .collect();
+    let infos: Vec<AccountInfo> = accounts.iter().map(|(a, _)| a.clone()).collect();
+    let call = Instruction {
+        program_id,
+        accounts: metas,
+        data,
+    };
+    invoke_signed(&call, &infos, &[seeds])?;
+    Ok(())
+}
+
 /// Runs `data` on this program with `accounts`, the identity signing.
 fn call_as_identity<'info>(
     program: &AccountInfo<'info>,
@@ -349,58 +376,49 @@ pub fn cctp_receive(
     let circle = &a.circle;
     let mut data = c::DISC_RECEIVE_MESSAGE.to_vec();
     (message, attestation).serialize(&mut data)?;
-    let metas = vec![
-        AccountMeta::new(a.payer.key(), true),
-        AccountMeta::new_readonly(a.authority.key(), true),
-        AccountMeta::new_readonly(circle.message_transmitter_authority.key(), false),
-        AccountMeta::new_readonly(circle.message_transmitter.key(), false),
-        AccountMeta::new(circle.used_nonce.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger_minter_program.key(), false),
-        AccountMeta::new_readonly(a.system_program.key(), false),
-        AccountMeta::new_readonly(circle.message_transmitter_event_authority.key(), false),
-        AccountMeta::new_readonly(circle.message_transmitter_program.key(), false),
-        // Remaining accounts: the token messenger's handler.
-        AccountMeta::new_readonly(circle.token_messenger.key(), false),
-        AccountMeta::new_readonly(circle.remote_token_messenger.key(), false),
-        AccountMeta::new(circle.token_minter.key(), false),
-        AccountMeta::new(circle.local_token.key(), false),
-        AccountMeta::new_readonly(circle.token_pair.key(), false),
-        AccountMeta::new(circle.fee_recipient_token_account.key(), false),
-        AccountMeta::new(a.inbox.key(), false),
-        AccountMeta::new(circle.custody.key(), false),
-        AccountMeta::new_readonly(a.token_program.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger_event_authority.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger_minter_program.key(), false),
-    ];
-    let infos = [
-        a.payer.to_account_info(),
-        a.authority.to_account_info(),
-        circle.message_transmitter_authority.to_account_info(),
-        circle.message_transmitter.to_account_info(),
-        circle.used_nonce.to_account_info(),
-        circle.token_messenger_minter_program.to_account_info(),
-        a.system_program.to_account_info(),
-        circle.message_transmitter_event_authority.to_account_info(),
-        circle.message_transmitter_program.to_account_info(),
-        circle.token_messenger.to_account_info(),
-        circle.remote_token_messenger.to_account_info(),
-        circle.token_minter.to_account_info(),
-        circle.local_token.to_account_info(),
-        circle.token_pair.to_account_info(),
-        circle.fee_recipient_token_account.to_account_info(),
-        a.inbox.to_account_info(),
-        circle.custody.to_account_info(),
-        a.token_program.to_account_info(),
-        circle.token_messenger_event_authority.to_account_info(),
-    ];
-    invoke_signed(
-        &Instruction {
-            program_id: CCTP_MESSAGE_TRANSMITTER_ID,
-            accounts: metas,
-            data,
-        },
-        &infos,
-        &[authority_seeds],
+    invoke_as(
+        CCTP_MESSAGE_TRANSMITTER_ID,
+        &[
+            (a.payer.to_account_info(), true),
+            (a.authority.to_account_info(), false),
+            (
+                circle.message_transmitter_authority.to_account_info(),
+                false,
+            ),
+            (circle.message_transmitter.to_account_info(), false),
+            (circle.used_nonce.to_account_info(), true),
+            (
+                circle.token_messenger_minter_program.to_account_info(),
+                false,
+            ),
+            (a.system_program.to_account_info(), false),
+            (
+                circle.message_transmitter_event_authority.to_account_info(),
+                false,
+            ),
+            (circle.message_transmitter_program.to_account_info(), false),
+            // Remaining accounts: the token messenger's handler.
+            (circle.token_messenger.to_account_info(), false),
+            (circle.remote_token_messenger.to_account_info(), false),
+            (circle.token_minter.to_account_info(), true),
+            (circle.local_token.to_account_info(), true),
+            (circle.token_pair.to_account_info(), false),
+            (circle.fee_recipient_token_account.to_account_info(), true),
+            (a.inbox.to_account_info(), true),
+            (circle.custody.to_account_info(), true),
+            (a.token_program.to_account_info(), false),
+            (
+                circle.token_messenger_event_authority.to_account_info(),
+                false,
+            ),
+            (
+                circle.token_messenger_minter_program.to_account_info(),
+                false,
+            ),
+        ],
+        &a.authority.key(),
+        data,
+        authority_seeds,
     )?;
 
     let a = &mut ctx.accounts;
@@ -713,45 +731,6 @@ pub fn cctp_send_home(
     }
     let circle = &a.circle;
     let identity = a.identity.key();
-    let metas = vec![
-        AccountMeta::new_readonly(identity, true),
-        AccountMeta::new(a.payer.key(), true),
-        AccountMeta::new_readonly(circle.sender_authority.key(), false),
-        AccountMeta::new(a.from.key(), false),
-        AccountMeta::new_readonly(circle.denylist_account.key(), false),
-        AccountMeta::new(circle.message_transmitter.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger.key(), false),
-        AccountMeta::new_readonly(circle.remote_token_messenger.key(), false),
-        AccountMeta::new_readonly(circle.token_minter.key(), false),
-        AccountMeta::new(circle.local_token.key(), false),
-        AccountMeta::new(a.usdc_mint.key(), false),
-        AccountMeta::new(a.message_sent_event_data.key(), true),
-        AccountMeta::new_readonly(circle.message_transmitter_program.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger_minter_program.key(), false),
-        AccountMeta::new_readonly(a.token_program.key(), false),
-        AccountMeta::new_readonly(a.system_program.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger_event_authority.key(), false),
-        AccountMeta::new_readonly(circle.token_messenger_minter_program.key(), false),
-    ];
-    let infos = [
-        a.identity.to_account_info(),
-        a.payer.to_account_info(),
-        circle.sender_authority.to_account_info(),
-        a.from.to_account_info(),
-        circle.denylist_account.to_account_info(),
-        circle.message_transmitter.to_account_info(),
-        circle.token_messenger.to_account_info(),
-        circle.remote_token_messenger.to_account_info(),
-        circle.token_minter.to_account_info(),
-        circle.local_token.to_account_info(),
-        a.usdc_mint.to_account_info(),
-        a.message_sent_event_data.to_account_info(),
-        circle.message_transmitter_program.to_account_info(),
-        circle.token_messenger_minter_program.to_account_info(),
-        a.token_program.to_account_info(),
-        a.system_program.to_account_info(),
-        circle.token_messenger_event_authority.to_account_info(),
-    ];
     let pool_key = a.pool.key();
     let (mode, domain_be, bump) = (
         [account.mode],
@@ -759,14 +738,40 @@ pub fn cctp_send_home(
         [account.identity_bump],
     );
     let seeds = identity_seeds(&pool_key, &mode, &domain_be, &account.home_owner, &bump);
-    invoke_signed(
-        &Instruction {
-            program_id: CCTP_TOKEN_MESSENGER_MINTER_ID,
-            accounts: metas,
-            data,
-        },
-        &infos,
-        &[&seeds],
+    invoke_as(
+        CCTP_TOKEN_MESSENGER_MINTER_ID,
+        &[
+            (a.identity.to_account_info(), false),
+            (a.payer.to_account_info(), true),
+            (circle.sender_authority.to_account_info(), false),
+            (a.from.to_account_info(), true),
+            (circle.denylist_account.to_account_info(), false),
+            (circle.message_transmitter.to_account_info(), true),
+            (circle.token_messenger.to_account_info(), false),
+            (circle.remote_token_messenger.to_account_info(), false),
+            (circle.token_minter.to_account_info(), false),
+            (circle.local_token.to_account_info(), true),
+            (a.usdc_mint.to_account_info(), true),
+            (a.message_sent_event_data.to_account_info(), true),
+            (circle.message_transmitter_program.to_account_info(), false),
+            (
+                circle.token_messenger_minter_program.to_account_info(),
+                false,
+            ),
+            (a.token_program.to_account_info(), false),
+            (a.system_program.to_account_info(), false),
+            (
+                circle.token_messenger_event_authority.to_account_info(),
+                false,
+            ),
+            (
+                circle.token_messenger_minter_program.to_account_info(),
+                false,
+            ),
+        ],
+        &identity,
+        data,
+        &seeds,
     )?;
     emit!(CctpSentHome {
         identity,

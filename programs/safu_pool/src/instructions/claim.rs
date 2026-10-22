@@ -902,12 +902,7 @@ pub struct ClaimStream<'info> {
 /// (multichain `claim_stream`). The staker tries again later.
 pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     let claim_key = ctx.accounts.claim.key();
@@ -1001,12 +996,7 @@ pub struct CancelClaim<'info> {
 /// what the claim already paid out; before approval nothing was forfeited, so there is no penalty.
 pub fn cancel_claim(ctx: Context<CancelClaim>) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     // Growth so far belongs to the stakers counted until now, before the restored stake joins them.
     money.harvest(pool, now)?;

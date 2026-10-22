@@ -25,6 +25,8 @@ use crate::events::{
 };
 use crate::kamino::Leg;
 use crate::state::Pool;
+use anchor_spl::token::TokenAccount;
+
 use crate::vault::{self, Cash};
 
 /// Compute units left in this transaction. Host builds (IDL, unit tests) have no meter.
@@ -144,17 +146,15 @@ pub struct Money<'a, 'info> {
 
 impl<'a, 'info> Money<'a, 'info> {
     pub fn new(
-        pool: &Pool,
-        pool_info: AccountInfo<'info>,
-        vault: AccountInfo<'info>,
+        pool: &Account<'info, Pool>,
+        vault: &Account<'info, TokenAccount>,
         cash: &'a Cash<'info>,
     ) -> Result<Self> {
-        let leg = cash.venue(pool, &pool_info.key())?;
         Ok(Money {
-            pool_info,
-            vault,
+            pool_info: pool.to_account_info(),
+            vault: vault.to_account_info(),
             cash,
-            leg,
+            leg: cash.venue(pool, &pool.key())?,
         })
     }
 

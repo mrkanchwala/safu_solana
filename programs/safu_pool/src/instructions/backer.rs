@@ -282,12 +282,7 @@ pub struct Back<'info> {
 pub fn back(ctx: &mut Context<Back>, amount: u64) -> Result<()> {
     let now = now()?;
     let vault = ctx.accounts.vault.to_account_info();
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        vault.clone(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     require!(!pool.is_paused(now), PoolError::Paused);
     require!(amount > 0, PoolError::AmountNotPositive);
@@ -328,12 +323,7 @@ pub struct MatureBacking<'info> {
 /// that matured is new capacity, so idle cash above the line goes to the venue (multichain).
 pub fn mature_backing(ctx: &mut Context<MatureBacking>) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     let record = &mut ctx.accounts.backer_record;
     require!(record.pending_count > 0, PoolError::NoPendingBacking);
@@ -454,12 +444,7 @@ pub struct CompleteBackerWithdrawal<'info> {
 /// the backer retries later. The request closes once all of it is paid. Works while paused.
 pub fn complete_backer_withdrawal(ctx: &mut Context<CompleteBackerWithdrawal>) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     let record = &mut ctx.accounts.backer_record;
     require!(record.withdraw_amount > 0, PoolError::NoBackerWithdrawal);
@@ -523,12 +508,7 @@ pub struct ClaimBackerYield<'info> {
 /// Backer yield, any time, paused or not; principal untouched (multichain `claim_backer_yield`).
 pub fn claim_backer_yield(ctx: &mut Context<ClaimBackerYield>) -> Result<()> {
     let now = now()?;
-    let mut money = Money::new(
-        &ctx.accounts.pool,
-        ctx.accounts.pool.to_account_info(),
-        ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.cash,
-    )?;
+    let mut money = Money::new(&ctx.accounts.pool, &ctx.accounts.vault, &ctx.accounts.cash)?;
     let pool = &mut ctx.accounts.pool;
     let record = &mut ctx.accounts.backer_record;
     money.harvest(pool, now)?;
