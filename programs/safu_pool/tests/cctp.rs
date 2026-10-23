@@ -8,6 +8,7 @@
 mod common;
 
 use anchor_lang::prelude::Pubkey;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::{InstructionData, ToAccountMetas};
 use common::*;
 use pool_core::cctp as c;
@@ -171,6 +172,25 @@ fn a_refused_deploy_leaves_the_usdc_held_and_it_can_go_home() {
     assert_eq!(t.state(&identity).to_deploy, 0);
 }
 
+/// Sending home from another account the identity owns leaves the held USDC waiting to deploy.
+#[test]
+fn sending_home_from_another_account_keeps_the_held_usdc_waiting() {
+    let mut t = Cctp::new();
+    let owner = HomeKey::eth();
+    let identity = t.receive(c::MODE_STAKE, &owner, bounds().1);
+    t.env.open_usdc(&identity);
+    let other = t.env.ata(&identity);
+    t.env.add_token(&other, USDC);
+    let event = Keypair::new();
+    let nonce = t.state(&identity).nonce;
+    let tx = t.send_home_from_tx(&owner, &identity, &event, nonce, other);
+    let r = t.relayer.insecure_clone();
+    t.env.send(&tx, &[&r, &event]).unwrap();
+    assert_eq!(t.env.token_amount(&other), 0);
+    assert_eq!(t.state(&identity).to_deploy, bounds().1);
+    t.deploy(&identity, c::MODE_STAKE).unwrap();
+}
+
 // --- owner-signed calls ---------------------------------------------------------------------------
 
 fn staked(t: &mut Cctp, owner: &HomeKey) -> Pubkey {
@@ -308,6 +328,82 @@ fn an_owner_cannot_send_payouts_anywhere_else() {
     assert_err(
         t.act(&owner, &identity, inner, data),
         PoolError::CctpBeneficiaryNotOwn,
+    );
+}
+
+/// The signature fixes where the call's data ends and its accounts begin: the same signature, with
+/// the signed accounts' bytes moved into the data and no signed accounts, is refused, so the accounts
+/// it would then run with (here a payout account the owner never signed) cannot be swapped in.
+#[test]
+fn a_signature_cannot_be_resplit_into_other_data_and_accounts() {
+    let mut t = Cctp::new();
+    let owner = HomeKey::eth();
+    let identity = staked(&mut t, &owner);
+    let r = t.relayer.insecure_clone();
+    let amount = bounds().1;
+    let inner = t.withdraw_metas(&identity);
+    let data = safu_pool::instruction::Withdraw { amount }.data();
+    let nonce = t.state(&identity).nonce;
+    let expires_at = t.env.now + 60;
+    let mut view = t.call_accounts(&identity);
+    view.extend(inner.iter().cloned());
+    let view = [Instruction {
+        program_id: safu_pool::ID,
+        accounts: view,
+        data: vec![],
+    }];
+    let signed = seen(&view, &r.pubkey(), &inner);
+    let (signature, _) = t.sign(
+        &owner,
+        &identity,
+        nonce,
+        expires_at,
+        &call_hash(&data, &signed),
+    );
+
+    let mut moved = data.clone();
+    for m in &signed {
+        moved.extend_from_slice(&m.pubkey.to_bytes());
+        moved.extend([u8::from(m.is_writable), u8::from(m.is_signer)]);
+    }
+    t.env.open_usdc(&identity);
+    let mut swapped = inner.clone();
+    swapped[4].pubkey = t.env.ata(&identity);
+    for accounts in [inner, swapped] {
+        let mut metas = t.call_accounts(&identity);
+        metas.extend(accounts);
+        let ix = Instruction {
+            program_id: safu_pool::ID,
+            accounts: metas,
+            data: safu_pool::instruction::CctpAct {
+                nonce,
+                expires_at,
+                signature: signature.clone(),
+                signed_accounts: 0,
+                data: moved.clone(),
+            }
+            .data(),
+        };
+        assert_err(t.env.send(&[ix], &[&r]), PoolError::CctpBadSignature);
+    }
+    assert_eq!(t.env.token_amount(&t.held(&identity)), 0);
+    assert_eq!(t.env.stake_state(&identity).amount, amount);
+}
+
+/// Same vector as the relayer's test (backend `test_solana_relay.py`): both build the same digest.
+#[test]
+fn the_call_hash_matches_the_relayers() {
+    let metas = [
+        AccountMeta::new(Pubkey::new_from_array([7; 32]), false),
+        AccountMeta::new_readonly(Pubkey::new_from_array([9; 32]), true),
+    ];
+    let hex: String = call_hash(&[1, 2], &metas)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        hex,
+        "bc8240d8209553bf09e4f94e09ced89168d82d13b9a1a6ebed1a6d930c0ca75d"
     );
 }
 

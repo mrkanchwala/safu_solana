@@ -84,9 +84,6 @@ pub const BACKER_MATURITY_SECS: i64 = 0;
 pub const MAX_PENDING_DEPOSITS: usize = 8;
 /// Watch-list places each user transaction's upkeep checks (multichain `UPKEEP_WATCH_PER_CALL`).
 pub const UPKEEP_WATCH_PER_CALL: usize = 2;
-/// Notice before a backer withdrawal. UNUSED since the daily drip replaced it; the setting slot is
-/// kept so the numbering matches multichain. (setting default)
-pub const BACKER_NOTICE_SECS: i64 = clock(30 * SECONDS_PER_DAY, SECONDS_PER_MINUTE);
 /// Backer exit drip length: from the min (idle pool) to the max (at `DRIP_FULL_UTIL_BPS` utilisation
 /// and above). (setting defaults)
 pub const DRIP_MIN_SECS: i64 = clock(7 * SECONDS_PER_DAY, 2 * SECONDS_PER_MINUTE);

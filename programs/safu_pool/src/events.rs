@@ -293,7 +293,7 @@ pub struct Harvested {
     pub received: u64,
 }
 /// A claim payout found the pool short of cash even after the venue: today counts as blocked time
-/// (rule 18), the claim's collection window restarts, nothing is paid.
+///, the claim's collection window restarts, nothing is paid.
 #[event]
 pub struct CashShortDay {
     pub claim: Pubkey,

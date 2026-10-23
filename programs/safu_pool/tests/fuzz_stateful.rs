@@ -690,8 +690,11 @@ impl World {
             }
             27 => {
                 // Propose + co-sign a random in-range value; executes after the timelock.
-                let key = self.rng.below(SETTING_COUNT as u64) as u8;
-                let k = SettingKey::from_index(key).unwrap();
+                let Ok(k) = SettingKey::from_index(self.rng.below(SETTING_COUNT as u64) as u8)
+                else {
+                    return ("propose_retired_setting", false, Did::Other);
+                };
+                let key = k.index() as u8;
                 let (lo, hi) = k.bounds();
                 let cur = self.env.setting(k);
                 let hi = if hi == i64::MAX {

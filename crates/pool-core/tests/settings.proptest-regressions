@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5f962f96fb6cfbc9ab5fc88fec43b418e70ae6f1900b96fc1f485bab47181fdc # shrinks to first = 0, lens = [508250, 1584977, 0], extra = [134216, 0, 0, 0], hack_near = 3, hack_off = 3234466, after = 0
+cc b0f0f644848ef1afdda36b21d2063640084e8f788b729a8882011023f1b58bbb # shrinks to idx = 11, value = 0

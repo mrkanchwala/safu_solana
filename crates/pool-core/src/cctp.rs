@@ -4,7 +4,7 @@
 //! (`safu_multichain/contracts/cctp-common`), read from plain bytes. Circle's own program checks
 //! the attestation and everything else in the message; SAFU reads only the fields it acts on.
 //!
-//! Decimals (KupiaSec #4): CCTP moves amounts at Circle's canonical 6 decimals. A local mint with
+//! Decimals: CCTP moves amounts at Circle's canonical 6 decimals. A local mint with
 //! fewer decimals than that cannot hold a canonical amount exactly, so [`bridge_scale`] refuses it
 //! instead of underflowing the scale.
 
@@ -33,17 +33,6 @@ pub const BURN_MESSAGE_VERSION: u32 = 1;
 /// Standard (finalized) transfer: outbound burns always use it.
 pub const FINALITY_STANDARD: u32 = 2000;
 
-/// Circle's MessageTransmitterV2 on Solana (`CCTPV2Sm4AdWt5296sk4P66VBZ7bEhcARwFaaS9YPbeC`, same on
-/// devnet and mainnet).
-pub const MESSAGE_TRANSMITTER_ID: [u8; 32] = [
-    166, 95, 200, 28, 225, 158, 220, 210, 210, 195, 64, 176, 47, 166, 27, 225, 213, 186, 221, 225,
-    89, 40, 51, 221, 249, 32, 9, 216, 207, 104, 84, 85,
-];
-/// Circle's TokenMessengerMinterV2 on Solana (`CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe`).
-pub const TOKEN_MESSENGER_MINTER_ID: [u8; 32] = [
-    166, 95, 200, 29, 15, 239, 168, 134, 12, 179, 184, 63, 8, 155, 2, 36, 190, 138, 102, 135, 183,
-    174, 73, 245, 148, 192, 185, 180, 215, 233, 56, 147,
-];
 /// Anchor discriminators of the Circle calls the pool makes (`sha256("global:<name>")[..8]`).
 pub const DISC_RECEIVE_MESSAGE: [u8; 8] = [38, 144, 127, 225, 31, 225, 238, 25];
 pub const DISC_DEPOSIT_FOR_BURN: [u8; 8] = [215, 60, 61, 46, 114, 55, 128, 176];
@@ -180,8 +169,8 @@ pub fn parse_inbound(msg: &[u8]) -> Option<InboundBurn> {
     })
 }
 
-/// Local base units per canonical unit. Refuses a local mint with fewer decimals than canonical
-/// (KupiaSec #4): the scale would underflow and amounts could not round-trip.
+/// Local base units per canonical unit. Refuses a local mint with fewer decimals than canonical:
+/// the scale would underflow and amounts could not round-trip.
 pub fn bridge_scale(local_decimals: u8, canonical_decimals: u8) -> Result<u64> {
     let gap = local_decimals
         .checked_sub(canonical_decimals)
@@ -283,13 +272,26 @@ pub fn forward_hook(key: &[u8; 32]) -> [u8; FORWARD_HOOK_LEN] {
 // (each signature works once) and an expiry, plus a hash of the exact call.
 
 /// Domain tag at the start of every signed action.
-pub const ACTION_DOMAIN: &[u8; 26] = b"SAFU_SOLANA_CCTP_ACTION_V1";
+pub const ACTION_DOMAIN: &[u8; 26] = b"SAFU_SOLANA_CCTP_ACTION_V2";
 /// Byte length of [`action_preimage`].
 pub const ACTION_PREIMAGE_LEN: usize = 26 + 32 + 1 + 32 + 8 + 8 + 32;
 /// EIP-191 prefix of a 32-byte message.
 pub const EIP191_PREFIX_32: &[u8; 28] = b"\x19Ethereum Signed Message:\n32";
 /// SEP-53 prefix (Stellar signed message).
 pub const SEP53_PREFIX: &[u8; 24] = b"Stellar Signed Message:\n";
+/// EVM `v` is 27/28 on the wire; the recovery id is `v - 27`.
+pub const EVM_V_OFFSET: u8 = 27;
+
+/// A Stellar owner signs the digest as lowercase hex text (SEP-53 signs text).
+pub fn hex_lower(bytes: &[u8; 32]) -> [u8; 64] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = [0u8; 64];
+    for (i, b) in bytes.iter().enumerate() {
+        out[2 * i] = HEX[usize::from(b >> 4)];
+        out[2 * i + 1] = HEX[usize::from(b & 15)];
+    }
+    out
+}
 
 /// What the owner's digest is `sha256` of.
 pub fn action_preimage(

@@ -12,7 +12,7 @@
 //! set at its first collection that day from the day's snapshot, so the order of calls does not
 //! matter. What a claim does not take stays vested for later days.
 //!
-//! Blocked time and the claim windows (rule 18): the approve and collection windows run on the claim
+//! Blocked time and the claim windows: the approve and collection windows run on the claim
 //! clock, `Pool::claim_clock(now, claim.blocked_mark)`, which does not count time the pool could not
 //! pay: paused, or a whole day on which a payout found it short of cash. The hack → submit window
 //! does not count pause time. The expiry sweeps are also refused while paused. So the pool's own
@@ -57,7 +57,6 @@ pub(crate) fn roll_day(pool: &mut Pool, now: i64) {
         pool.day = today;
         pool.day_admitted = 0;
         pool.day_oracle_count = 0;
-        pool.day_outflow = 0;
     }
 }
 
@@ -897,7 +896,7 @@ pub struct ClaimStream<'info> {
 }
 
 /// Pays what has vested, up to today's payout cap, to the beneficiary. Pulls from the venue first; if
-/// the pool still cannot pay, nothing is paid and today counts as a cash-short day (rule 18): it
+/// the pool still cannot pay, nothing is paid and today counts as a cash-short day: it
 /// is blocked time, so it extends the claim's windows, and the collection window restarts
 /// (multichain `claim_stream`). The staker tries again later.
 pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
@@ -959,7 +958,6 @@ pub fn claim_stream(ctx: &mut Context<ClaimStream>) -> Result<()> {
         claim.status = ClaimStatus::Completed;
     }
     release_allocation(pool, amount);
-    pool.day_outflow = add(pool.day_outflow, amount).core()?;
     emit!(ClaimStreamed {
         claim: claim_key,
         amount

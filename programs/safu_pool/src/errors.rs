@@ -38,8 +38,6 @@ pub enum PoolError {
     BeneficiaryIsAdmin,
     #[msg("Beneficiary cannot be the co-signer")]
     BeneficiaryIsCoSigner,
-    #[msg("No live stake")]
-    NoActiveStake,
     #[msg("Stake was forfeited to an approved claim")]
     StakeForfeited,
     #[msg("A claim is open on this stake")]

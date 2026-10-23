@@ -2,7 +2,7 @@
 //! `get_backer_points`, `get_backer_yield_owed`, `collectable_view`). Run them by simulation: each
 //! returns its answer as the instruction's return data and writes nothing.
 //!
-//! Pass the venue's reserve (optional) to count growth not yet harvested (rule 22): the views then
+//! Pass the venue's reserve (optional) to count growth not yet harvested: the views then
 //! answer as if `harvest` ran first, on the reserve as last refreshed.
 
 use anchor_lang::prelude::*;

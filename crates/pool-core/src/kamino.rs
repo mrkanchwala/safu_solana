@@ -12,12 +12,6 @@
 
 use crate::{to_u64, CoreError, Result};
 
-/// The klend program (mainnet). Same id in the SDK and as the owner of every reserve read above.
-pub const PROGRAM_ID: [u8; 32] = [
-    4, 178, 172, 177, 18, 88, 204, 227, 104, 44, 65, 139, 168, 114, 255, 61, 249, 17, 2, 113, 47,
-    21, 175, 18, 182, 190, 105, 179, 67, 91, 0, 8,
-];
-
 /// Lending-market authority PDA seed: `[LENDING_MARKET_AUTH_SEED, market]` under klend.
 pub const LENDING_MARKET_AUTH_SEED: &[u8] = b"lma";
 

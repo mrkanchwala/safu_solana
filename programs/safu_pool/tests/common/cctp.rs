@@ -164,7 +164,11 @@ pub fn seen(tx: &[Instruction], payer: &Pubkey, metas: &[AccountMeta]) -> Vec<Ac
 
 /// `instructions::cctp::call_hash` over metas.
 pub fn call_hash(data: &[u8], metas: &[AccountMeta]) -> [u8; 32] {
-    let mut parts: Vec<Vec<u8>> = vec![data.to_vec()];
+    let mut parts: Vec<Vec<u8>> = vec![
+        (data.len() as u32).to_le_bytes().to_vec(),
+        data.to_vec(),
+        vec![metas.len() as u8],
+    ];
     for m in metas {
         let mut p = m.pubkey.to_bytes().to_vec();
         p.push(u8::from(m.is_writable));
@@ -607,7 +611,18 @@ impl Cctp {
         event: &Keypair,
         nonce: u64,
     ) -> Vec<Instruction> {
-        let from = self.held(identity);
+        self.send_home_from_tx(owner, identity, event, nonce, self.held(identity))
+    }
+
+    /// Sends home from `from`, any USDC account the identity owns.
+    pub fn send_home_from_tx(
+        &self,
+        owner: &HomeKey,
+        identity: &Pubkey,
+        event: &Keypair,
+        nonce: u64,
+        from: Pubkey,
+    ) -> Vec<Instruction> {
         let hash = solana_sha256_hasher::hashv(&[
             <safu_pool::instruction::CctpSendHome as anchor_lang::Discriminator>::DISCRIMINATOR,
             from.as_ref(),

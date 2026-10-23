@@ -22,12 +22,17 @@ pub fn collateral_for(target: u64, book: u64, deployed: u64) -> Result<u64> {
     Ok(mul_div_ceil(target, deployed, book)?.min(deployed))
 }
 
-/// Collateral a harvest redeems: growth above book, capped by the daily growth limit, rounded down
-/// (never redeems more than the growth is worth).
-pub fn harvest_collateral(deployed: u64, book: u64, value: u64, elapsed_secs: i64) -> Result<u64> {
-    let growth = value
+/// Growth a harvest takes: value above book, capped by the daily growth limit.
+pub fn harvest_growth(book: u64, value: u64, elapsed_secs: i64) -> Result<u64> {
+    Ok(value
         .saturating_sub(book)
-        .min(yields::harvest_limit(book, elapsed_secs)?);
+        .min(yields::harvest_limit(book, elapsed_secs)?))
+}
+
+/// Collateral a harvest redeems: [`harvest_growth`] in collateral, rounded down (never redeems more
+/// than the growth is worth).
+pub fn harvest_collateral(deployed: u64, book: u64, value: u64, elapsed_secs: i64) -> Result<u64> {
+    let growth = harvest_growth(book, value, elapsed_secs)?;
     if growth == 0 || value == 0 {
         return Ok(0);
     }

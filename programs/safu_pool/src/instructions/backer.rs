@@ -14,7 +14,7 @@
 //!      pro-rata share (by what it is still owed) of that day's free capital, so collecting first
 //!      takes nothing from the others. A day on which open claims need every dollar pays nothing.
 //!
-//! Pause blocks new deposits only; request, cancel and collect still work (rule 3 still applies),
+//! Pause blocks new deposits only; request, cancel and collect still work (only free capital leaves),
 //! so a pause can never hold backer money.
 
 use anchor_lang::prelude::*;
@@ -123,7 +123,7 @@ pub(crate) fn add_backing(
         record.pending_count += 1;
         pool.total_backed_pending = add(pool.total_backed_pending, amount).core()?;
     }
-    crate::vault::mark_funded(pool)?;
+    crate::vault::mark_funded(pool, now);
     emit!(Backed {
         backer: record.backer,
         amount,
@@ -177,7 +177,7 @@ fn drip_days(pool: &Pool, util: u64) -> Result<u64> {
 }
 
 /// The limits on a collection now: what the drip has unlocked and not yet paid, this request's
-/// share of the day's free capital, live free capital (rule 3), and the snapshot's free capital.
+/// share of the day's free capital, live free capital, and the snapshot's free capital.
 struct Limits {
     due: u64,
     share: u64,
@@ -266,8 +266,8 @@ pub struct Back<'info> {
         bump,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it (rule 1:
-    /// only to the depositing address).
+    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it, and only
+    /// to it.
     #[account(
         mut,
         constraint = backer_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
@@ -362,7 +362,7 @@ pub struct BackerOnly<'info> {
     pub backer_record: Box<Account<'info, BackerRecord>>,
 }
 
-/// Opens a withdrawal of counted money; it keeps counting until paid (rule 2). The event carries an
+/// Opens a withdrawal of counted money; it keeps counting until paid. The event carries an
 /// estimate of the last drip day at today's utilisation. Works while paused.
 pub fn request_backer_withdrawal(
     ctx: &mut Context<RequestBackerWithdrawal>,
@@ -429,8 +429,8 @@ pub struct CompleteBackerWithdrawal<'info> {
         has_one = backer,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it (rule 1:
-    /// only to the depositing address).
+    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it, and only
+    /// to it.
     #[account(
         mut,
         constraint = backer_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
@@ -440,7 +440,7 @@ pub struct CompleteBackerWithdrawal<'info> {
     pub cash: Cash<'info>,
 }
 
-/// Collects what the drip allows today (rule 5), plus any unpaid yield. On failure nothing changes;
+/// Collects what the drip allows today, plus any unpaid yield. On failure nothing changes;
 /// the backer retries later. The request closes once all of it is paid. Works while paused.
 pub fn complete_backer_withdrawal(ctx: &mut Context<CompleteBackerWithdrawal>) -> Result<()> {
     let now = now()?;
@@ -452,9 +452,7 @@ pub fn complete_backer_withdrawal(ctx: &mut Context<CompleteBackerWithdrawal>) -
     let pay = collectable(pool, record, now)?;
 
     settle(pool, record, now)?;
-    let yield_paid = record.yield_owed.min(pool.backer_yield_reserved);
-    record.yield_owed -= yield_paid;
-    pool.backer_yield_reserved -= yield_paid;
+    let yield_paid = take_backer_yield(pool, record);
     record.amount = sub(record.amount, pay).core()?;
     record.withdraw_paid += pay;
     record.share_left -= pay;
@@ -474,9 +472,7 @@ pub fn complete_backer_withdrawal(ctx: &mut Context<CompleteBackerWithdrawal>) -
     money.pay(pool, &to, total, now)?;
     // Re-check that the capital that left was still free afterwards, or the whole payment reverts
     // (a venue withdrawal that books a loss must never let it pass).
-    let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
-    pool_core::check_capital_free(pool.total_allocated, capacity, 0).core()?;
-    Ok(())
+    super::stake::recheck_capital(pool)
 }
 
 #[derive(Accounts)]
@@ -494,8 +490,8 @@ pub struct ClaimBackerYield<'info> {
         has_one = backer,
     )]
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it (rule 1:
-    /// only to the depositing address).
+    /// The backer's USDC: deposits come from it and withdrawals and yield go back to it, and only
+    /// to it.
     #[account(
         mut,
         constraint = backer_usdc.mint == pool.usdc_mint @ PoolError::WrongMint,
@@ -503,6 +499,14 @@ pub struct ClaimBackerYield<'info> {
     )]
     pub backer_usdc: Box<Account<'info, TokenAccount>>,
     pub cash: Cash<'info>,
+}
+
+/// Takes the backer's unpaid yield off the books, as far as the reserve covers it; returns it.
+fn take_backer_yield(pool: &mut Pool, record: &mut BackerRecord) -> u64 {
+    let paid = record.yield_owed.min(pool.backer_yield_reserved);
+    record.yield_owed -= paid;
+    pool.backer_yield_reserved -= paid;
+    paid
 }
 
 /// Backer yield, any time, paused or not; principal untouched (multichain `claim_backer_yield`).
@@ -513,10 +517,8 @@ pub fn claim_backer_yield(ctx: &mut Context<ClaimBackerYield>) -> Result<()> {
     let record = &mut ctx.accounts.backer_record;
     money.harvest(pool, now)?;
     settle(pool, record, now)?;
-    let paid = record.yield_owed.min(pool.backer_yield_reserved);
+    let paid = take_backer_yield(pool, record);
     require!(paid > 0, PoolError::NothingToClaim);
-    record.yield_owed -= paid;
-    pool.backer_yield_reserved -= paid;
     emit!(YieldClaimed {
         owner: record.backer,
         amount: paid,

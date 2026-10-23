@@ -85,7 +85,7 @@ pub const SETTING_PAYOUT_MID_BPS: u8 = K::PayoutMidBps as u8;
 #[constant]
 pub const SETTING_PAYOUT_HIGH_BPS: u8 = K::PayoutHighBps as u8;
 #[constant]
-pub const SETTING_BACKER_NOTICE_SECS: u8 = K::BackerNoticeSecs as u8;
+pub const SETTING_RETIRED_11: u8 = K::Retired11 as u8;
 #[constant]
 pub const SETTING_BACKER_MATURITY_SECS: u8 = K::BackerMaturitySecs as u8;
 #[constant]
@@ -173,16 +173,18 @@ pub const SEED_WATCH: &[u8] = b"watch";
 /// account whose authority is the pool.
 #[constant]
 pub const SEED_LEG: &[u8] = b"leg";
-/// Kamino Lend (klend), the only yield venue program the pool calls.
+/// Kamino Lend (klend), the only yield venue program the pool calls (mainnet id; also the owner of
+/// every reserve the pool reads).
 #[constant]
-pub const KLEND_PROGRAM_ID: Pubkey = Pubkey::new_from_array(pool_core::kamino::PROGRAM_ID);
-/// Circle CCTP v2 (`pool_core::cctp`): stake and back from Ethereum and Stellar.
+pub const KLEND_PROGRAM_ID: Pubkey = pubkey!("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
+/// Circle CCTP v2 (`pool_core::cctp`): stake and back from Ethereum and Stellar. Same ids on devnet
+/// and mainnet.
 #[constant]
 pub const CCTP_MESSAGE_TRANSMITTER_ID: Pubkey =
-    Pubkey::new_from_array(pool_core::cctp::MESSAGE_TRANSMITTER_ID);
+    pubkey!("CCTPV2Sm4AdWt5296sk4P66VBZ7bEhcARwFaaS9YPbeC");
 #[constant]
 pub const CCTP_TOKEN_MESSENGER_MINTER_ID: Pubkey =
-    Pubkey::new_from_array(pool_core::cctp::TOKEN_MESSENGER_MINTER_ID);
+    pubkey!("CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe");
 /// Signs Circle's `receive_message` as the burn's `destinationCaller`: `[SEED_CCTP_AUTHORITY, pool]`.
 #[constant]
 pub const SEED_CCTP_AUTHORITY: &[u8] = b"cctp_authority";
@@ -264,6 +266,15 @@ pub const KLEND_RESERVE_PYTH: u64 = kamino::R_PYTH as u64;
 /// Watch-list places each upkeep checks.
 #[constant]
 pub const UPKEEP_WATCH_PER_CALL: u64 = p::UPKEEP_WATCH_PER_CALL as u64;
+/// `WatchEntry` only travels as an upkeep account, so Anchor leaves it out of the IDL's account
+/// types. Its layout, for clients: byte offsets of `claim`, `payer` and `done` after the 8-byte
+/// discriminator (`sha256("account:WatchEntry")[..8]`). A test below checks them against the struct.
+#[constant]
+pub const WATCH_ENTRY_CLAIM_AT: u64 = 8;
+#[constant]
+pub const WATCH_ENTRY_PAYER_AT: u64 = 40;
+#[constant]
+pub const WATCH_ENTRY_DONE_AT: u64 = 72;
 
 // Oracle approval domain tag (version it when the message layout or the entitlement unit changes).
 // USDC pool: entitlement in USDC base units, a new tag so no SOL-pool approval can ever match.
@@ -277,3 +288,40 @@ pub const CLUSTER_LOCALNET: u8 = 0;
 pub const CLUSTER_DEVNET: u8 = 1;
 #[constant]
 pub const CLUSTER_MAINNET: u8 = 2;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `pool_core::kamino::NULL_KEY` is raw bytes (pool-core has no chain dependencies).
+    #[test]
+    fn the_watch_entry_offsets_match_the_struct() {
+        let entry = crate::state::WatchEntry {
+            claim: Pubkey::new_from_array([1; 32]),
+            payer: Pubkey::new_from_array([2; 32]),
+            done: true,
+            bump: 9,
+        };
+        let mut data = Vec::new();
+        entry.try_serialize(&mut data).unwrap();
+        let at = |o: u64| o as usize;
+        assert_eq!(&data[..8], crate::state::WatchEntry::DISCRIMINATOR);
+        assert_eq!(
+            data[at(WATCH_ENTRY_CLAIM_AT)..at(WATCH_ENTRY_PAYER_AT)],
+            [1; 32]
+        );
+        assert_eq!(
+            data[at(WATCH_ENTRY_PAYER_AT)..at(WATCH_ENTRY_DONE_AT)],
+            [2; 32]
+        );
+        assert_eq!(data[at(WATCH_ENTRY_DONE_AT)], 1);
+    }
+
+    #[test]
+    fn the_klend_null_key_is_its_address() {
+        assert_eq!(
+            KLEND_NULL_KEY,
+            pubkey!("nu11111111111111111111111111111111111111111")
+        );
+    }
+}

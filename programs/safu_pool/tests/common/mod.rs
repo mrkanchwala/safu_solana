@@ -21,9 +21,9 @@ use safu_pool::constants::*;
 // Each test file uses a different subset.
 #[allow(unused_imports)]
 pub use pool_core::params::{
-    APPROVE_WINDOW_SECS, BACKER_MATURITY_SECS, BACKER_NOTICE_SECS, BACKER_YIELD_BPS,
-    COLLECTION_INACTIVITY_SECS, COOLDOWN_SECS, MAX_STAKE_BPS, MIN_STAKE_BPS, PAUSE_GAP_SECS,
-    PAUSE_MAX_SECS, STAKER_YIELD_BPS, VESTING_SECS,
+    APPROVE_WINDOW_SECS, BACKER_MATURITY_SECS, BACKER_YIELD_BPS, COLLECTION_INACTIVITY_SECS,
+    COOLDOWN_SECS, MAX_STAKE_BPS, MIN_STAKE_BPS, PAUSE_GAP_SECS, PAUSE_MAX_SECS, STAKER_YIELD_BPS,
+    VESTING_SECS,
 };
 use safu_pool::state::{BackerRecord, Claim, Pool, StakeRecord};
 use solana_account::Account;

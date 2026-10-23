@@ -123,7 +123,7 @@ fn settle_exit(
 }
 
 /// After the payment: the capital that left must still have been free (see `settle_exit`).
-fn recheck_capital(pool: &Pool) -> Result<()> {
+pub(crate) fn recheck_capital(pool: &Pool) -> Result<()> {
     let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, 0).core()
 }
@@ -189,7 +189,9 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
             PoolError::AlreadyStaked
         );
     }
+    // Unpaid yield, points and any suspension carry over to the new stake (all zero on a new record).
     let (yield_owed, points) = (record.yield_owed, record.points);
+    let (suspended, suspended_until) = (record.suspended, record.suspended_until);
     // Growth earned so far goes to the stakers who earned it, before this stake counts.
     money.harvest(pool, now)?;
     pool.points_checkpoint(STAKER, now).core()?;
@@ -209,7 +211,7 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
         penalty_locked_until: 0,
         forfeited: false,
         forfeited_by: None,
-        suspended: false,
+        suspended,
         tier_a_ratio: s.amount(SettingKey::TierARatio),
         tier_b_ratio: s.amount(SettingKey::TierBRatio),
         tier_c_ratio: s.amount(SettingKey::TierCRatio),
@@ -222,12 +224,12 @@ pub fn stake(ctx: &mut Context<Stake>, amount: u64, beneficiary: Pubkey) -> Resu
         points_index_at: pool.points_index[STAKER],
         claim_approved: false,
         bump: ctx.bumps.stake_record,
-        suspended_until: 0,
+        suspended_until,
         reserved: [0; 56],
     });
     pool.total_staked = pool_core::add(pool.total_staked, staked).core()?;
     pool.total_stakers = pool_core::add(pool.total_stakers, 1).core()?;
-    vault::mark_funded(pool)?;
+    vault::mark_funded(pool, now);
     emit!(Staked {
         staker,
         amount: staked

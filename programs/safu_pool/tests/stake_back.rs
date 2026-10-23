@@ -56,6 +56,22 @@ fn initialize_refuses_overlapping_roles() {
     }
 }
 
+/// The fast-clock demo build can never become a mainnet pool.
+#[test]
+fn a_demo_build_refuses_mainnet() {
+    let mut env = Env::uninitialized();
+    let admin = env.admin.insecure_clone();
+    let mut args = env.init_args();
+    args.cluster = CLUSTER_MAINNET;
+    let ix = env.init_ix(&admin.pubkey(), args, env.usdc_mint);
+    let res = env.send(&[ix], &[&admin]);
+    if DEMO_BUILD {
+        assert_err(res, PoolError::InvalidCluster);
+    } else {
+        res.unwrap();
+    }
+}
+
 #[test]
 fn initialize_refuses_unknown_cluster_and_tiny_cap() {
     let mut env = Env::uninitialized();
@@ -618,7 +634,7 @@ fn backer_withdrawal_request_rules() {
         env.send(&[req(&env, unit())], &[&b]),
         PoolError::BackerWithdrawalPending,
     );
-    // Still counted while it drips (rule 2).
+    // Still counted while it drips.
     let p = env.pool_state();
     assert_eq!((p.total_backed, p.total_backer_open), (2 * unit(), unit()));
     env.ok(&[cancel], &[&b]);
@@ -709,7 +725,7 @@ fn requests_share_the_days_free_capital_pro_rata_whatever_the_order() {
     let half = pool_core::drip::share(free, w, 2 * w).unwrap();
     assert_eq!(env.usdc(&b1.pubkey()) - u1, half);
     assert_eq!(env.usdc(&b2.pubkey()) - u2, half);
-    // And never more than was free (rule 3).
+    // And never more than was free.
     let p = env.pool_state();
     assert!(p.total_allocated <= p.total_staked + p.total_backed);
 }

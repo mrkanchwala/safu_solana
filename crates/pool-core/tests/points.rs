@@ -47,11 +47,26 @@ fn the_reserve_covers_only_small_gaps_it_can_afford() {
 #[test]
 fn upkeep_checks_from_the_cursor_and_wraps_to_the_head() {
     use pool_core::upkeep::watch_places;
-    assert_eq!(watch_places(3, 3, 0), [None, None]);
-    assert_eq!(watch_places(3, 4, 9), [Some(3), None]);
-    assert_eq!(watch_places(3, 6, 4), [Some(4), Some(5)]);
-    assert_eq!(watch_places(3, 6, 5), [Some(5), Some(3)]);
-    // A cursor left behind the head or past the tail starts again at the head.
-    assert_eq!(watch_places(3, 6, 1), [Some(3), Some(4)]);
-    assert_eq!(watch_places(3, 6, 6), [Some(3), Some(4)]);
+    let cases = include_str!("vectors/watch_places.txt")
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'));
+    let mut n = 0;
+    for line in cases {
+        let (input, want) = line.split_once(':').unwrap();
+        let v: Vec<u64> = input
+            .split_whitespace()
+            .map(|x| x.parse().unwrap())
+            .collect();
+        let want: Vec<u64> = want
+            .split_whitespace()
+            .map(|x| x.parse().unwrap())
+            .collect();
+        let got: Vec<u64> = watch_places(v[0], v[1], v[2])
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(got, want, "{line}");
+        n += 1;
+    }
+    assert!(n >= 7);
 }

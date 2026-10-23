@@ -1,5 +1,5 @@
 //! The yield leg's arithmetic: reading a klend reserve, the checks made before every call, how much
-//! collateral a payment or a harvest takes, and rule 18's cash-short days. The same reserve against
+//! collateral a payment or a harvest takes, and the cash-short days. The same reserve against
 //! the real klend program: `programs/safu_pool/tests/kamino.rs`.
 
 use pool_core::kamino::*;
@@ -269,5 +269,23 @@ proptest! {
         let c = harvest_collateral(deployed, book, value, elapsed).unwrap();
         let worth = c as u128 * value as u128 / deployed as u128;
         prop_assert!(worth <= growth as u128);
+    }
+}
+
+proptest! {
+    /// What `harvestable` shows is the growth `harvest` redeems for, never less than it pays.
+    #[test]
+    fn harvestable_matches_what_harvest_redeems(
+        deployed in 1u64..1_000_000_000_000,
+        book in 1u64..1_000_000_000_000,
+        extra in 0u64..1_000_000_000,
+        elapsed in 0i64..10 * SECONDS_PER_DAY,
+    ) {
+        let value = book.saturating_add(extra);
+        let growth = harvest_growth(book, value, elapsed).unwrap();
+        let c = harvest_collateral(deployed, book, value, elapsed).unwrap();
+        let worth = (c as u128 * value as u128 / deployed as u128) as u64;
+        prop_assert!(worth <= growth);
+        prop_assert!(growth - worth <= value / deployed + 1);
     }
 }

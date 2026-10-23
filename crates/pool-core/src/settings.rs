@@ -52,8 +52,9 @@ pub enum SettingKey {
     PayoutLowBps = 8,
     PayoutMidBps = 9,
     PayoutHighBps = 10,
-    /// Notice between a backer's withdrawal request and completion.
-    BackerNoticeSecs = 11,
+    /// Unused: the backer notice, replaced by the daily drip. Kept so the slot numbers match
+    /// multichain; no proposal can name it.
+    Retired11 = 11,
     /// Most USDC all stakes together may hold, in USDC base units. Raised through this timelock;
     /// lowered at once by the admin (`lower_pool_cap`, a safety brake).
     PoolCap = 12,
@@ -102,7 +103,7 @@ impl SettingKey {
         SettingKey::PayoutLowBps,
         SettingKey::PayoutMidBps,
         SettingKey::PayoutHighBps,
-        SettingKey::BackerNoticeSecs,
+        SettingKey::Retired11,
         SettingKey::PoolCap,
         SettingKey::BackerYieldBps,
         SettingKey::PauseMaxSecs,
@@ -121,11 +122,12 @@ impl SettingKey {
         SettingKey::PointsRateBacker,
     ];
 
-    /// The key in slot `index`; an unused slot is an error.
+    /// The key in slot `index`; an unused or retired slot is an error.
     pub fn from_index(index: u8) -> Result<Self> {
         Self::ALL
             .get(index as usize)
             .copied()
+            .filter(|k| *k != SettingKey::Retired11)
             .ok_or(CoreError::UnknownSetting)
     }
 
@@ -153,7 +155,7 @@ impl SettingKey {
             SettingKey::PayoutLowBps | SettingKey::PayoutMidBps | SettingKey::PayoutHighBps => {
                 (1, 600)
             }
-            SettingKey::BackerNoticeSecs => (0, clock(90 * DAY, HOUR)),
+            SettingKey::Retired11 => (0, 0),
             SettingKey::PoolCap => (1, i64::MAX),
             SettingKey::PauseMaxSecs => (clock(DAY, MIN), 30 * DAY),
             SettingKey::PauseGapSecs => (30 * DAY, 90 * DAY),
@@ -226,7 +228,7 @@ impl Settings {
                 SettingKey::PayoutLowBps => PAYOUT_LOW_BPS as i64,
                 SettingKey::PayoutMidBps => PAYOUT_MID_BPS as i64,
                 SettingKey::PayoutHighBps => PAYOUT_HIGH_BPS as i64,
-                SettingKey::BackerNoticeSecs => BACKER_NOTICE_SECS,
+                SettingKey::Retired11 => 0,
                 SettingKey::PoolCap => i64::try_from(pool_cap).map_err(|_| CoreError::Overflow)?,
                 SettingKey::BackerYieldBps => BACKER_YIELD_BPS as i64,
                 SettingKey::PauseMaxSecs => PAUSE_MAX_SECS,
@@ -395,7 +397,7 @@ pub fn pause_gap_passed(now: i64, started_at: i64, until: i64, gap: i64) -> bool
     started_at == 0 || now > until.saturating_add(gap)
 }
 
-/// Time the pool could not pay, as of now (rule 18, multichain `get_blocked_secs`): seconds paused
+/// Time the pool could not pay, as of now (multichain `get_blocked_secs`): seconds paused
 /// plus one whole day for every day a payout found the pool short of cash. Only differences of it are
 /// used (a claim window adds back what it grew by since the window started), so it never resets.
 pub fn blocked_secs(paused_secs: i64, cash_short_days: u64) -> i64 {

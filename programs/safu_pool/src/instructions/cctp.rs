@@ -14,7 +14,7 @@
 //!    address. Stellar: through Circle's CctpForwarder to the owner's `G...` wallet.
 //!
 //! Money leaves an owner's account only into the pool or home to the owner: no call takes a
-//! destination, and a stake's beneficiary must be the identity (multichain security review H-1).
+//! destination, and a stake's beneficiary must be the identity.
 //!
 //! Owner signatures (`pool_core::cctp::action_preimage`): the owner signs a 32-byte digest.
 //! - Ethereum: `personal_sign` of the 32 bytes, checked by secp256k1 recovery.
@@ -158,7 +158,7 @@ fn authorize(
         (c::domain::ETHEREUM, OwnerSignature::Evm(sig)) => {
             let message = solana_keccak_hasher::hashv(&[c::EIP191_PREFIX_32, &digest]).to_bytes();
             let v = sig[64];
-            let recovery = v.checked_sub(EVM_V_OFFSET).unwrap_or(v);
+            let recovery = v.checked_sub(c::EVM_V_OFFSET).unwrap_or(v);
             require!(recovery <= 1, PoolError::CctpBadSignature);
             let key = solana_secp256k1_recover::secp256k1_recover(&message, recovery, &sig[..64])
                 .map_err(|_| PoolError::CctpBadSignature)?;
@@ -169,7 +169,7 @@ fn authorize(
             );
         }
         (c::domain::STELLAR, OwnerSignature::Stellar) => {
-            let text = hex_lower(&digest);
+            let text = c::hex_lower(&digest);
             let message = solana_sha256_hasher::hashv(&[c::SEP53_PREFIX, &text]).to_bytes();
             // Any failure (no precompile, other key, other message) is the same answer here.
             verify_preceding_ed25519(
@@ -188,24 +188,17 @@ fn authorize(
     Ok(())
 }
 
-/// EVM `v` is 27/28 on the wire; the recovery id is `v - 27`.
-const EVM_V_OFFSET: u8 = 27;
-
-fn hex_lower(bytes: &[u8; 32]) -> [u8; 64] {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = [0u8; 64];
-    for (i, b) in bytes.iter().enumerate() {
-        out[2 * i] = HEX[usize::from(b >> 4)];
-        out[2 * i + 1] = HEX[usize::from(b & 15)];
-    }
-    out
-}
-
-/// What the owner signs for a pool call: its data, then each account's key, writable and signer
-/// flags, in order.
-pub fn call_hash(data: &[u8], accounts: &[AccountInfo]) -> [u8; 32] {
-    let mut parts: Vec<Vec<u8>> = Vec::with_capacity(accounts.len() + 1);
+/// What the owner signs for a pool call: the data's length (u32 LE) and bytes, the number of
+/// accounts (u8), then each account's key, writable and signer flags, in order. The lengths fix where
+/// the data ends and the accounts begin, so a signature cannot be re-split into other data and other
+/// accounts.
+pub fn call_hash(data: &[u8], accounts: &[AccountInfo]) -> Result<[u8; 32]> {
+    let data_len = u32::try_from(data.len()).map_err(|_| PoolError::CctpCallNotAllowed)?;
+    let count = u8::try_from(accounts.len()).map_err(|_| PoolError::CctpCallNotAllowed)?;
+    let mut parts: Vec<Vec<u8>> = Vec::with_capacity(accounts.len() + 3);
+    parts.push(data_len.to_le_bytes().to_vec());
     parts.push(data.to_vec());
+    parts.push(vec![count]);
     for a in accounts {
         let mut p = a.key().to_bytes().to_vec();
         p.push(u8::from(a.is_writable));
@@ -213,7 +206,7 @@ pub fn call_hash(data: &[u8], accounts: &[AccountInfo]) -> [u8; 32] {
         parts.push(p);
     }
     let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
-    solana_sha256_hasher::hashv(&refs).to_bytes()
+    Ok(solana_sha256_hasher::hashv(&refs).to_bytes())
 }
 
 // --- inbox ----------------------------------------------------------------------------------------
@@ -559,7 +552,7 @@ pub fn cctp_act<'info>(
     let signed = accounts
         .get(..usize::from(signed_accounts))
         .ok_or(PoolError::CctpCallNotAllowed)?;
-    let hash = call_hash(&data, signed);
+    let hash = call_hash(&data, signed)?;
     let account_key = ctx.accounts.account.key();
     let account = &mut ctx.accounts.account;
     authorize(
@@ -692,8 +685,14 @@ pub fn cctp_send_home(
     let scale = c::bridge_scale(a.usdc_mint.decimals, c::CANONICAL_DECIMALS).core()?;
     let amount = c::bridgeable(a.from.amount, scale).core()?;
     require!(amount > 0, PoolError::CctpNothingToSend);
+    // Only the held account's USDC is waiting to be deployed; emptying another one leaves it waiting.
+    let held =
+        Pubkey::find_program_address(&[SEED_CCTP_HELD, a.identity.key().as_ref()], &crate::ID).0;
+    let from_held = a.from.key() == held;
     let account = &mut a.account;
-    account.to_deploy = 0;
+    if from_held {
+        account.to_deploy = 0;
+    }
 
     let domain = account.home_domain;
     let mut data = Vec::new();

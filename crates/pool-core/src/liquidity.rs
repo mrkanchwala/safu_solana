@@ -27,9 +27,9 @@ pub fn buffer(capacity: u64, deploy_bps: u64) -> Result<u64> {
     apply_bps(capacity, sub(BPS_DENOMINATOR, deploy_bps)?)
 }
 
-/// Idle USDC to deploy now: free liquid above open claims, up to the `deploy_bps` line, and only
-/// once it is at least `AUTO_PUSH_MIN_BPS` of capacity (so small stakes don't each pay for a CPI).
-pub fn push_amount(
+/// Idle USDC the pool could deploy: free liquid above open claims, up to the `deploy_bps` line.
+/// The keeper deploys all of it; `push_amount` adds a minimum size.
+pub fn deploy_room(
     free_liquid: u64,
     total_allocated: u64,
     capacity: u64,
@@ -38,7 +38,25 @@ pub fn push_amount(
 ) -> Result<u64> {
     let idle = free_liquid.saturating_sub(total_allocated);
     let room = apply_bps(capacity, deploy_bps)?.saturating_sub(deployed_book);
-    let amount = idle.min(room);
+    Ok(idle.min(room))
+}
+
+/// Idle USDC to deploy now: [`deploy_room`], once it is at least `AUTO_PUSH_MIN_BPS` of capacity (so
+/// small stakes don't each pay for a CPI).
+pub fn push_amount(
+    free_liquid: u64,
+    total_allocated: u64,
+    capacity: u64,
+    deployed_book: u64,
+    deploy_bps: u64,
+) -> Result<u64> {
+    let amount = deploy_room(
+        free_liquid,
+        total_allocated,
+        capacity,
+        deployed_book,
+        deploy_bps,
+    )?;
     if amount == 0 || amount < apply_bps(capacity, AUTO_PUSH_MIN_BPS)? {
         return Ok(0);
     }

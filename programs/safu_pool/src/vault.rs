@@ -67,15 +67,10 @@ pub fn token_amount(account: &AccountInfo) -> Result<u64> {
     Ok(TokenAccount::try_deserialize(&mut &data[..])?.amount)
 }
 
-/// USDC in the vault.
-pub fn liquid_balance(vault: &AccountInfo) -> Result<u64> {
-    token_amount(vault)
-}
-
 /// Cash the pool can spend: liquid USDC minus the rounding reserve. Unpaid yield is pool cash.
 pub fn free_liquid(pool: &Pool, vault: &AccountInfo) -> Result<u64> {
     Ok(liquidity::free_liquid(
-        liquid_balance(vault)?,
+        token_amount(vault)?,
         pool.rounding_reserve,
     ))
 }
@@ -91,11 +86,10 @@ pub fn require_free_liquid(pool: &Pool, vault: &AccountInfo, amount: u64) -> Res
 
 /// The first stake or backing ends governance's no-wait setup window. Stake and back call it; a
 /// rounding-reserve top-up does not (that money is never pool capital).
-pub fn mark_funded(pool: &mut Pool) -> Result<()> {
+pub fn mark_funded(pool: &mut Pool, now: i64) {
     if pool.funded_at == 0 {
-        pool.funded_at = crate::instructions::now()?;
+        pool.funded_at = now;
     }
-    Ok(())
 }
 
 /// USDC in, from a token account its owner signs for.

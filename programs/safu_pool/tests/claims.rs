@@ -888,7 +888,7 @@ fn claims_share_the_days_cap_pro_rata_whatever_the_order() {
 
 #[test]
 fn stream_short_of_cash_pays_nothing_and_counts_the_day() {
-    // Rule 18 (multichain `claim_stream`): no payment, the day counts once as blocked time.
+    // Cash short (multichain `claim_stream`): no payment, the day counts once as blocked time.
     let (mut env, s) = setup();
     active(&mut env, &s);
     env.warp(COOLDOWN_SECS + VESTING_SECS);
@@ -1094,6 +1094,23 @@ fn suspend_refused_on_a_forfeited_stake_without_a_claim() {
     let admin = env.admin.insecure_clone();
     let ix = env.suspend_ix(&s.pubkey(), None, true);
     assert_err(env.send(&[ix], &[&admin]), PoolError::StakeForfeited);
+}
+
+/// Taking the whole stake out and staking again does not clear a suspension.
+#[test]
+fn a_restake_keeps_the_suspension() {
+    let (mut env, s) = setup();
+    let admin = env.admin.insecure_clone();
+    let ix = env.suspend_ix(&s.pubkey(), None, true);
+    env.ok(&[ix], &[&admin]);
+    let until = env.stake_state(&s.pubkey()).suspended_until;
+    let w = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    env.ok(&[w], &[&s]);
+    let st = env.stake_ix(&s.pubkey(), bounds().1, s.pubkey());
+    env.ok(&[st], &[&s]);
+    let rec = env.stake_state(&s.pubkey());
+    assert!(rec.suspended);
+    assert_eq!(rec.suspended_until, until);
 }
 
 /// The admin's suspension lapses on its own, and the claim's window then runs from its end: a hold

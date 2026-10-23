@@ -44,7 +44,12 @@ fn pause_gap_default_is_the_filing_window_on_both_builds() {
 fn slot_numbers_are_stable_and_unused_slots_are_refused() {
     for (i, key) in SettingKey::ALL.iter().enumerate() {
         assert_eq!(key.index(), i);
-        assert_eq!(SettingKey::from_index(i as u8), Ok(*key));
+        let want = if *key == SettingKey::Retired11 {
+            Err(CoreError::UnknownSetting)
+        } else {
+            Ok(*key)
+        };
+        assert_eq!(SettingKey::from_index(i as u8), want);
     }
     assert_eq!(
         SettingKey::from_index(SETTING_COUNT as u8),
@@ -439,7 +444,7 @@ proptest! {
     #[test]
     fn no_value_outside_the_bounds_is_ever_accepted(idx in 0u8..SETTING_COUNT as u8, value in any::<i64>()) {
         let s = defaults();
-        let key = SettingKey::from_index(idx).unwrap();
+        let key = SettingKey::ALL[usize::from(idx)];
         let (min, max) = key.bounds();
         if s.check_value(key, value).is_ok() {
             prop_assert!(value >= min && value <= max);

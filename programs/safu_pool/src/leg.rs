@@ -85,10 +85,12 @@ pub fn harvestable(pool: &Pool, reserve: &pool_core::kamino::Reserve, now: i64) 
         return Ok(0);
     }
     let value = reserve.liquidity_for(pool.deployed_collateral).core()?;
-    let elapsed = now.saturating_sub(pool.last_harvest_at);
-    Ok(value
-        .saturating_sub(pool.deployed_book)
-        .min(yields::harvest_limit(pool.deployed_book, elapsed).core()?))
+    lg::harvest_growth(
+        pool.deployed_book,
+        value,
+        now.saturating_sub(pool.last_harvest_at),
+    )
+    .core()
 }
 
 fn capacity(pool: &Pool) -> Result<u64> {
@@ -97,7 +99,7 @@ fn capacity(pool: &Pool) -> Result<u64> {
 
 /// Shared accounting for every deposit.
 fn record_deposit(pool: &mut Pool, amount: u64, collateral: u64, now: i64, kind: u8) -> Result<()> {
-    // CSO M2: the harvest growth limit's clock starts with the first money deployed.
+    // The harvest growth limit's clock starts with the first money deployed.
     if pool.last_harvest_at == 0 {
         pool.last_harvest_at = now.max(1);
     }
@@ -187,10 +189,10 @@ impl<'a, 'info> Money<'a, 'info> {
     /// Redeems `collateral` (already checked to go through); returns the USDC that arrived.
     fn redeem(&mut self, pool: &Pool, collateral: u64) -> Result<u64> {
         let (pool_info, vault, cash) = (self.pool_info.clone(), self.vault.clone(), self.cash);
-        let before = vault::liquid_balance(&vault)?;
+        let before = vault::token_amount(&vault)?;
         self.leg()?
             .redeem(pool, &pool_info, cash, &vault, collateral)?;
-        sub(vault::liquid_balance(&vault)?, before).core()
+        sub(vault::token_amount(&vault)?, before).core()
     }
 
     /// After USDC comes in (stake, back, maturing backing): deposits idle cash above what live
@@ -283,7 +285,7 @@ impl<'a, 'info> Money<'a, 'info> {
         {
             return Ok(0);
         }
-        // CSO M2: the growth limit's clock starts at the first attempt and moves only when a harvest
+        // The growth limit's clock starts at the first attempt and moves only when a harvest
         // goes through, so frequent callers cannot starve it.
         if pool.last_harvest_at == 0 {
             pool.last_harvest_at = now.max(1);
@@ -331,11 +333,14 @@ impl<'a, 'info> Money<'a, 'info> {
     /// no minimum size. Refuses while paused, or if the reserve would refuse.
     pub fn keeper_deploy(&mut self, pool: &mut Pool, now: i64) -> Result<u64> {
         require!(!pool.is_paused(now), PoolError::Paused);
-        let idle = vault::free_liquid(pool, &self.vault)?.saturating_sub(pool.total_allocated);
-        let room = pool_core::apply_bps(capacity(pool)?, pool.deploy_bps)
-            .core()?
-            .saturating_sub(pool.deployed_book);
-        let amount = idle.min(room);
+        let amount = liquidity::deploy_room(
+            vault::free_liquid(pool, &self.vault)?,
+            pool.total_allocated,
+            capacity(pool)?,
+            pool.deployed_book,
+            pool.deploy_bps,
+        )
+        .core()?;
         let leg = self.leg()?;
         if amount == 0 {
             return Ok(0);
@@ -373,9 +378,7 @@ impl<'a, 'info> Money<'a, 'info> {
             PoolError::NothingDeployed
         );
         let collateral =
-            pool_core::mul_div_floor(shortfall, pool.deployed_collateral, pool.deployed_book)
-                .core()?
-                .min(pool.deployed_collateral);
+            lg::collateral_for(shortfall, pool.deployed_book, pool.deployed_collateral).core()?;
         self.redeem_checked(pool, collateral, None, now, LEG_KEEPER_REBALANCE)
     }
 

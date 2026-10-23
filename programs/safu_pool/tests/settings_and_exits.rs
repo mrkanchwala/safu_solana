@@ -231,12 +231,18 @@ fn a_new_proposal_drops_the_earlier_approval_and_clock() {
 fn values_outside_the_range_and_unused_slots_are_refused() {
     let mut env = Env::new();
     let admin = env.admin.insecure_clone();
-    for key in K::ALL {
+    for key in K::ALL.into_iter().filter(|k| *k != K::Retired11) {
         let (min, _) = key.bounds();
         let ix = env.propose_ix(key as u8, min - 1);
         assert_err(env.send(&[ix], &[&admin]), PoolError::SettingOutOfBounds);
     }
-    for slot in [SETTING_COUNT as u8, SETTING_SLOTS - 1, 255] {
+    // The retired slot (the old backer notice) takes no proposal at all.
+    for slot in [
+        K::Retired11 as u8,
+        SETTING_COUNT as u8,
+        SETTING_SLOTS - 1,
+        255,
+    ] {
         let ix = env.propose_ix(slot, 1);
         assert_err(env.send(&[ix], &[&admin]), PoolError::UnknownSetting);
     }

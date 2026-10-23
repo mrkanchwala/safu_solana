@@ -1,4 +1,4 @@
-//! Stake bounds, capacity, backer rule 3, yield split and liquidity lines.
+//! Stake bounds, capacity, backer free capital, yield split and liquidity lines.
 
 use pool_core::params::*;
 use pool_core::settings::Settings;
@@ -139,6 +139,11 @@ fn buffer_and_push_lines() {
         Ok(USDC)
     );
     assert_eq!(liquidity::free_liquid(5, 7), 0);
+    // The keeper deploys below the push minimum; the room is the same line.
+    assert_eq!(
+        liquidity::deploy_room(USDC / 20, 0, 10 * USDC, 0, MAX_DEPLOY_BPS),
+        Ok(USDC / 20)
+    );
 }
 
 proptest! {

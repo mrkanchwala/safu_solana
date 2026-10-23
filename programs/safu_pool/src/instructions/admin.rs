@@ -6,7 +6,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use super::now;
-use crate::constants::{CLUSTER_MAINNET, SEED_GOVERNANCE, SEED_POOL, SEED_VAULT};
+use crate::constants::{CLUSTER_MAINNET, DEMO_BUILD, SEED_GOVERNANCE, SEED_POOL, SEED_VAULT};
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::{PausedUntil, PoolCapLowered, PoolInitialized, Unpaused};
 use crate::state::{Governance, Pool, ACCOUNT_VERSION};
@@ -69,6 +69,11 @@ pub fn initialize(ctx: Context<Initialize>, args: InitArgs) -> Result<()> {
     super::governance::check_roles_distinct(&admin, &args.co_signer, &args.guardian, &args.oracle)
         .map_err(|_| error!(PoolError::RoleCollision))?;
     require!(args.cluster <= CLUSTER_MAINNET, PoolError::InvalidCluster);
+    // The fast-clock build shortens every time lock: it can never be a mainnet pool.
+    require!(
+        !DEMO_BUILD || args.cluster != CLUSTER_MAINNET,
+        PoolError::InvalidCluster
+    );
     require!(
         ctx.accounts.usdc_mint.decimals == USDC_DECIMALS,
         PoolError::WrongMint

@@ -206,7 +206,6 @@ pub struct Pool {
     pub day: i64,
     pub day_admitted: u64,
     pub day_oracle_count: u64,
-    pub day_outflow: u64,
     /// Backer money requested out and not yet paid (it still counts toward capacity until paid).
     pub total_backer_open: u64,
     /// The backer drip's day snapshot, taken at the day's first backer exit action: free capital,
@@ -238,14 +237,14 @@ pub struct Pool {
     /// Venue collateral the pool holds, on the books (a donation to the collateral account is not
     /// counted).
     pub deployed_collateral: u64,
-    /// Days a claim payout found the pool short of cash (rule 18), and the last one counted.
+    /// Days a claim payout found the pool short of cash, and the last one counted.
     pub cash_short_days: u64,
     pub last_cash_short_day: i64,
     /// Circle's CctpForwarder on Stellar (contract id): payouts to a Stellar CCTP owner go through it
     /// (`pool_core::cctp::forward_hook`). Deploy config, fixed at `initialize`.
     pub stellar_forwarder: [u8; 32],
     /// Room for fields a later upgrade adds.
-    pub reserved: [u8; 200], // hardcode-ok: spare layout bytes, not a rule
+    pub reserved: [u8; 208], // hardcode-ok: spare layout bytes, not a rule
 }
 
 impl Pool {
@@ -276,7 +275,7 @@ impl Pool {
         )
     }
 
-    /// Time the pool could not pay, as of `now` (rule 18): paused seconds plus cash-short days.
+    /// Time the pool could not pay, as of `now`: paused seconds plus cash-short days.
     pub fn blocked_secs(&self, now: i64) -> i64 {
         settings::blocked_secs(self.paused_secs_at(now), self.cash_short_days)
     }
