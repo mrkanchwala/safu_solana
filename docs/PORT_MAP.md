@@ -12,11 +12,10 @@ form differs (reason given). **Left out** = not in this build.
 | Multichain | Solana | Kind | Note |
 |---|---|---|---|
 | `__constructor` | `initialize` | Changed | Also takes the USDC mint (classic SPL Token, checked) and the cluster tag; opens the vault. No yield venue: governance sets one later. Pool cap from `config/pool.devnet.json`; every other setting starts at its `params.rs` default. |
-| settings (`propose_setting` … timers, cap, outflow) | `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` | Changed | 19 settings, each by slot number (`SETTING_*` in the IDL): stake min/max, yield split, cooldown, vesting, admit + payout bands, backer notice, maturity, pause max + gap, approve + inactivity windows, pool cap. Admin proposes, co-signer approves the same value, anyone executes after `SETTINGS_TIMELOCK_SECS` (7 days, demo 5 min). Hard ranges (`pool_core::settings`) and the order between settings (min ≤ max, low ≥ mid ≥ high, pause max ≤ pause gap) are checked at proposal and again at execution. 32 slots, 13 spare. Stored inside `Pool`, so no extra account in any instruction. Every read goes through `Pool::settings()`, the one hook for a future self-managing mode. Multichain only lets timers, cap and outflow change. |
-| `propose_change` / `approve_change` / `propose_recovery` / `cancel_change` / `execute_change` / `get_pending_change` | none | Left out | Governance 2-of-3 + 90-day recovery. Admin + co-signer override kept. Stretch item. |
-| `get_admin` / `get_co_signer` / `get_oracle` / `get_guardian` / `get_paused_until` | `Pool` account fields | Changed | Reads are account fetches on Solana. No guardian (came with governance). |
-| `set_pool_cap` | none (`PoolCap` setting) | Changed | Through the settings timelock, up or down. Lowering it never touches money already in; it only blocks new stake above it. |
-| `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` / `get_setting` / `get_pending_setting` | none | Left out | Settings timelock. Values are constants in `params.rs`; returns with governance. |
+| `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` / `get_setting` / `get_pending_setting` | `propose_setting` / `approve_setting` / `execute_setting` / `cancel_setting` (reads: `Pool` fields) | Changed | 28 settings, each by slot number (`SETTING_*` in the IDL; slot 11 retired): stake min/max, staker and backer yield split, cooldown, vesting, admit + payout bands, pool cap, pause max + gap, tier A/B/C ratios, time gate, claim, approve and inactivity windows, backer maturity, drip min/max, points rates. Admin proposes, co-signer approves the same value, anyone executes after `SETTINGS_TIMELOCK_SECS` (7 days, demo 5 min); either signer cancels. Hard ranges (`pool_core::settings`) and the order between settings (min ≤ max, low ≥ mid ≥ high, pause max ≤ pause gap) are checked at proposal and again at execution. 32 slots, 4 spare. Stored inside `Pool`, so no extra account in any instruction. Every read goes through `Pool::settings()`. |
+| `propose_change` / `approve_change` / `propose_recovery` / `cancel_change` / `execute_change` / `get_pending_change` | same (reads: `Governance` account) | Rules | Three roles (admin, co-signer, guardian), each meant to be a Squads 2-of-3 vault. One role proposes, a second approves, `GOV_DELAY_SECS` (7 days) in public, then anyone executes; cancelling also takes two roles. The role being replaced never counts. Recovery: the one role left proposes alone, waits `RECOVERY_DELAY_SECS` (90 days), any other working role can cancel. Covers the three roles, oracle, yield venue, treasury, deploy share and registry writer. Pending changes live in a zero-copy `Governance` PDA `[governance, pool]`. |
+| `get_admin` / `get_co_signer` / `get_oracle` / `get_guardian` / `get_paused_until` | `Pool` account fields | Changed | Reads are account fetches on Solana. Admin, co-signer, guardian and oracle must be four different keys. |
+| `set_pool_cap` | `PoolCap` setting (up or down) + `lower_pool_cap` (admin, down only, at once) | Changed | Raising goes through the settings timelock; `lower_pool_cap` is the admin's immediate brake. Lowering never touches money already in; it only blocks new stake above it. |
 | `pause` / `unpause` | `pause` / `unpause` | Changed | Pause expires after the `PauseMaxSecs` setting. **No pause while paused, and a gap** (more than `PauseGapSecs` after the last pause ended; 30 days on both builds, never below the 30-day filing window and never shorter than `PauseMaxSecs`) after the last pause ends (stops back-to-back pauses). **Paused time does not count** against a claim's approve, inactivity or hack-time window (`paused_before` + `pause_mark` per claim); expiry sweeps are refused while paused. Multichain has neither (flagged). |
 | `suspend_stake` / `renew_suspension` / `unsuspend_stake` | same | Rules | The admin alone suspends for `SUSPEND_MAX_SECS` (30 days), then it lapses; again within that length after it ends needs the co-signer or guardian too (`renew_suspension`). Claim windows never start before the last suspension ended. Unsuspend ends it now and restarts the approve / collection clock. |
 | `stake` | `stake` | Rules | USDC. Bounds = bps of pool cap (`MIN_STAKE_BPS`–`MAX_STAKE_BPS`: $10–$100 at the $100,000 cap); a deposit above the max becomes backing in the same transfer. `StakeRecord` PDA `[stake, pool, staker]`. |
@@ -29,13 +28,16 @@ form differs (reason given). **Left out** = not in this build.
 | `revoke_approval` | `revoke_approval` | Changed | `RevokedApproval` PDA per payload hash, permanent (no TTL problem). `submit_claim` treats an approval as revoked only when that PDA is owned by this program: SOL sent to the address does not block it. |
 | `unlock_pending_claim` | same | Rules | |
 | `try_release_queued_claim` / `expire_queued_claim` | same | Rules | Permissionless. |
-| `approve_claim` | same | Rules | Staker signs. No points burn (points left out). |
+| `approve_claim` | same | Rules | Staker signs. The stake's points are burned at approval, as multichain. |
+| `skip_head` path | `advance_queue` | Rules | Permissionless: moves the claim line past a head that can no longer be paid. Refused while paused. |
 | `expire_pending_approval` / `expire_stale_claim` | same | Rules | Permissionless. |
 | `claim_stream` | `claim_stream` | Changed | Pays the stored beneficiary. If free USDC is short, redeems from Kamino first. If the pool still cannot pay, it pays nothing, counts the day as a cash-short day (rule 18: blocked time, extends every claim window, once per day) and restarts this claim's collection window, as multichain. Other payouts (withdraw, emergency exit, backer withdrawal, yield claims, treasury) pull the same way and refuse with `InsufficientLiquidity` if still short. |
 | `cancel_claim` | same | Changed | Penalty lock only when the stake was forfeited. What the claim already paid out stays paid and comes off the restored stake; a claim that paid the whole stake leaves it forfeited and earmarked for no claim. Multichain restores the full stake. |
 | `approve_override` / `cancel_pending_override` | same | Changed | 2-of-2 admin + co-signer. `Override` PDA `[override, claim]`. On a forfeited stake, only the claim that forfeited it (`StakeRecord.forfeited_by`) may be re-executed; multichain lets any claim count that forfeited principal as capacity again. |
 | `get_stake` / `get_claim` / `is_eligible` / `is_claim_eligible` | account fetch + client helpers | Changed | Eligibility maths lives in `pool-core`, read by clients through the IDL constants. |
-| `get_points_balance` | none | Left out | Points (V8 legacy). Not shown anywhere. |
+| `get_pending_yield` / `get_staker_yield_owed` / `get_points_balance` / `get_backer_points` / `get_backer_yield_owed` / `collectable_view` | `view_staker` / `view_backer` | Changed | Read-only, run by simulation. Each settles yield and points in memory and returns them; the reserve is optional, to count growth not yet harvested. |
+| `fund_rounding_reserve` | same | Rules | Anyone tops it up. Never withdrawn, never capacity, earns nothing; only a payment short by at most `MAX_ROUNDING_DRAW` draws on it. |
+| `covered-registry` `register` | `register_wallet` | Changed | Inside the pool program. Backend key writes after an off-chain ownership proof. |
 | `deploy_to_vault` / `auto_deploy_liquidity` / `provide_liquidity` / `ensure_liquidity` | `auto_deploy_liquidity` / `ensure_liquidity` (permissionless), `provide_liquidity` (admin, works paused), `init_yield_account` (permissionless, once) + in-path push (after `stake` / `back` / `mature_backing`) and pull (every payout) | Changed | Kamino Lend `deposit_reserve_liquidity` / `redeem_reserve_collateral` on the venue reserve, built by hand. Push = multichain `push_idle` (idle above open claims, up to `deploy_bps`, once ≥ `AUTO_PUSH_MIN_BPS`). Pull = multichain `pull_cash` (shortfall plus buffer, else the shortfall alone). `ensure_liquidity` = multichain target (open claims short of free cash, or deployment above the line). Keeper calls hold the venue's rate to `MAX_REBALANCE_SLIPPAGE_BPS`; `provide_liquidity` takes the admin's `min_out`. No admin reference deposit: the keeper deploy needs none. |
 | `harvest` | `harvest` | Changed | Yield = value of the kUSDC held above book value (klend `collateral_to_liquidity` after a refresh), redeemed and credited as the USDC that arrives. Growth limit 10 bp/day kept; its clock starts at the first deposit. Also runs first inside `stake`, `back`, `mature_backing`, `withdraw`, `cancel_claim`, `claim_yield`, `claim_backer_yield`, `complete_backer_withdrawal` (multichain call sites), so growth goes to the money already in. Views take the reserve (optional) to count growth not yet harvested (rule 22). |
 | `claim_yield` / `claim_backer_yield` | same | Rules | Any time (not while paused), principal untouched. Staker yield goes to the stored beneficiary. |
@@ -46,14 +48,15 @@ form differs (reason given). **Left out** = not in this build.
 
 | Multichain storage | Solana account |
 |---|---|
-| Instance storage (admin, oracle, totals, indexes, day counters) | `Pool` PDA `[pool]` |
+| Instance storage (admin, oracle, totals, indexes, day counters, settings) | `Pool` PDA `[pool]` |
+| Governance pending changes | `Governance` PDA `[governance, pool]` (zero-copy) |
 | Contract balance (XLM) + DeFindex shares | `vault` PDA `[vault, pool]`: the pool's USDC token account (authority = pool PDA). kUSDC sits in a second token account, PDA `[leg, pool, collateral mint]`, also owned by the pool. |
 | `Stake(wallet)` | `StakeRecord` `[stake, pool, staker]` |
 | `Backer(address)` | `BackerRecord` `[backer, pool, backer]` |
 | `Claim(claim_id)` | `Claim` `[claim, pool, staker, tx_hash]` |
 | `Override(claim_id)` | `Override` `[override, claim]` |
 | Revoked approvals (temporary, TTL) | `RevokedApproval` `[revoked, pool, payload_hash]` (permanent) |
-| `covered-registry` contract (separate) | `CoveredWallet` `[covered, pool, wallet_hash]` (forever) + `StakerWallets` `[staker_wallets, pool, staker]` (max `MAX_COVERED_WALLETS`, 2). The program stores only the wallet hash, so the chain is whatever the claim API verified (Solana, Ethereum or Stellar, any mix). Writer = backend key. |
+| `covered-registry` contract (separate) | `CoveredWallet` `[covered, pool, wallet_hash]` (forever) + `StakerWallets` `[staker_wallets, pool, staker]` (max `MAX_COVERED_WALLETS`, 3; a claim lists at most `MAX_TXIDS_PER_CLAIM`, 20, transactions). The program stores only the wallet hash, so the chain is whatever the claim API verified (Solana, Ethereum or Stellar, any mix). Writer = backend key. |
 | Daily counters keyed by day | Current day only, on `Pool`, reset when the day changes. |
 
 ## Other changes
@@ -91,8 +94,9 @@ form differs (reason given). **Left out** = not in this build.
   cash-short days, the account checks and the governance install.
 - **Size and compute units.** With the venue and full upkeep (head of line plus two watch places) the
   largest money call, `stake`, is 1,143 bytes, under the 1,232-byte limit with room for compute-budget
-  instructions; no lookup table needed. Deposit by CPI ~42k CU. Client limit `computeUnitLimit` in
-  `config/pool.devnet.json` (200k); the test suite fails if a withdraw with a pull exceeds it.
+  instructions; no lookup table needed (measured 2026-10-22). Deposit by CPI ~42k CU. Client limit
+  `computeUnitLimit` in `config/pool.devnet.json` (400k); the test suite fails if a withdraw with a
+  pull exceeds it.
 
 ## CCTP (stake and back from Ethereum and Stellar)
 
