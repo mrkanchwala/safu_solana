@@ -1,0 +1,103 @@
+name: Mutation testing (manual)
+
+# Runs cargo-mutants over the program and pool-core, split across parallel shards.
+#
+# The LiteSVM tests load the built program, not its source, so cargo runs through
+# scripts/mutants_cargo.sh, which rebuilds the SBF program from each mutated tree before its tests.
+# Every mutant runs the whole workspace's tests (pool-core mutants reach the program too).
+#
+# A run is only real if mutants were CAUGHT: a setup fault shows up as everything missed. Each shard
+# fails if it caught nothing, so read the summary before trusting the numbers.
+#
+# Started by pushing a tag:
+#   mutants-smoke-<n>  one shard of 1/50 of the mutants, to prove the setup first
+#   mutants-full-<n>   20 shards in parallel over every mutant
+#   mutants-check-<n>  20 shards over only the mutants named in .github/mutants-check.args
+#                      (cargo-mutants -f/-F filters), to re-test a set of misses after new tests
+on:
+  push:
+    tags: ["mutants-smoke-*", "mutants-full-*", "mutants-check-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.p.outputs.shards }}
+      total: ${{ steps.p.outputs.total }}
+    steps:
+      - id: p
+        run: |
+          if [ "${{ startsWith(github.ref_name, 'mutants-smoke-') }}" = "true" ]; then
+            echo 'shards=[0]' >> "$GITHUB_OUTPUT"; echo 'total=50' >> "$GITHUB_OUTPUT"
+          else
+            echo "shards=$(python3 -c 'print(list(range(20)))')" >> "$GITHUB_OUTPUT"; echo 'total=20' >> "$GITHUB_OUTPUT"
+          fi
+
+  mutants:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    name: shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust 1.96.0
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          rustup default 1.96.0
+
+      # Same pinned installer as CI.
+      - name: Install Solana CLI 3.1.10
+        run: |
+          curl -sSfL https://release.anza.xyz/v3.1.10/install -o solana-install.sh
+          sh solana-install.sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install cargo-mutants 27.1.0 (pinned)
+        run: cargo install cargo-mutants --version 27.1.0 --locked
+
+      - name: cargo mutants
+        run: |
+          set +e
+          if [ "${{ startsWith(github.ref_name, 'mutants-check-') }}" = "true" ]; then
+            SELECT=$(grep -v '^#' .github/mutants-check.args | tr '\n' ' ')
+          else
+            SELECT=""
+          fi
+          echo "select: $SELECT"
+          export REAL_CARGO="$(command -v cargo)"
+          export CARGO="$PWD/scripts/mutants_cargo.sh"
+          # The binary directly: `cargo mutants` would have cargo overwrite CARGO with itself.
+          eval cargo-mutants mutants -p safu_pool -p pool-core --test-workspace=true $SELECT \
+            --shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 1 --output .
+          echo "cargo-mutants exit: $?"
+          exit 0
+
+      - name: Summary
+        if: always()
+        run: |
+          d=mutants.out
+          for f in caught missed timeout unviable; do
+            n=$( [ -f $d/$f.txt ] && wc -l < $d/$f.txt || echo none )
+            echo "$f: $n" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          [ -s $d/missed.txt ] && { echo '### missed'; cat $d/missed.txt; } >> "$GITHUB_STEP_SUMMARY"
+          n=$(cat $d/caught.txt $d/missed.txt $d/timeout.txt $d/unviable.txt 2>/dev/null | wc -l)
+          [ "$n" -eq 0 ] && { echo "empty shard: no mutants assigned" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          [ -s $d/caught.txt ] || { echo "NOTHING CAUGHT: treat this shard as a setup fault" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out
