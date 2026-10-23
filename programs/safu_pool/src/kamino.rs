@@ -54,12 +54,14 @@ pub fn read_reserve(info: &AccountInfo) -> Result<k::Reserve> {
     k::parse_reserve(&d).map_err(|_| error!(PoolError::VenueNotKamino))
 }
 
-/// A reserve the pool can use as its venue: klend, the pool's USDC, classic SPL Token on both legs.
+/// A reserve the pool can use as its venue: klend, the pool's USDC, classic SPL Token on both legs,
+/// priced by Scope alone or Pyth alone (`k::PriceSource`).
 pub fn check_venue(pool: &Pool, info: &AccountInfo) -> Result<k::Reserve> {
     let r = read_reserve(info)?;
     require!(
         Pubkey::new_from_array(r.liquidity_mint) == pool.usdc_mint
-            && Pubkey::new_from_array(r.liquidity_token_program) == anchor_spl::token::ID,
+            && Pubkey::new_from_array(r.liquidity_token_program) == anchor_spl::token::ID
+            && r.price != k::PriceSource::Other,
         PoolError::VenueNotKamino
     );
     Ok(r)
@@ -133,9 +135,8 @@ impl<'info> Cash<'info> {
             collateral_address(pool_key, &collateral_mint.key()),
             PoolError::YieldAccountsMissing
         );
-        require_keys_eq!(
-            oracle.key(),
-            Pubkey::new_from_array(state.scope_feed),
+        require!(
+            state.price.account() == Some(oracle.key().to_bytes()),
             PoolError::YieldAccountsMissing
         );
         require_keys_eq!(
@@ -200,17 +201,18 @@ impl<'info> Leg<'info> {
         if self.refreshed {
             return Ok(());
         }
-        // Optional klend accounts not used by this reserve are passed as the klend program (None).
+        // klend's price slots: Pyth, Switchboard price, Switchboard TWAP, Scope. The reserve's one
+        // source goes in its slot; unused slots are passed as the klend program (None).
         let none = self.program.key();
-        let scope = if self.state.scope_feed == [0; 32] {
-            none
-        } else {
-            self.oracle.key()
+        let oracle = self.oracle.key();
+        let (pyth, scope) = match self.state.price {
+            k::PriceSource::Pyth(_) => (oracle, none),
+            _ => (none, oracle),
         };
         let metas = vec![
             AccountMeta::new(self.reserve.key(), false),
             AccountMeta::new_readonly(self.market.key(), false),
-            AccountMeta::new_readonly(none, false),
+            AccountMeta::new_readonly(pyth, false),
             AccountMeta::new_readonly(none, false),
             AccountMeta::new_readonly(none, false),
             AccountMeta::new_readonly(scope, false),

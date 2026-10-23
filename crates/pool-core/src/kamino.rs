@@ -45,6 +45,9 @@ pub const R_STATUS: usize = 4856;
 pub const R_EMERGENCY: usize = 4864;
 pub const R_DEPOSIT_LIMIT: usize = 5016;
 pub const R_SCOPE_FEED: usize = 5112;
+pub const R_SWITCHBOARD_PRICE: usize = 5160;
+pub const R_SWITCHBOARD_TWAP: usize = 5192;
+pub const R_PYTH: usize = 5224;
 pub const R_CAP_CAPACITY: usize = 5416;
 pub const R_CAP_CURRENT: usize = 5424;
 pub const R_CAP_START: usize = 5432;
@@ -54,6 +57,46 @@ pub const R_QUEUED_COLLATERAL: usize = 6968;
 /// `LendingMarket`: length and the one flag read.
 pub const MARKET_MIN_LEN: usize = 123;
 pub const M_EMERGENCY: usize = 122;
+
+/// klend's placeholder for "no account" in a reserve's price config (`nu11111…`); all zeros means the
+/// same.
+pub const NULL_KEY: [u8; 32] = [
+    11, 193, 238, 216, 208, 116, 241, 195, 55, 212, 76, 22, 75, 202, 40, 216, 76, 206, 27, 169,
+    138, 64, 177, 28, 19, 90, 156, 0, 0, 0, 0, 0,
+];
+
+/// Where a reserve's price comes from. The pool passes klend one price account, so it supports a
+/// reserve priced by Scope alone (the mainnet markets) or Pyth alone (the devnet markets); any other
+/// setup is `Other` and refused as a venue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriceSource {
+    Scope([u8; 32]),
+    Pyth([u8; 32]),
+    Other,
+}
+
+impl PriceSource {
+    /// The price account klend reads, `None` for `Other`.
+    pub fn account(&self) -> Option<[u8; 32]> {
+        match self {
+            PriceSource::Scope(k) | PriceSource::Pyth(k) => Some(*k),
+            PriceSource::Other => None,
+        }
+    }
+}
+
+fn price_source(d: &[u8]) -> PriceSource {
+    let set = |at| {
+        let k = key_at(d, at);
+        (k != [0; 32] && k != NULL_KEY).then_some(k)
+    };
+    let switchboard = set(R_SWITCHBOARD_PRICE).or(set(R_SWITCHBOARD_TWAP));
+    match (set(R_SCOPE_FEED), set(R_PYTH), switchboard) {
+        (Some(k), None, None) => PriceSource::Scope(k),
+        (None, Some(k), None) => PriceSource::Pyth(k),
+        _ => PriceSource::Other,
+    }
+}
 
 /// klend `ReserveStatus::Active`.
 pub const STATUS_ACTIVE: u8 = 0;
@@ -89,7 +132,7 @@ pub struct Reserve {
     pub supply_vault: [u8; 32],
     pub liquidity_token_program: [u8; 32],
     pub collateral_mint: [u8; 32],
-    pub scope_feed: [u8; 32],
+    pub price: PriceSource,
     pub available: u64,
     pub total: u64,
     pub collateral_supply: u64,
@@ -129,7 +172,7 @@ pub fn parse_reserve(d: &[u8]) -> Result<Reserve> {
         supply_vault: key_at(d, R_LIQ_SUPPLY_VAULT),
         liquidity_token_program: key_at(d, R_LIQ_TOKEN_PROGRAM),
         collateral_mint: key_at(d, R_COLL_MINT),
-        scope_feed: key_at(d, R_SCOPE_FEED),
+        price: price_source(d),
         available,
         total: to_u64(total_sf >> SF_SHIFT)?,
         collateral_supply: u64_at(d, R_COLL_SUPPLY),

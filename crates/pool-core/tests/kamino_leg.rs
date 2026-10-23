@@ -49,6 +49,37 @@ fn a_reserve_is_read_only_with_klends_discriminator_and_length() {
 }
 
 #[test]
+fn a_reserve_priced_by_scope_alone_or_pyth_alone_names_that_price_account() {
+    let (scope, pyth, other) = ([3u8; 32], [4u8; 32], [5u8; 32]);
+    let with = |sets: &[(usize, [u8; 32])]| {
+        let mut d = reserve_bytes(0, 0, 0);
+        for (at, k) in sets {
+            put(&mut d, *at, k);
+        }
+        parse_reserve(&d).unwrap().price
+    };
+    assert_eq!(with(&[(R_SCOPE_FEED, scope)]), PriceSource::Scope(scope));
+    // klend's `nu111…` placeholder counts as unset, like zeros (the devnet markets carry it).
+    assert_eq!(
+        with(&[(R_PYTH, pyth), (R_SCOPE_FEED, NULL_KEY)]),
+        PriceSource::Pyth(pyth)
+    );
+    assert_eq!(PriceSource::Pyth(pyth).account(), Some(pyth));
+    // No price, two prices, or Switchboard: one price account can't serve it.
+    assert_eq!(with(&[]), PriceSource::Other);
+    assert_eq!(
+        with(&[(R_SCOPE_FEED, scope), (R_PYTH, pyth)]),
+        PriceSource::Other
+    );
+    assert_eq!(with(&[(R_SWITCHBOARD_PRICE, other)]), PriceSource::Other);
+    assert_eq!(
+        with(&[(R_SCOPE_FEED, scope), (R_SWITCHBOARD_TWAP, other)]),
+        PriceSource::Other
+    );
+    assert_eq!(PriceSource::Other.account(), None);
+}
+
+#[test]
 fn fees_owed_to_klend_are_not_the_depositors() {
     let mut d = reserve_bytes(10 * USDC, 90 * USDC, 80 * USDC);
     put(

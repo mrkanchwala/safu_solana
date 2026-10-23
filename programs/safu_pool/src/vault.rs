@@ -41,8 +41,8 @@ pub struct Cash<'info> {
     /// account of the collateral mint whose authority is the pool, checked on load.
     #[account(mut)]
     pub pool_collateral: Option<UncheckedAccount<'info>>,
-    /// CHECK: the reserve's Scope price account (its `scope_feed`), checked on load; klend checks
-    /// the contents.
+    /// CHECK: the reserve's price account (its Scope or Pyth feed, `k::PriceSource`), checked on
+    /// load; klend checks the contents.
     pub oracle: Option<UncheckedAccount<'info>>,
     /// CHECK: the instructions sysvar (address checked on load).
     pub instructions: Option<UncheckedAccount<'info>>,

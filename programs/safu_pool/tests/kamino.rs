@@ -4,6 +4,10 @@
 //!
 //! Scope prices carry their own timestamps: `fresh_prices` stamps them with the test clock, as a
 //! live Scope keeper would; leaving them alone is the stale-price case.
+//!
+//! The devnet markets are priced by Pyth instead: `DEVNET` is the live devnet USDC reserve on Circle's
+//! devnet USDC, its market and its Pyth price account as dumped 2026-10-23 (devnet slot 514196601),
+//! run against the same mainnet klend binary.
 mod common;
 
 use anchor_lang::prelude::Pubkey;
@@ -78,51 +82,116 @@ fn fresh_prices(env: &mut Env) {
     env.svm.set_account(SCOPE, a).unwrap();
 }
 
+fn venue(env: &Env) -> &Venue {
+    env.venue.as_ref().unwrap()
+}
+
 fn reserve(env: &Env) -> k::Reserve {
-    k::parse_reserve(&env.svm.get_account(&RESERVE).unwrap().data).unwrap()
+    k::parse_reserve(&env.svm.get_account(&venue(env).reserve).unwrap().data).unwrap()
 }
 
 fn pool_collateral(env: &Env) -> Pubkey {
-    pda(&[SEED_LEG, env.pool().as_ref(), COLLATERAL_MINT.as_ref()])
+    venue(env).pool_collateral
 }
 
-/// A pool on the real USDC mint with klend and the reserve loaded and the venue set (as governance
-/// would, with nothing deployed), `deploy_bps` of capacity allowed out, the collateral account open.
-fn setup(deploy_bps: u64) -> Env {
-    let mut env = Env::new_at(USDC_MINT, DUMP_UNIX);
+/// A klend market as dumped: its USDC mint, accounts and fixture names, and the clock to start at.
+struct Market {
+    usdc: Pubkey,
+    reserve: (Pubkey, &'static str),
+    market: (Pubkey, &'static str),
+    oracle: (Pubkey, &'static str),
+    collateral_mint: (Pubkey, &'static str),
+    supply: (Pubkey, &'static str),
+    slot: u64,
+    unix: i64,
+}
+
+const MAINNET: Market = Market {
+    usdc: USDC_MINT,
+    reserve: (RESERVE, "klend_usdc_reserve"),
+    market: (MARKET, "klend_main_market"),
+    oracle: (SCOPE, "scope_prices"),
+    collateral_mint: (COLLATERAL_MINT, "klend_usdc_collateral_mint"),
+    supply: (SUPPLY_VAULT, "klend_usdc_supply_vault"),
+    slot: DUMP_SLOT + 10,
+    unix: DUMP_UNIX,
+};
+
+/// Pyth `PriceUpdateV2` (fully verified): publish time and previous publish time at +93 / +101.
+const PYTH_PUBLISH_AT: usize = 93;
+const PYTH_PRICE: Pubkey =
+    anchor_lang::prelude::pubkey!("Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX");
+
+const DEVNET: Market = Market {
+    usdc: anchor_lang::prelude::pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"),
+    reserve: (
+        anchor_lang::prelude::pubkey!("HRwMj8uuoGVWCanKzKvpTWN5ZvXjtjKGxcFbn2qTPKMW"),
+        "klend_devnet_usdc_reserve",
+    ),
+    market: (
+        anchor_lang::prelude::pubkey!("6aaNTBEmwdN19AAdTwbNrWyUo6iEyiLguxCTePEzSqoH"),
+        "klend_devnet_market",
+    ),
+    oracle: (PYTH_PRICE, "pyth_devnet_usdc_price"),
+    collateral_mint: (
+        anchor_lang::prelude::pubkey!("6FY2rwh5wWrtSveAG9t9ANc2YsrChNasVSEpMQubJcXd"),
+        "klend_devnet_usdc_collateral_mint",
+    ),
+    supply: (
+        anchor_lang::prelude::pubkey!("6icVFmuKEsH5dzDwTSrxzrnJ14N27gDKRc2XAxPtB4ep"),
+        "klend_devnet_usdc_supply_vault",
+    ),
+    slot: 514_196_601,
+    unix: 1_792_746_643,
+};
+
+/// Stamps the Pyth price with the current clock, as Pyth's price pusher would.
+fn fresh_pyth(env: &mut Env) {
+    let c: anchor_lang::prelude::Clock = env.svm.get_sysvar();
+    let mut a = env.svm.get_account(&PYTH_PRICE).unwrap();
+    for at in [PYTH_PUBLISH_AT, PYTH_PUBLISH_AT + 8] {
+        a.data[at..at + 8].copy_from_slice(&c.unix_timestamp.to_le_bytes());
+    }
+    env.svm.set_account(PYTH_PRICE, a).unwrap();
+}
+
+/// A pool on the market's USDC mint with klend and the reserve loaded and the venue set (as
+/// governance would, with nothing deployed), `deploy_bps` of capacity allowed out, the collateral
+/// account open.
+fn setup_on(m: &Market, deploy_bps: u64) -> Env {
+    let mut env = Env::new_at(m.usdc, m.unix);
     env.svm
         .add_program(KLEND_PROGRAM_ID, include_bytes!("fixtures/klend.so"))
         .unwrap();
-    for (key, name) in [
-        (RESERVE, "klend_usdc_reserve"),
-        (MARKET, "klend_main_market"),
-        (SCOPE, "scope_prices"),
-        (COLLATERAL_MINT, "klend_usdc_collateral_mint"),
-        (SUPPLY_VAULT, "klend_usdc_supply_vault"),
-    ] {
+    for (key, name) in [m.reserve, m.market, m.oracle, m.collateral_mint, m.supply] {
         env.svm.set_account(key, fixture(name)).unwrap();
     }
     let mut c: anchor_lang::prelude::Clock = env.svm.get_sysvar();
-    c.slot = DUMP_SLOT + 10;
+    c.slot = m.slot;
     env.svm.set_sysvar(&c);
-    fresh_prices(&mut env);
+    if m.oracle.0 == SCOPE {
+        fresh_prices(&mut env);
+    } else {
+        fresh_pyth(&mut env);
+    }
     env.edit::<Pool>(&env.pool(), |p| {
-        p.yield_venue = RESERVE;
+        p.yield_venue = m.reserve.0;
         p.deploy_bps = deploy_bps;
     });
     let authority = Pubkey::find_program_address(
-        &[k::LENDING_MARKET_AUTH_SEED, MARKET.as_ref()],
+        &[k::LENDING_MARKET_AUTH_SEED, m.market.0.as_ref()],
         &KLEND_PROGRAM_ID,
     )
     .0;
+    let pool_collateral = pda(&[SEED_LEG, env.pool().as_ref(), m.collateral_mint.0.as_ref()]);
     env.venue = Some(Venue {
-        reserve: RESERVE,
-        market: MARKET,
+        reserve: m.reserve.0,
+        market: m.market.0,
         authority,
-        supply: SUPPLY_VAULT,
-        collateral_mint: COLLATERAL_MINT,
-        pool_collateral: pool_collateral(&env),
-        oracle: SCOPE,
+        supply: m.supply.0,
+        collateral_mint: m.collateral_mint.0,
+        pool_collateral,
+        oracle: m.oracle.0,
     });
     let payer = env.admin.insecure_clone();
     let ix = init_yield_account_ix(&env, &payer.pubkey());
@@ -130,13 +199,17 @@ fn setup(deploy_bps: u64) -> Env {
     env
 }
 
+fn setup(deploy_bps: u64) -> Env {
+    setup_on(&MAINNET, deploy_bps)
+}
+
 fn init_yield_account_ix(env: &Env, payer: &Pubkey) -> Instruction {
     env.ix(
         safu_pool::accounts::InitYieldAccount {
             payer: *payer,
             pool: env.pool(),
-            reserve: RESERVE,
-            collateral_mint: COLLATERAL_MINT,
+            reserve: venue(env).reserve,
+            collateral_mint: venue(env).collateral_mint,
             pool_collateral: pool_collateral(env),
             token_program: TOKEN,
             system_program: SYSTEM,
@@ -618,7 +691,7 @@ fn governance_installs_only_a_klend_usdc_reserve_and_never_while_deployed() {
         .0,
         supply: SUPPLY_VAULT,
         collateral_mint: COLLATERAL_MINT,
-        pool_collateral: pool_collateral(&env),
+        pool_collateral: pda(&[SEED_LEG, env.pool().as_ref(), COLLATERAL_MINT.as_ref()]),
         oracle: SCOPE,
     });
     fresh_prices(&mut env);
@@ -667,4 +740,50 @@ fn transaction_sizes_with_the_venue_and_full_upkeep() {
         // Room left for the compute-budget instructions (~64 bytes).
         assert!(full <= 1232 - 64, "{name} {full}");
     }
+}
+
+#[test]
+fn a_pyth_priced_reserve_takes_and_returns_usdc_by_cpi() {
+    // The devnet market: priced by Pyth, so the price account goes in klend's Pyth slot.
+    let mut env = setup_on(&DEVNET, 5_000);
+    assert_eq!(
+        reserve(&env).price,
+        k::PriceSource::Pyth(PYTH_PRICE.to_bytes())
+    );
+    let r = reserve(&env);
+    env.matured_backer(10_000 * USDC);
+    let p = env.pool_state();
+    assert_eq!(p.deployed_book, 5_000 * USDC);
+    assert_eq!(collateral_held(&env), p.deployed_collateral);
+    assert_eq!(reserve(&env).available, r.available + 5_000 * USDC);
+    admin_provide(&mut env, p.deployed_collateral, 5_000 * USDC - 2).unwrap();
+    assert_eq!(env.pool_state().deployed_collateral, 0);
+}
+
+#[test]
+fn only_the_reserves_own_price_account_is_accepted_and_two_sources_are_not_a_venue() {
+    let mut env = setup_on(&DEVNET, 5_000);
+    env.matured_backer(10_000 * USDC);
+    // The mainnet Scope account in place of the reserve's Pyth feed: refused before any klend call.
+    let good = env.venue.unwrap();
+    env.venue = Some(Venue {
+        oracle: SCOPE,
+        ..good
+    });
+    let anyone = env.funded(0);
+    let ix = leg_call(&env, safu_pool::instruction::EnsureLiquidity {});
+    assert_err(
+        env.send(&[ix], &[&anyone]),
+        safu_pool::errors::PoolError::YieldAccountsMissing,
+    );
+    // The reserve gains a second source (Scope next to Pyth): one price account can't serve it.
+    env.venue = Some(good);
+    let mut a = env.svm.get_account(&DEVNET.reserve.0).unwrap();
+    a.data[k::R_SCOPE_FEED..k::R_SCOPE_FEED + 32].copy_from_slice(&SCOPE.to_bytes());
+    env.svm.set_account(DEVNET.reserve.0, a).unwrap();
+    let ix = leg_call(&env, safu_pool::instruction::EnsureLiquidity {});
+    assert_err(
+        env.send(&[ix], &[&anyone]),
+        safu_pool::errors::PoolError::VenueNotKamino,
+    );
 }
