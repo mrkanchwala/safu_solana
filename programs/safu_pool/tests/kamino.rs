@@ -753,7 +753,10 @@ fn a_payment_short_of_cash_pulls_the_shortfall_and_refills_the_buffer() {
     let capacity = pool_core::capacity(p.total_staked, p.total_backed).unwrap();
     let buffer = capacity * (10_000 - 8_000) / 10_000;
     let left = env.vault_liquid() - p.rounding_reserve;
-    assert!(left.abs_diff(buffer) <= 2, "free after {left}, buffer {buffer}");
+    assert!(
+        left.abs_diff(buffer) <= 2,
+        "free after {left}, buffer {buffer}"
+    );
 }
 
 /// With nothing deployed, a payment short of cash does not call klend at all: the claim counts a
