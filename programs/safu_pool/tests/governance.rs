@@ -5,7 +5,7 @@ mod common;
 
 use anchor_lang::prelude::Pubkey;
 use common::*;
-use pool_core::params::{GOV_DELAY_SECS, MAX_DEPLOY_BPS, RECOVERY_DELAY_SECS};
+use pool_core::params::{GOV_DELAY_SECS, MAX_DEPLOY_BPS, RECOVERY_DELAY_SECS, SECONDS_PER_DAY};
 use safu_pool::constants::*;
 use safu_pool::errors::PoolError;
 use safu_pool::instruction::{ApproveChange, CancelChange, ProposeChange, ProposeRecovery};
@@ -316,6 +316,36 @@ fn the_first_deposit_gives_an_approved_setup_change_the_full_wait() {
     let ix = env.back_ix(&ix_backer.pubkey(), unit());
     env.ok(&[ix], &[&ix_backer]);
     assert_eq!(env.pool_state().funded_at, funded_at);
+}
+
+#[test]
+fn a_role_change_approved_before_the_first_deposit_keeps_its_own_wait() {
+    let mut env = Env::new();
+    let (admin, co) = (env.admin.insecure_clone(), env.co_signer.insecure_clone());
+    let new = Keypair::new();
+    let change = GovChange::Guardian(new.pubkey());
+    propose(&mut env, &admin, change).unwrap();
+    approve(&mut env, &co, change).unwrap();
+    let eta = env.gov_pending(GOV_KIND_GUARDIAN).eta;
+    // Money arrives a day later. Only setup changes restart their wait from the first deposit.
+    env.warp(SECONDS_PER_DAY);
+    env.staker(bounds().0);
+    env.warp(eta - env.now);
+    execute(&mut env, GOV_KIND_GUARDIAN, Some(&new)).unwrap();
+}
+
+#[test]
+fn a_third_approval_does_not_restart_the_wait() {
+    let (mut env, r) = funded_env();
+    let change = GovChange::DeployBps(MAX_DEPLOY_BPS / 2);
+    propose(&mut env, &r.admin, change).unwrap();
+    approve(&mut env, &r.co, change).unwrap();
+    let eta = env.gov_pending(GOV_KIND_DEPLOY_BPS).eta;
+    env.warp(SECONDS_PER_DAY);
+    approve(&mut env, &r.guardian, change).unwrap();
+    assert_eq!(env.gov_pending(GOV_KIND_DEPLOY_BPS).eta, eta);
+    env.warp(eta - env.now);
+    execute(&mut env, GOV_KIND_DEPLOY_BPS, None).unwrap();
 }
 
 // ------------------------------------------------------------------ last-resort recovery

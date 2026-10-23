@@ -103,12 +103,16 @@ fn yield_is_paid_while_paused() {
     let (us, ub) = (env.usdc(&s.pubkey()), env.usdc(&b.pubkey()));
     let ix = env.claim_yield_ix(&s.pubkey(), &s.pubkey());
     env.ok(&[ix], &[&s]);
+    let reserved = env.pool_state().backer_yield_reserved;
     let ix = env.claim_backer_yield_ix(&b.pubkey());
     env.ok(&[ix], &[&b]);
     assert_eq!(
         (env.usdc(&s.pubkey()), env.usdc(&b.pubkey())),
         (us + owed_s, ub + owed_b)
     );
+    // Paid is no longer owed: the backer's record and the set-aside both drop by what was paid.
+    assert_eq!(env.view_backer(&b.pubkey()).yield_owed, 0);
+    assert_eq!(env.pool_state().backer_yield_reserved, reserved - owed_b);
 }
 
 #[test]

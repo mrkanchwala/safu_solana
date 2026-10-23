@@ -11,6 +11,8 @@ on every input, so no test could tell the two apart.
 | `crates/pool-core/src/cctp.rs:238:26: replace \| with ^ in stellar_strkey` | `acc << 8` has its low 8 bits clear and `u32::from(b)` sets only those bits, so OR and XOR give the same value. |
 | `crates/pool-core/src/leg.rs:36:20: replace \|\| with && in harvest_collateral` | `value == 0` makes `growth` 0 (growth is `value - book`, saturating), so the only case the two conditions split is `growth == 0` with `value > 0`. There the original returns 0 and the mutant returns `growth * deployed / value`, which is also 0. |
 | `crates/pool-core/src/upkeep.rs:13:30: replace < with <= in watch_places` | The two differ only at `c == head`, and there both map `c` to `head`. |
+| `programs/safu_pool/src/leg.rs:82:9: replace \|\| with && in harvestable` | The two differ only when exactly one of `deployed_collateral` and `deployed_book` is 0. With no collateral the value is 0, so growth is 0; with no book the daily growth limit is 0. Either way `harvestable` returns 0, as the original does. |
+| `programs/safu_pool/src/leg.rs:83:9: replace \|\| with && in harvestable` | The two differ only when `last_harvest_at` is 0 while money is deployed. Every deposit goes through `record_deposit`, which starts that clock first, so the state cannot occur. |
 
 ## Demo-only values
 

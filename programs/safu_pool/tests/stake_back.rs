@@ -650,7 +650,14 @@ fn a_withdrawal_drips_out_one_part_a_day() {
     let days = drip_days(&env);
     assert_err(collect(&mut env, &b), PoolError::NoBackerWithdrawal);
     let ix = env.request_backer_ix(&b.pubkey(), w);
-    env.ok(&[ix], &[&b]);
+    let logs = env.send_logs(&[ix], &[&b]).unwrap();
+    // The request says when its last part is due: the start of its last drip day.
+    let req: safu_pool::events::BackerWithdrawalRequested = event(&logs).unwrap();
+    let last_day = days as i64 - 1;
+    assert_eq!(
+        req.ready_at,
+        env.now + last_day * pool_core::params::SECONDS_PER_DAY
+    );
     let before = env.usdc(&b.pubkey());
     for day in 0..days {
         collect(&mut env, &b).unwrap();
@@ -725,6 +732,12 @@ fn requests_share_the_days_free_capital_pro_rata_whatever_the_order() {
     let half = pool_core::drip::share(free, w, 2 * w).unwrap();
     assert_eq!(env.usdc(&b1.pubkey()) - u1, half);
     assert_eq!(env.usdc(&b2.pubkey()) - u2, half);
+    // More capital frees up later the same day: today's share is spent, so a second collect pays
+    // nothing until tomorrow.
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated -= unit());
+    let u1 = env.usdc(&b1.pubkey());
+    assert_err(collect(&mut env, &b1), PoolError::NothingToCollectYet);
+    assert_eq!(env.usdc(&b1.pubkey()), u1);
     // And never more than was free.
     let p = env.pool_state();
     assert!(p.total_allocated <= p.total_staked + p.total_backed);
@@ -837,4 +850,66 @@ fn a_donation_to_the_vault_changes_no_stake() {
     assert_eq!((p.total_staked, p.total_allocated), (min, 0));
     // It sits above everything owed: protocol surplus, never stake.
     assert_eq!(env.vault_liquid(), min + unit());
+}
+
+#[test]
+fn a_cancel_releases_only_its_own_unpaid_part() {
+    let mut env = Env::new();
+    let w = 7 * unit();
+    let (b1, b2) = (env.matured_backer(w), env.matured_backer(w));
+    let ix = env.request_backer_ix(&b1.pubkey(), w);
+    env.ok(&[ix], &[&b1]);
+    let before = env.usdc(&b1.pubkey());
+    collect(&mut env, &b1).unwrap();
+    let paid = env.usdc(&b1.pubkey()) - before;
+    let ix = env.request_backer_ix(&b2.pubkey(), w);
+    env.ok(&[ix], &[&b2]);
+    assert_eq!(env.pool_state().total_backer_open, 2 * w - paid);
+    if paid == w {
+        // A one-day drip (demo clocks) paid it all at once: nothing left to cancel.
+        return;
+    }
+    let cancel = env.backer_only_ix(
+        &b1.pubkey(),
+        safu_pool::instruction::CancelBackerWithdrawal {},
+    );
+    let logs = env.send_logs(&[cancel], &[&b1]).unwrap();
+    let ev: safu_pool::events::BackerWithdrawalCancelled = event(&logs).unwrap();
+    assert_eq!(ev.amount, w - paid);
+    // The other backer's request is still counted in full.
+    assert_eq!(env.pool_state().total_backer_open, w);
+}
+
+#[test]
+fn only_a_payment_that_draws_on_the_rounding_reserve_reports_it() {
+    let mut env = Env::new();
+    let (min, _) = bounds();
+    let s = env.staker(min);
+    let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    let logs = env.send_logs(&[ix], &[&s]).unwrap();
+    assert!(event::<safu_pool::events::RoundingReserveUsed>(&logs).is_none());
+    // Cash one unit short of the books: the draw is reported with its size.
+    let s = env.staker(min);
+    let f = env.funded(unit());
+    let ix = env.fund_reserve_ix(&f.pubkey(), MAX_ROUNDING_DRAW);
+    env.ok(&[ix], &[&f]);
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve += 1);
+    let ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    let logs = env.send_logs(&[ix], &[&s]).unwrap();
+    let used = event::<safu_pool::events::RoundingReserveUsed>(&logs).map(|e| e.amount);
+    assert_eq!(used, Some(1));
+}
+
+#[test]
+fn a_payment_must_name_the_pools_usdc_mint() {
+    let mut env = Env::new();
+    let s = env.staker(bounds().0);
+    // A real 6-decimal mint, just not the pool's.
+    let other = anchor_lang::prelude::Pubkey::new_unique();
+    set_token_program_account(&mut env.svm, other, mint_data(6, 0));
+    let mut ix = env.withdraw_ix(&s.pubkey(), &s.pubkey());
+    for m in ix.accounts.iter_mut().filter(|m| m.pubkey == env.usdc_mint) {
+        m.pubkey = other;
+    }
+    assert_err(env.send(&[ix], &[&s]), PoolError::WrongMint);
 }

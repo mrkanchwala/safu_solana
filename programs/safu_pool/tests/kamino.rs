@@ -517,3 +517,100 @@ fn only_the_reserves_own_price_account_is_accepted_and_two_sources_are_not_a_ven
         safu_pool::errors::PoolError::VenueNotKamino,
     );
 }
+
+#[test]
+fn views_count_no_growth_while_paused() {
+    let mut env = setup(5_000);
+    let b = env.matured_backer(100_000 * USDC);
+    env.pause();
+    warp(&mut env, 86_400);
+    fresh_prices(&mut env);
+    refresh_reserve(&mut env);
+    let p = env.pool_state();
+    assert!(reserve(&env).liquidity_for(p.deployed_collateral).unwrap() > p.deployed_book);
+    // The growth is there, but no harvest runs while paused, so the views leave it out.
+    let seen = env.view_backer(&b.pubkey()).yield_owed;
+    let v = env.venue.take();
+    let none = env.view_backer(&b.pubkey()).yield_owed;
+    env.venue = v;
+    assert_eq!(seen, none);
+}
+
+#[test]
+fn a_venue_loss_is_marked_off_the_stakes() {
+    let mut env = setup(8_000);
+    env.matured_backer(100_000 * USDC);
+    let (_, max) = bounds();
+    let s = env.staker(max);
+    env.staker(max);
+    let idle = env.vault_liquid();
+    // The whole withdrawal comes from klend, after the reserve lost 0.01% of its value (a loss
+    // smaller than the stakes left, so none of it is cut off at zero).
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = idle);
+    cut_reserve_value(&mut env, 1);
+    let before = env.pool_state();
+    let ix = env.withdraw_part_ix(&s.pubkey(), &s.pubkey(), max);
+    let logs = env.send_logs(&[ix], &[&s]).unwrap();
+    let short: safu_pool::events::DeploymentShortfall =
+        event(&logs).expect("the redeem came back short of its book value");
+    let loss = short.principal_expected - short.received;
+    assert!(loss > 0);
+    assert_eq!(env.usdc(&s.pubkey()), max);
+    assert_eq!(
+        env.pool_state().total_staked,
+        before.total_staked - max - loss
+    );
+}
+
+#[test]
+fn a_withdrawal_reverts_if_a_venue_loss_on_the_way_out_leaves_open_claims_uncovered() {
+    let (_, max) = bounds();
+    let run = |loss_bps: u64| {
+        let mut env = setup(8_000);
+        env.matured_backer(100_000 * USDC);
+        let s = env.staker(max);
+        env.staker(max);
+        let idle = env.vault_liquid();
+        let p = env.pool_state();
+        let capacity = pool_core::capacity(p.total_staked, p.total_backed).unwrap();
+        // Open claims hold all the capital but this withdrawal and a 10-unit margin.
+        env.edit::<Pool>(&env.pool(), |p| {
+            p.rounding_reserve = idle;
+            p.total_allocated = capacity - max - 10;
+        });
+        if loss_bps > 0 {
+            cut_reserve_value(&mut env, loss_bps);
+        }
+        let ix = env.withdraw_part_ix(&s.pubkey(), &s.pubkey(), max);
+        env.send(&[ix], &[&s])
+    };
+    // klend's rounding fits the margin; a 1% loss does not, and the whole payment reverts.
+    run(0).unwrap();
+    assert_err(run(100), safu_pool::errors::PoolError::CapitalNotFree);
+}
+
+#[test]
+fn a_yield_account_opens_only_for_the_reserves_collateral_mint() {
+    let mut env = setup(5_000);
+    let payer = env.funded(0);
+    let mut ix = init_yield_account_ix(&env, &payer.pubkey());
+    let (real_mint, real_account) = (venue(&env).collateral_mint, pool_collateral(&env));
+    // USDC is the reserve's liquidity mint, not its collateral mint.
+    let wrong = env.usdc_mint;
+    let wrong_account = Pubkey::find_program_address(
+        &[SEED_LEG, env.pool().as_ref(), wrong.as_ref()],
+        &safu_pool::ID,
+    )
+    .0;
+    for m in ix.accounts.iter_mut() {
+        if m.pubkey == real_mint {
+            m.pubkey = wrong;
+        } else if m.pubkey == real_account {
+            m.pubkey = wrong_account;
+        }
+    }
+    assert_err(
+        env.send(&[ix], &[&payer]),
+        safu_pool::errors::PoolError::YieldAccountsMissing,
+    );
+}

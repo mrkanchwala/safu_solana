@@ -115,6 +115,21 @@ fn settings_keep_their_order() {
         s.check_value(SettingKey::PayoutHighBps, PAYOUT_MID_BPS as i64 + 1),
         Err(CoreError::SettingOrderInvalid)
     );
+    assert_eq!(
+        s.check_value(SettingKey::AdmitLowBps, ADMIT_MID_BPS as i64 - 1),
+        Err(CoreError::SettingOrderInvalid)
+    );
+    // The middle band sits between the other two, on both sides.
+    for out in [PAYOUT_LOW_BPS + 1, PAYOUT_HIGH_BPS - 1] {
+        assert_eq!(
+            s.check_value(SettingKey::PayoutMidBps, out as i64),
+            Err(CoreError::SettingOrderInvalid)
+        );
+    }
+    assert_eq!(
+        s.check_value(SettingKey::PayoutMidBps, PAYOUT_HIGH_BPS as i64),
+        Ok(())
+    );
     // A cap so small the min stake rounds to zero.
     let smallest = (BPS_DENOMINATOR / MIN_STAKE_BPS) as i64;
     assert_eq!(

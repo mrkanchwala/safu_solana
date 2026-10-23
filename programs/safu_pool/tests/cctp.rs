@@ -531,3 +531,13 @@ fn a_signature_made_for_another_cluster_does_not_work_here() {
     t.sign_cluster = None;
     t.act(&owner, &identity, inner, data).unwrap();
 }
+
+#[test]
+fn an_inbox_opens_only_for_stake_or_back() {
+    let mut t = Cctp::new();
+    let bad = 7;
+    assert!(bad != c::MODE_STAKE && bad != c::MODE_BACK);
+    let ix = t.open_inbox_ix(bad);
+    let r = t.relayer.insecure_clone();
+    assert_err(t.env.send(&[ix], &[&r]), PoolError::CctpWrongRecipient);
+}

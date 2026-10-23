@@ -1226,7 +1226,9 @@ fn override_roles_and_cancel() {
     let ix = env.cancel_override_ix(&other.pubkey(), &claim);
     assert_err(env.send(&[ix], &[&other]), PoolError::NotAdmin);
     let ix = env.cancel_override_ix(&admin.pubkey(), &claim);
-    env.ok(&[ix], &[&admin]);
+    let logs = env.send_logs(&[ix], &[&admin]).unwrap();
+    let ev: safu_pool::events::OverrideCancelled = event(&logs).unwrap();
+    assert_eq!(ev.claim, claim);
     assert!(!env.exists(&env.override_addr(&claim)));
 }
 
@@ -1354,4 +1356,21 @@ fn override_takes_over_the_stakes_own_queued_claim() {
         ClaimStatus::Active
     );
     assert_eq!(env.pool_state().queue_head, 1);
+}
+
+#[test]
+fn the_ed25519_header_is_two_bytes_and_one_offsets_entry() {
+    use safu_pool::approval::check_ed25519_data;
+    let signer = Pubkey::new_unique();
+    let mut header = [0u8; 16];
+    header[0] = 2;
+    // Exactly the header is long enough to read, so the signature count is what gets refused.
+    assert_eq!(
+        check_ed25519_data(&header, 0, &signer, b"m").unwrap_err(),
+        PoolError::WrongSignatureCount.into()
+    );
+    assert_eq!(
+        check_ed25519_data(&header[..15], 0, &signer, b"m").unwrap_err(),
+        PoolError::MalformedEd25519Instruction.into()
+    );
 }

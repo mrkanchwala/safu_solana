@@ -222,3 +222,9 @@ fn stake_bounds_match_the_shared_vector() {
     }
     assert!(n >= 4);
 }
+
+#[test]
+fn the_treasury_may_take_only_what_is_held_above_what_is_owed() {
+    assert_eq!(yields::protocol_surplus(10 * USDC, 3 * USDC), 7 * USDC);
+    assert_eq!(yields::protocol_surplus(3 * USDC, 10 * USDC), 0);
+}

@@ -275,6 +275,18 @@ pub fn drain_reserve(env: &mut Env) {
     env.svm.set_account(RESERVE, a).unwrap();
 }
 
+/// Bad debt written off in the reserve: its liquidity, and so every share of it, loses `bps` of its
+/// value. What a venue loss looks like to the pool.
+pub fn cut_reserve_value(env: &mut Env, bps: u64) {
+    let mut a = env.svm.get_account(&RESERVE).unwrap();
+    let (at, bt) = (k::R_LIQ_AVAILABLE, k::R_LIQ_BORROWED_SF);
+    let available = u64::from_le_bytes(a.data[at..at + 8].try_into().unwrap()) as u128;
+    let borrowed = u128::from_le_bytes(a.data[bt..bt + 16].try_into().unwrap());
+    let cut = ((available << k::SF_SHIFT) + borrowed) / 10_000 * bps as u128;
+    a.data[bt..bt + 16].copy_from_slice(&(borrowed - cut).to_le_bytes());
+    env.svm.set_account(RESERVE, a).unwrap();
+}
+
 pub fn admin_provide(env: &mut Env, collateral: u64, min_out: u64) -> Result<(), String> {
     let ix = provide_ix(env, collateral, min_out);
     let admin = env.admin.insecure_clone();

@@ -1284,6 +1284,21 @@ pub fn hold(r: &mut StakeRecord, on: bool) {
     r.suspended_until = if on { i64::MAX } else { 0 };
 }
 
+/// The first event of type `E` in a transaction's logs.
+pub fn event<E: anchor_lang::AnchorDeserialize + anchor_lang::Discriminator>(
+    logs: &[String],
+) -> Option<E> {
+    use base64::Engine;
+    logs.iter().find_map(|l| {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(l.strip_prefix("Program data: ")?)
+            .ok()?;
+        (raw.get(..8)? == E::DISCRIMINATOR)
+            .then(|| E::try_from_slice(&raw[8..]).ok())
+            .flatten()
+    })
+}
+
 pub fn assert_err(result: Result<(), String>, error: safu_pool::errors::PoolError) {
     let code = anchor_lang::error::ERROR_CODE_OFFSET + error as u32;
     let err = result.expect_err("transaction should have failed");
