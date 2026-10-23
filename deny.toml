@@ -1,0 +1,37 @@
+# cargo-deny policy: licenses, advisories, crate sources. Run in CI (ci.yml, audit job).
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates come in through Anchor and the Solana SDK; refused only as direct dependencies.
+unmaintained = "workspace"
+# Both reach only litesvm, the test harness; ci.yml proves that on every run before this check.
+ignore = [
+    { id = "RUSTSEC-2024-0344", reason = "curve25519-dalek 3.2.0, test harness only" },
+    { id = "RUSTSEC-2022-0093", reason = "ed25519-dalek 1.0.1, test harness only" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Several Solana crates exist in two versions through Anchor and litesvm; reported, not refused.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

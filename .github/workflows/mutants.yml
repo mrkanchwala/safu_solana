@@ -51,7 +51,7 @@ jobs:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     name: shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Rust 1.96.0
         run: |
@@ -98,7 +98,7 @@ jobs:
           [ "$n" -eq 0 ] && { echo "empty shard: no mutants assigned" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
           [ -s $d/caught.txt ] || { echo "NOTHING CAUGHT: treat this shard as a setup fault" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: mutants-shard-${{ matrix.shard }}
