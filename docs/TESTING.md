@@ -5,10 +5,10 @@ from 2026-10-23 on branch `solana-usdc-pool`.
 
 | Suite | Tests | Where it runs |
 |---|---|---|
-| Program (LiteSVM) | 200 per build | Local and CI, normal and demo builds |
-| Rule library (`pool-core`) | 87 per build | Local and CI, normal and demo builds |
+| Program (LiteSVM) | 225 per build | Local and CI, normal and demo builds |
+| Rule library (`pool-core`) | 93 per build | Local and CI, normal and demo builds |
 | Stateful fuzz | 1 harness, 50 step kinds | Build server, in a capped Docker container |
-| Mutation testing (cargo-mutants) | sharded runs | GitHub Actions, started by tag |
+| Mutation testing (cargo-mutants) | 1,273 mutants | GitHub Actions, started by tag |
 | Site (vitest) | 33 | Local and CI |
 | Backend (pytest, private repository) | 842 | Local |
 | Devnet end to end | planned | Solana devnet, Sepolia, Stellar testnet |
@@ -109,8 +109,19 @@ tag:
 
 | Run | Code | Caught | Missed | Notes |
 |---|---|---|---|---|
-| `mutants-smoke-1` | `691d1e3` | | | |
-| `mutants-full-1` | `691d1e3` | | | |
+| `mutants-smoke-1` | `691d1e3` | 26 | 0 | Setup check |
+| `mutants-full-1` | `691d1e3` | 1,103 | 65 | 1,273 mutants; 66 timeouts (the automatic 20s limit, now fixed at 900s), 39 unviable |
+| `mutants-check-1` | `494f077` | 42 | 4 | The 66 timeouts rerun; the 4 misses are equivalents |
+| `mutants-check-demo-1` | `494f077` | 23 | 0 | Demo-build values; 2 unviable |
+| `mutants-check-2` | `9a54c82` | 12 | 0 | Kamino reserve boundaries |
+| `mutants-check-3` | `0b0d02c` | 32 | 2 | First misses after new tests; the 2 misses are equivalents |
+| `mutants-check-4` | `bd44c7b` | 26 | 4 | Remaining misses; the 4 misses are equivalents |
+| `mutants-check-5` | `6ca83ab` | 19 | 7 | `leg.rs` misses; the 7 misses are equivalents |
+
+Every missed mutant is now caught by a test or listed in
+[MUTATION_EQUIVALENTS.md](MUTATION_EQUIVALENTS.md) (17 entries) with the reason it cannot change
+behaviour. A shard that draws only equivalent or unviable mutants shows red: the workflow treats a
+shard with nothing caught as a setup fault, so those shards were checked by hand.
 
 ## 6. Site (33)
 
