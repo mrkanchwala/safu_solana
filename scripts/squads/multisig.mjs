@@ -1,13 +1,16 @@
 // The pool's Squads v4 multisig: becomes the program's upgrade authority after `initialize`.
-// Members: the pool admin and the co-signer (AWS KMS), all permissions, threshold 2 (set
-// 2026-10-01). Creating it needs only the admin's signature; members do not sign creation.
+// Members: the pool's three roles, admin, co-signer (AWS KMS, server) and guardian (AWS KMS,
+// CloudShell only), all permissions, threshold 2, and a 7-day time lock between approval and
+// execution (governance.rs: "a Squads 2-of-3 with a 7-day timelock"; 2-of-2 with no lock until
+// 2026-10-23). Creating it needs only the admin's signature; members do not sign creation.
 //
-//   node multisig.mjs create   --rpc <url> --admin <key.json> --co-signer <pubkey>
-//   node multisig.mjs readback --rpc <url> --multisig <pda> --admin <pubkey> --co-signer <pubkey>
+//   node multisig.mjs create   --rpc <url> --admin <key.json> --co-signer <pubkey> --guardian <pubkey>
+//   node multisig.mjs readback --rpc <url> --multisig <pda> --admin <pubkey> --co-signer <pubkey> --guardian <pubkey>
 //
-// Votes (2-of-2): the admin proposes and casts the first vote here; the co-signer's vote is
-// `python -m backend.solana_cosigner approve-proposal` on the server (KMS key), which signs only
-// when given the fingerprint printed here. Then the admin executes.
+// Votes (2-of-3): the admin proposes and casts the first vote here; the second vote is
+// `python -m backend.solana_cosigner approve-proposal` (co-signer, on the server) or the same with
+// `--role guardian` (in CloudShell), which signs only when given the fingerprint printed here. Then,
+// once the time lock has passed, the admin executes.
 //   node multisig.mjs propose-transfer --rpc <url> --multisig <pda> --admin <key.json> --to <pubkey> --lamports <n>
 //   node multisig.mjs propose-upgrade  --rpc <url> --multisig <pda> --admin <key.json> --program <id> --buffer <pubkey>
 //     After it executes, call the pool's `migrate` (anyone): every other pool call refuses until it runs.
@@ -27,6 +30,7 @@ import * as multisig from "@sqds/multisig";
 
 const { Permissions } = multisig.types;
 const THRESHOLD = 2;
+const TIME_LOCK_SECS = 7 * 24 * 60 * 60;
 
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -42,7 +46,9 @@ async function create() {
   const connection = new Connection(arg("rpc"), "confirmed");
   const admin = keypair(arg("admin"));
   const coSigner = new PublicKey(arg("co-signer"));
-  if (coSigner.equals(admin.publicKey)) throw new Error("co-signer must differ from admin");
+  const guardian = new PublicKey(arg("guardian"));
+  const keys = [admin.publicKey, coSigner, guardian].map((k) => k.toBase58());
+  if (new Set(keys).size !== 3) throw new Error("admin, co-signer and guardian must be three different keys");
   const createKey = Keypair.generate(); // one-time seed for the multisig address, no power after
   const [multisigPda] = multisig.getMultisigPda({ createKey: createKey.publicKey });
   const [programConfigPda] = multisig.getProgramConfigPda({});
@@ -53,13 +59,14 @@ async function create() {
     createKey,
     creator: admin,
     multisigPda,
-    configAuthority: null, // autonomous: members change it only by their own 2-of-2 vote
+    configAuthority: null, // autonomous: members change it only by their own 2-of-3 vote
     threshold: THRESHOLD,
     members: [
       { key: admin.publicKey, permissions: Permissions.all() },
       { key: coSigner, permissions: Permissions.all() },
+      { key: guardian, permissions: Permissions.all() },
     ],
-    timeLock: 0,
+    timeLock: TIME_LOCK_SECS,
     rentCollector: null,
     sendOptions: { skipPreflight: false },
   });
@@ -73,14 +80,14 @@ async function readback() {
   const pda = new PublicKey(arg("multisig"));
   const m = await multisig.accounts.Multisig.fromAccountAddress(connection, pda);
   const members = m.members.map((x) => x.key.toBase58()).sort();
-  const want = [arg("admin"), arg("co-signer")].sort();
+  const want = [arg("admin"), arg("co-signer"), arg("guardian")].sort();
   const allPerms = m.members.every((x) => x.permissions.mask === Permissions.all().mask);
   const checks = {
     threshold: m.threshold === THRESHOLD,
     members: JSON.stringify(members) === JSON.stringify(want),
     permissions: allPerms,
     configAuthority: m.configAuthority.equals(PublicKey.default),
-    timeLock: m.timeLock === 0,
+    timeLock: m.timeLock === TIME_LOCK_SECS,
   };
   const [vaultPda] = multisig.getVaultPda({ multisigPda: pda, index: 0 });
   const ok = Object.values(checks).every(Boolean);

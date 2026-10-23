@@ -103,6 +103,8 @@ struct World {
     drained: Option<u64>,
     /// Steps taken in this episode, for the venue rounding allowance.
     steps: u64,
+    /// The last refusal's error, for `FUZZ_WHY`.
+    last_err: String,
 }
 
 /// What a step did, for the step-specific checks.
@@ -156,6 +158,7 @@ impl World {
             venue,
             drained: None,
             steps: 0,
+            last_err: String::new(),
         }
     }
 
@@ -259,7 +262,10 @@ impl World {
         ixs: &[anchor_lang::solana_program::instruction::Instruction],
         who: &Keypair,
     ) -> Option<Vec<String>> {
-        self.env.send_logs(ixs, &[who]).ok()
+        self.env
+            .send_logs(ixs, &[who])
+            .map_err(|e| self.last_err = e)
+            .ok()
     }
 
     fn send(
@@ -267,7 +273,7 @@ impl World {
         ixs: &[anchor_lang::solana_program::instruction::Instruction],
         who: &Keypair,
     ) -> bool {
-        self.env.send_logs(ixs, &[who]).is_ok()
+        self.send_logs(ixs, who).is_some()
     }
 
     /// A claim not yet finished (mostly), so claim steps reach the whole path.
@@ -1001,8 +1007,20 @@ fn run_episode(seed: u64, stats: &mut BTreeMap<&'static str, (u64, u64)>) -> Res
     for i in 0..STEPS {
         let pre = w.pool();
         let pre_assets = w.assets();
+        w.last_err.clear();
         let (name, ok, did) = w.step();
         w.steps += 1;
+        // FUZZ_WHY=<step>: why that step was refused (the program's error), to find coverage gaps.
+        if !ok && std::env::var("FUZZ_WHY").is_ok_and(|s| s == name) {
+            let why = w.last_err.split(" | logs").next().unwrap_or("");
+            let code = w
+                .last_err
+                .split("Error Code: ")
+                .nth(1)
+                .and_then(|r| r.split('.').next())
+                .unwrap_or(why);
+            println!("why {name}: {code}");
+        }
         let e = stats.entry(name).or_default();
         e.0 += 1;
         e.1 += ok as u64;
