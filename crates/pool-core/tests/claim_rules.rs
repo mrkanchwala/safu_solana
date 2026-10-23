@@ -37,6 +37,9 @@ fn tier_ceilings_are_the_ratio_times_the_stake() {
         assert_eq!(tier_cap(USDC, bad, RATIOS), Err(CoreError::InvalidTier));
         assert_eq!(check_tier(bad), Err(CoreError::InvalidTier));
     }
+    for good in [TIER_A, TIER_B, TIER_C] {
+        assert_eq!(check_tier(good), Ok(()));
+    }
 }
 
 #[test]
@@ -79,6 +82,11 @@ fn hack_time_window() {
     assert_eq!(
         check_hack_time(NOW + 1, staked, NOW, NOW, CLAIM_WINDOW_SECS),
         Err(CoreError::HackTimestampInFuture)
+    );
+    // A hack in this very second is not in the future.
+    assert_eq!(
+        check_hack_time(NOW, staked, NOW, NOW, CLAIM_WINDOW_SECS),
+        Ok(())
     );
     assert_eq!(
         check_hack_time(staked - 1, staked, NOW, NOW, CLAIM_WINDOW_SECS),

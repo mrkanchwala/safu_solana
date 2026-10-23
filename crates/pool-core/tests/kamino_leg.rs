@@ -167,6 +167,25 @@ fn a_redeem_needs_cash_in_the_reserve_after_queued_tickets_and_room_under_the_ca
 }
 
 #[test]
+fn the_withdrawal_cap_is_read_from_the_reserve() {
+    let mut d = reserve_bytes(20 * USDC, 0, 20 * USDC);
+    put(&mut d, R_CAP_CAPACITY, &(10 * USDC as i64).to_le_bytes());
+    put(&mut d, R_CAP_CURRENT, &(-(3 * USDC as i64)).to_le_bytes());
+    put(&mut d, R_CAP_START, &900u64.to_le_bytes());
+    put(&mut d, R_CAP_INTERVAL, &200u64.to_le_bytes());
+    let r = parse_reserve(&d).unwrap();
+    assert_eq!(
+        r.cap,
+        WithdrawCap {
+            capacity: 10 * USDC as i64,
+            current: -(3 * USDC as i64),
+            start: 900,
+            interval: 200,
+        }
+    );
+}
+
+#[test]
 fn the_market_emergency_flag_is_read_from_a_lending_market_only() {
     let mut m = vec![0u8; MARKET_MIN_LEN];
     put(&mut m, 0, &ACCOUNT_LENDING_MARKET);

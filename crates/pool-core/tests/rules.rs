@@ -128,10 +128,15 @@ fn buffer_and_push_lines() {
         liquidity::push_amount(5 * USDC, 0, 10 * USDC, 8 * USDC, MAX_DEPLOY_BPS),
         Ok(0)
     );
-    // Below AUTO_PUSH_MIN_BPS of capacity: skipped.
+    // Below AUTO_PUSH_MIN_BPS of capacity: skipped. Exactly at it: pushed.
     assert_eq!(
         liquidity::push_amount(USDC / 20, 0, 10 * USDC, 0, MAX_DEPLOY_BPS),
         Ok(0)
+    );
+    let min_push = 10 * USDC * AUTO_PUSH_MIN_BPS / BPS_DENOMINATOR;
+    assert_eq!(
+        liquidity::push_amount(min_push, 0, 10 * USDC, 0, MAX_DEPLOY_BPS),
+        Ok(min_push)
     );
     // Open claims keep their cash.
     assert_eq!(
@@ -143,6 +148,30 @@ fn buffer_and_push_lines() {
     assert_eq!(
         liquidity::deploy_room(USDC / 20, 0, 10 * USDC, 0, MAX_DEPLOY_BPS),
         Ok(USDC / 20)
+    );
+}
+
+#[test]
+fn a_rebalance_pulls_the_larger_of_uncovered_claims_and_deployment_over_the_line() {
+    // 5 USDC of claims, 2 liquid: 3 to pull. Deployed 6, under the 8 line.
+    assert_eq!(
+        liquidity::rebalance_shortfall(2 * USDC, 5 * USDC, 10 * USDC, 6 * USDC, MAX_DEPLOY_BPS),
+        Ok(3 * USDC)
+    );
+    // Claims covered; stakes left so the line is now 4 and 6 is deployed: 2 over.
+    assert_eq!(
+        liquidity::rebalance_shortfall(5 * USDC, 0, 5 * USDC, 6 * USDC, MAX_DEPLOY_BPS),
+        Ok(2 * USDC)
+    );
+    // Both: the larger.
+    assert_eq!(
+        liquidity::rebalance_shortfall(USDC, 5 * USDC, 5 * USDC, 6 * USDC, MAX_DEPLOY_BPS),
+        Ok(4 * USDC)
+    );
+    // Nothing owed and under the line.
+    assert_eq!(
+        liquidity::rebalance_shortfall(5 * USDC, 2 * USDC, 10 * USDC, 3 * USDC, MAX_DEPLOY_BPS),
+        Ok(0)
     );
 }
 

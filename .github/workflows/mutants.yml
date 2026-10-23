@@ -16,6 +16,8 @@ name: Mutation testing (manual)
 #   mutants-full-<n>   20 shards in parallel over every mutant
 #   mutants-check-<n>  20 shards over only the mutants named in .github/mutants-check.args
 #                      (cargo-mutants -f/-F filters), to re-test a set of misses after new tests
+#   mutants-check-demo-<n>  the same over .github/mutants-check-demo.args on the demo build, for
+#                      mutants of a demo-only value (dead code in the normal build)
 on:
   push:
     tags: ["mutants-smoke-*", "mutants-full-*", "mutants-check-*"]
@@ -71,16 +73,22 @@ jobs:
       - name: cargo mutants
         run: |
           set +e
-          if [ "${{ startsWith(github.ref_name, 'mutants-check-') }}" = "true" ]; then
-            SELECT=$(grep -v '^#' .github/mutants-check.args | tr '\n' ' ')
-          else
-            SELECT=""
-          fi
+          case "${{ github.ref_name }}" in
+            mutants-check-demo-*)
+              SELECT="--features demo $(grep -v '^#' .github/mutants-check-demo.args | tr '\n' ' ')" ;;
+            mutants-check-*)
+              SELECT=$(grep -v '^#' .github/mutants-check.args | tr '\n' ' ') ;;
+            *) SELECT="" ;;
+          esac
           echo "select: $SELECT"
           export REAL_CARGO="$(command -v cargo)"
           export CARGO="$PWD/scripts/mutants_cargo.sh"
           # The binary directly: `cargo mutants` would have cargo overwrite CARGO with itself.
+          # Fixed test timeout: the automatic one is set from a baseline of only the mutated
+          # package's tests (0.01s for pool-core), so a pool-core mutant that survives into the
+          # program's LiteSVM tests was killed at 20s and reported "timeout" instead of missed.
           eval cargo-mutants mutants -p safu_pool -p pool-core --test-workspace=true $SELECT \
+            --timeout 900 \
             --shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 3 --output .
           echo "cargo-mutants exit: $?"
           exit 0

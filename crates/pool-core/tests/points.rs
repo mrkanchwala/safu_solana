@@ -11,6 +11,9 @@ fn one_point_per_usdc_per_day_at_the_default_rate() {
     let start = index(0, 1, POINTS_RATE_ONE, 1).unwrap();
     let later = index(0, 1, POINTS_RATE_ONE, 1 + 30 * DAY).unwrap();
     assert_eq!(earned(100 * USDC_UNIT, start, later), Ok(3_000));
+    // Only the stretch between the two index values counts: days 30 to 40.
+    let after = index(0, 1, POINTS_RATE_ONE, 1 + 40 * DAY).unwrap();
+    assert_eq!(earned(100 * USDC_UNIT, later, after), Ok(1_000));
     // Double rate, double points; half a USDC for one day rounds down to nothing.
     let fast = index(0, 1, 2 * POINTS_RATE_ONE, 1 + DAY).unwrap();
     assert_eq!(earned(USDC_UNIT, 0, fast), Ok(2));
