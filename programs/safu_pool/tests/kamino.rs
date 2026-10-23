@@ -614,3 +614,165 @@ fn a_yield_account_opens_only_for_the_reserves_collateral_mint() {
         safu_pool::errors::PoolError::YieldAccountsMissing,
     );
 }
+
+/// While paused nothing moves into or out of klend on its own: a harvest takes no growth and backing
+/// that matures stays in the vault. Once unpaused both go ahead.
+#[test]
+fn nothing_goes_into_or_out_of_klend_on_its_own_while_paused() {
+    use pool_core::settings::SettingKey;
+    use safu_pool::events::{DeployBelowFloor, Deployed};
+    let mut env = setup(5_000);
+    // An hour to mature (inside the setting's range on both builds).
+    env.set_setting(SettingKey::BackerMaturitySecs, 3_600);
+    env.matured_backer(100_000 * USDC);
+    // 50,000 more backing, not yet capacity: nothing to push for it yet.
+    let b = env.funded(50_000 * USDC);
+    let ix = env.back_ix(&b.pubkey(), 50_000 * USDC);
+    env.ok(&[ix], &[&b]);
+    assert_eq!(env.pool_state().deployed_book, 50_000 * USDC);
+    env.pause();
+    warp(&mut env, 86_400);
+    fresh_prices(&mut env);
+    let before = env.pool_state();
+    let (held, liquid) = (collateral_held(&env), env.vault_liquid());
+    let anyone = env.funded(0);
+    let ix = leg_call(&env, safu_pool::instruction::Harvest {});
+    env.ok(&[ix], &[&anyone]);
+    // The backing matures (permissionless, pause or not): capacity, but no push while paused.
+    let ix = env.mature_ix(&b.pubkey());
+    env.ok(&[ix], &[&b]);
+    let p = env.pool_state();
+    assert_eq!(p.total_backed, before.total_backed + 50_000 * USDC);
+    assert_eq!(
+        (p.deployed_book, p.deployed_collateral, p.last_harvest_at),
+        (
+            before.deployed_book,
+            before.deployed_collateral,
+            before.last_harvest_at
+        )
+    );
+    assert_eq!(p.total_extracted_yield, before.total_extracted_yield);
+    assert_eq!((collateral_held(&env), env.vault_liquid()), (held, liquid));
+
+    // Unpaused: the harvest takes the day's growth, and the keeper pushes the matured backing to
+    // the line (half of 150,000), at the reserve's own rate.
+    env.unpause();
+    let ix = leg_call(&env, safu_pool::instruction::Harvest {});
+    env.ok(&[ix], &[&anyone]);
+    assert!(env.pool_state().total_extracted_yield > before.total_extracted_yield);
+    let ix = leg_call(&env, safu_pool::instruction::AutoDeployLiquidity {});
+    let logs = env.send_logs(&[ix], &[&anyone]).unwrap();
+    let d: Deployed = event(&logs).expect("the keeper deposited");
+    assert_eq!(d.amount, 25_000 * USDC);
+    assert!(event::<DeployBelowFloor>(&logs).is_none());
+    assert_eq!(env.pool_state().deployed_book, 75_000 * USDC);
+}
+
+/// The keeper's rebalance redeems the deployment above the `deploy_bps` line, books the growth
+/// that came back with it as yield (no shortfall), and with nothing above the line does nothing.
+#[test]
+fn the_keeper_rebalance_brings_deployment_back_to_the_line() {
+    use safu_pool::events::{DeploymentShortfall, Redeemed, LEG_KEEPER_REBALANCE};
+    let mut env = setup(5_000);
+    env.matured_backer(100_000 * USDC);
+    // 50,000 deployed; the line moves down to 40% of the 100,000 capacity: 10,000 above it.
+    env.edit::<Pool>(&env.pool(), |p| p.deploy_bps = 4_000);
+    warp(&mut env, 86_400);
+    fresh_prices(&mut env);
+    let before = env.pool_state();
+    let liquid = env.vault_liquid();
+    let anyone = env.funded(0);
+    let ix = leg_call(&env, safu_pool::instruction::EnsureLiquidity {});
+    let logs = env.send_logs(&[ix], &[&anyone]).unwrap();
+    let r: Redeemed = event(&logs).expect("the keeper redeemed");
+    assert_eq!(r.kind, LEG_KEEPER_REBALANCE);
+    let after = env.pool_state();
+    // Collateral for 10,000 of book, rounded up: the book left is the line, or a unit under it.
+    assert!(after.deployed_book <= 40_000 * USDC && after.deployed_book + 1 >= 40_000 * USDC);
+    assert_eq!(
+        after.deployed_collateral,
+        before.deployed_collateral - r.collateral
+    );
+    assert_eq!(env.vault_liquid(), liquid + r.received);
+    // A day of interest came back with it: more than the book that left, so yield and no loss.
+    let principal = before.deployed_book - after.deployed_book;
+    assert!(r.received > principal);
+    assert_eq!(
+        after.total_extracted_yield - before.total_extracted_yield,
+        r.received - principal
+    );
+    assert_eq!(after.total_staked, before.total_staked);
+    assert!(event::<DeploymentShortfall>(&logs).is_none());
+
+    // At the line: the call goes through and changes nothing.
+    let held = collateral_held(&env);
+    let ix = leg_call(&env, safu_pool::instruction::EnsureLiquidity {});
+    env.ok(&[ix], &[&anyone]);
+    assert_eq!(collateral_held(&env), held);
+    assert_eq!(env.pool_state().deployed_book, after.deployed_book);
+}
+
+/// A payment the vault's free cash covers never touches klend.
+#[test]
+fn a_payment_the_vault_covers_leaves_klend_alone() {
+    let mut env = setup(5_000);
+    env.matured_backer(100_000 * USDC);
+    let (_, max) = bounds();
+    let s = env.staker(max);
+    let before = env.pool_state();
+    let held = collateral_held(&env);
+    assert!(env.vault_liquid() - before.rounding_reserve > max);
+    let ix = env.withdraw_part_ix(&s.pubkey(), &s.pubkey(), max);
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.usdc(&s.pubkey()), max);
+    let p = env.pool_state();
+    assert_eq!(
+        (p.deployed_book, p.deployed_collateral),
+        (before.deployed_book, before.deployed_collateral)
+    );
+    assert_eq!(collateral_held(&env), held);
+}
+
+/// Short of cash, a payment pulls the shortfall plus the buffer: the free cash left after it is the
+/// buffer (`capacity × (1 − deploy_bps)`), give or take klend's rounding.
+#[test]
+fn a_payment_short_of_cash_pulls_the_shortfall_and_refills_the_buffer() {
+    let mut env = setup(8_000);
+    env.matured_backer(100_000 * USDC);
+    let (_, max) = bounds();
+    let s = env.staker(max);
+    // Half the payment is free in the vault; the rest of the vault's cash is out of reach.
+    let free = max / 2;
+    let liquid = env.vault_liquid();
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = liquid - free);
+    let ix = env.withdraw_part_ix(&s.pubkey(), &s.pubkey(), max);
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.usdc(&s.pubkey()), max);
+    let p = env.pool_state();
+    assert_eq!(p.rounding_reserve, liquid - free);
+    let capacity = pool_core::capacity(p.total_staked, p.total_backed).unwrap();
+    let buffer = capacity * (10_000 - 8_000) / 10_000;
+    let left = env.vault_liquid() - p.rounding_reserve;
+    assert!(left.abs_diff(buffer) <= 2, "free after {left}, buffer {buffer}");
+}
+
+/// With nothing deployed, a payment short of cash does not call klend at all: the claim counts a
+/// cash-short day and the reserve account is untouched (no refresh).
+#[test]
+fn a_short_payment_with_nothing_deployed_never_calls_klend() {
+    let mut env = setup(8_000);
+    env.matured_backer(100_000 * USDC);
+    let s = env.staker(bounds().1);
+    vested_claim(&mut env, &s);
+    let deployed = env.pool_state().deployed_collateral;
+    admin_provide(&mut env, deployed, 0).unwrap();
+    assert_eq!(env.pool_state().deployed_collateral, 0);
+    warp(&mut env, 60);
+    let liquid = env.vault_liquid();
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = liquid);
+    let reserve_data = env.svm.get_account(&RESERVE).unwrap().data;
+    let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.pool_state().cash_short_days, 1);
+    assert_eq!(env.svm.get_account(&RESERVE).unwrap().data, reserve_data);
+}
