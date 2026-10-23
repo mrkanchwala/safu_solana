@@ -91,8 +91,8 @@ FUZZ_SEED=<seed> FUZZ_EPISODES=1 ...    # replay one episode
 
 | Run | Build | Steps | Result | Code |
 |---|---|---|---|---|
-| 2026-10-23 | normal | | | |
-| 2026-10-23 | demo | | | |
+| 2026-10-23 | normal | 295,750 (1,183 episodes, 7 min) | 0 failures | `1dcf178` |
+| 2026-10-23 | demo | 297,500 (1,190 episodes, 7 min) | 0 failures | `1dcf178` |
 
 ## 5. Mutation testing
 
