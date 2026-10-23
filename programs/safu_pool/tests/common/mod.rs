@@ -4,6 +4,8 @@
 //! nothing is retyped here.
 #![allow(dead_code)]
 
+pub mod klend;
+
 use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_lang::{
     prelude::{Clock, Pubkey},

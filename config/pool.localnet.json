@@ -3,10 +3,11 @@
   "rpcUrl": "http://127.0.0.1:8899",
   "usdcMint": null,
   "stellarForwarder": "CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ",
+  "irisUrl": "https://iris-api-sandbox.circle.com/v2/messages",
   "poolCapUsdc": 100000000000,
   "computeUnitLimit": 400000,
   "drainTestMints": {
     "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   },
-  "_note": "Local validator for the backend e2e (scripts/localnet.sh). `usdcMint` null: the local script creates a 6-decimal mint and writes its address here at run time. Program id comes from the IDL. `stellarForwarder`: Circle's CctpForwarder contract on Stellar for this cluster (testnet for devnet/localnet; mainnet CBZL2IH7F6BIDAA3WBNXYKIXSATJGMSW7K5P5MJ6STX5RXN47TZJDF5T), from developers.circle.com/cctp/references/stellar-contracts."
+  "_note": "Local validator for the backend e2e (scripts/localnet.sh). `usdcMint` null: the local script creates a 6-decimal mint and writes its address here at run time. Program id comes from the IDL. `stellarForwarder`: Circle's CctpForwarder contract on Stellar for this cluster (testnet for devnet/localnet; mainnet CBZL2IH7F6BIDAA3WBNXYKIXSATJGMSW7K5P5MJ6STX5RXN47TZJDF5T), from developers.circle.com/cctp/references/stellar-contracts. `irisUrl`: Circle's attestation API for this cluster (sandbox for devnet/localnet; mainnet https://iris-api.circle.com/v2/messages); the CCTP relayer appends /<source domain>. `relayLookupTable` (set once created by `python -m backend.solana_relay lookup-table`): the relayer's address lookup table."
 }

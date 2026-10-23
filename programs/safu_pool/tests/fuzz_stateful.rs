@@ -1,8 +1,15 @@
 //! Stateful program fuzz: random sequences of every liquidity path (stake, partial and whole
 //! withdraw, emergency exit, backing and its withdrawal, claims end to end, yield, treasury,
-//! pause, settings through the timelock, donations to the vault, covered-wallet registration)
-//! against the real program in LiteSVM, all in USDC. Ordinary refusals are expected and ignored;
-//! the books are checked after every step, success or not.
+//! pause, settings through the timelock, donations to the vault, covered-wallet registration,
+//! suspensions and their renewal, migrate) against the real program in LiteSVM, all in USDC.
+//! Ordinary refusals are expected and ignored; the books are checked after every step, success or
+//! not.
+//!
+//! Odd seeds run with the yield venue: mainnet klend and its USDC reserve (`common::klend`), so
+//! every money call also pushes to, pulls from and harvests the reserve, and the keeper calls,
+//! the admin's `provide_liquidity`, a reserve with no cash and stale prices are steps too. klend
+//! rounds each redeem down, which the pool books as a loss marked off `total_staked`; the check
+//! allows that much and no more (`VENUE_ROUNDING` per step).
 //!
 //! Ignored in normal runs. On the VPS:
 //!   FUZZ_SECS=900 cargo test --release --test fuzz_stateful -- --ignored --nocapture
@@ -17,11 +24,15 @@ mod common;
 
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::InstructionData;
+use anchor_lang::{AnchorDeserialize, Discriminator};
+use base64::Engine;
+use common::klend;
 use common::*;
 use pool_core::params::{DEMO_BUILD, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use pool_core::settings::SETTING_COUNT;
 use safu_pool::approval::ClaimApproval;
 use safu_pool::constants::*;
+use safu_pool::events::{BackerWithdrawn, Withdrawn};
 use safu_pool::state::{
     BackerRecord, Claim, ClaimStatus, CoveredWallet, Pool, StakeRecord, StakerWallets,
 };
@@ -35,6 +46,10 @@ const STAKERS: usize = 4;
 const BACKERS: usize = 3;
 /// Covered-wallet hashes drawn from a small set, so repeats, taken wallets and the limit all happen.
 const WALLET_HASHES: u8 = 6;
+/// klend rounding a redeem may cost, in USDC base units, per step (a step redeems at most twice).
+const VENUE_ROUNDING: u64 = 4;
+/// Share of capacity the venue may hold, drawn per venue episode.
+const DEPLOY_BPS: [u64; 5] = [0, 2_500, 5_000, 8_000, 10_000];
 
 struct Rng(u64);
 impl Rng {
@@ -82,6 +97,12 @@ struct World {
     paid: u64,
     max_gap: u64,
     trace: Vec<String>,
+    /// Running with the yield venue (odd seeds).
+    venue: bool,
+    /// The reserve's cash while drained by a step, to put back.
+    drained: Option<u64>,
+    /// Steps taken in this episode, for the venue rounding allowance.
+    steps: u64,
 }
 
 /// What a step did, for the step-specific checks.
@@ -98,11 +119,22 @@ enum Did {
     Expire,
     WithdrawYield,
     Emergency,
+    /// The call's own report disagrees with the records.
+    Mismatch(&'static str),
+    /// A yield claim (staker's or backer's): pays out paused or not, by design.
+    YieldOut,
+    /// A venue call: may cost klend rounding, even while paused (the admin's provide works then).
+    Venue,
 }
 
 impl World {
     fn new(seed: u64) -> World {
-        let mut env = Env::new();
+        let venue = seed % 2 == 1;
+        let mut env = if venue {
+            klend::setup_on(&klend::MAINNET, DEPLOY_BPS[(seed / 2 % 5) as usize])
+        } else {
+            Env::new()
+        };
         let mut stakers = Vec::new();
         for _ in 0..STAKERS {
             let kp = env.funded(200 * unit());
@@ -121,7 +153,24 @@ impl World {
             paid: 0,
             max_gap: 0,
             trace: Vec::new(),
+            venue,
+            drained: None,
+            steps: 0,
         }
+    }
+
+    fn leg_call(
+        &self,
+        data: impl InstructionData,
+    ) -> anchor_lang::solana_program::instruction::Instruction {
+        self.env.ix(
+            safu_pool::accounts::LegCall {
+                pool: self.env.pool(),
+                vault: self.env.vault(),
+                cash: self.env.cash(),
+            },
+            data,
+        )
     }
 
     fn pool(&self) -> Pool {
@@ -204,6 +253,15 @@ impl World {
         pick[self.rng.below(pick.len() as u64) as usize]
     }
 
+    /// Sends and returns the logs, `None` if refused.
+    fn send_logs(
+        &mut self,
+        ixs: &[anchor_lang::solana_program::instruction::Instruction],
+        who: &Keypair,
+    ) -> Option<Vec<String>> {
+        self.env.send_logs(ixs, &[who]).ok()
+    }
+
     fn send(
         &mut self,
         ixs: &[anchor_lang::solana_program::instruction::Instruction],
@@ -256,7 +314,7 @@ impl World {
         let ben = self.stakers[si].beneficiary;
         let bk = self.backers[bi].insecure_clone();
         let bpk = bk.pubkey();
-        match self.rng.below(40) {
+        match self.rng.below(50) {
             0 | 1 => {
                 let a = self.amount(0);
                 let ix = self.env.stake_ix(&spk, a, ben);
@@ -267,10 +325,15 @@ impl World {
                 let a = self.amount(stake);
                 let before = self.env.usdc(&ben);
                 let ix = self.env.withdraw_part_ix(&spk, &ben, a);
-                let ok = self.send(&[ix], &sk);
+                let logs = self.send_logs(&[ix], &sk);
+                let ok = logs.is_some();
+                // The principal asked for plus all unpaid yield, which the call reports.
+                let yield_paid = logs
+                    .and_then(|l| event::<Withdrawn>(&l))
+                    .map_or(0, |e| e.yield_paid);
                 let did = Did::CapitalOut {
                     staker: Some(si),
-                    amount: a,
+                    amount: a + yield_paid,
                     beneficiary: ben,
                     before,
                 };
@@ -284,7 +347,7 @@ impl World {
             }
             5 => {
                 let ix = self.env.claim_yield_ix(&spk, &ben);
-                ("claim_yield", self.send(&[ix], &sk), Did::Other)
+                ("claim_yield", self.send(&[ix], &sk), Did::YieldOut)
             }
             6 => {
                 let a = self.rng.range(1, 60 * unit());
@@ -318,10 +381,11 @@ impl World {
             }
             10 | 11 => {
                 let pre = self.backer_rec(bi);
-                let reserved = self.pool().backer_yield_reserved;
                 let before = self.env.usdc(&bpk);
                 let ix = self.env.complete_backer_ix(&bpk);
-                let ok = self.send(&[ix], &bk);
+                let logs = self.send_logs(&[ix], &bk);
+                let ok = logs.is_some();
+                let ev = logs.and_then(|l| event::<BackerWithdrawn>(&l));
                 // One drip part of principal (the rest of the request once it closes), plus the
                 // yield paid with it.
                 let principal = match (pre, self.backer_rec(bi)) {
@@ -331,7 +395,13 @@ impl World {
                     (Some(b), Some(a)) => a.withdraw_paid - b.withdraw_paid,
                     _ => 0,
                 };
-                let yield_paid = reserved.saturating_sub(self.pool().backer_yield_reserved);
+                // Principal from the records; the yield paid with it as the call reports it (a
+                // harvest inside the call moves the reserve, so its change is not the payout).
+                let yield_paid = ev.as_ref().map_or(0, |e| e.yield_paid);
+                if ev.as_ref().is_some_and(|e| e.amount != principal) {
+                    let m = "event principal differs from the records";
+                    return ("complete_backer_withdrawal", ok, Did::Mismatch(m));
+                }
                 let amount = principal + yield_paid;
                 let did = Did::CapitalOut {
                     staker: None,
@@ -343,7 +413,7 @@ impl World {
             }
             12 => {
                 let ix = self.env.claim_backer_yield_ix(&bpk);
-                ("claim_backer_yield", self.send(&[ix], &bk), Did::Other)
+                ("claim_backer_yield", self.send(&[ix], &bk), Did::YieldOut)
             }
             13 | 14 => {
                 let Some(rec) = self.stake_rec(si) else {
@@ -526,6 +596,98 @@ impl World {
                 let ix = self.env.register_ix(&writer.pubkey(), spk, h);
                 ("register_wallet", self.send(&[ix], &writer), Did::Other)
             }
+            40 => {
+                let anyone = self.env.funded(0);
+                let ix = self.leg_call(safu_pool::instruction::AutoDeployLiquidity {});
+                (
+                    "auto_deploy_liquidity",
+                    self.send(&[ix], &anyone),
+                    Did::Venue,
+                )
+            }
+            41 => {
+                let anyone = self.env.funded(0);
+                let ix = self.leg_call(safu_pool::instruction::Harvest {});
+                ("harvest", self.send(&[ix], &anyone), Did::Venue)
+            }
+            42 => {
+                let anyone = self.env.funded(0);
+                let ix = self.leg_call(safu_pool::instruction::EnsureLiquidity {});
+                ("ensure_liquidity", self.send(&[ix], &anyone), Did::Venue)
+            }
+            43 => {
+                let held = self.pool().deployed_collateral;
+                let c = [1, held / 2, held, held + 1][self.rng.below(4) as usize];
+                let ix = self.env.ix(
+                    safu_pool::accounts::ProvideLiquidity {
+                        admin: admin.pubkey(),
+                        pool: self.env.pool(),
+                        vault: self.env.vault(),
+                        cash: self.env.cash(),
+                    },
+                    safu_pool::instruction::ProvideLiquidity {
+                        collateral: c,
+                        min_out: 0,
+                    },
+                );
+                ("provide_liquidity", self.send(&[ix], &admin), Did::Venue)
+            }
+            44 if self.venue => {
+                // The reserve's cash is all lent out, or comes back: it moves between available
+                // and borrowed, so a share keeps its worth (klend's own books when it lends).
+                let r = self.env.venue.unwrap().reserve;
+                let mut a = self.env.svm.get_account(&r).unwrap();
+                let (at, bt) = (
+                    pool_core::kamino::R_LIQ_AVAILABLE,
+                    pool_core::kamino::R_LIQ_BORROWED_SF,
+                );
+                let avail = u64::from_le_bytes(a.data[at..at + 8].try_into().unwrap());
+                let borrowed = u128::from_le_bytes(a.data[bt..bt + 16].try_into().unwrap());
+                let shift = pool_core::kamino::SF_SHIFT;
+                let (avail, borrowed) = match self.drained.take() {
+                    Some(lent) => (
+                        avail + lent,
+                        borrowed.saturating_sub(u128::from(lent) << shift),
+                    ),
+                    None => {
+                        self.drained = Some(avail);
+                        (0, borrowed + (u128::from(avail) << shift))
+                    }
+                };
+                a.data[at..at + 8].copy_from_slice(&avail.to_le_bytes());
+                a.data[bt..bt + 16].copy_from_slice(&borrowed.to_le_bytes());
+                self.env.svm.set_account(r, a).unwrap();
+                ("reserve_cash_toggle", true, Did::Other)
+            }
+            45 => {
+                let ix = self.env.suspend_ix(&spk, None, true);
+                ("suspend_stake", self.send(&[ix], &admin), Did::Other)
+            }
+            46 => {
+                let approver = if self.rng.chance(50) {
+                    co.insecure_clone()
+                } else {
+                    self.env.guardian.insecure_clone()
+                };
+                let ix = self.env.renew_suspension_ix(&spk, &approver.pubkey());
+                let ok = self.env.send_logs(&[ix], &[&admin, &approver]).is_ok();
+                ("renew_suspension", ok, Did::Other)
+            }
+            47 => {
+                let ix = self.env.suspend_ix(&spk, None, false);
+                ("unsuspend_stake", self.send(&[ix], &admin), Did::Other)
+            }
+            48 => {
+                // A current pool: migrate is a no-op that never changes the books.
+                let anyone = self.env.funded(0);
+                let ix = self.env.ix(
+                    safu_pool::accounts::Migrate {
+                        pool: self.env.pool(),
+                    },
+                    safu_pool::instruction::Migrate {},
+                );
+                ("migrate", self.send(&[ix], &anyone), Did::Other)
+            }
             _ => {
                 let secs = [
                     60,
@@ -535,7 +697,15 @@ impl World {
                     31 * SECONDS_PER_DAY,
                     self.rng.range(1, 40 * SECONDS_PER_DAY as u64) as i64,
                 ][self.rng.below(6) as usize];
-                self.env.warp(secs);
+                if self.venue {
+                    // klend accrues by slot; prices updated, or left stale.
+                    klend::warp(&mut self.env, secs);
+                    if self.rng.chance(70) {
+                        klend::fresh_prices(&mut self.env);
+                    }
+                } else {
+                    self.env.warp(secs);
+                }
                 ("warp", true, Did::Other)
             }
         }
@@ -592,6 +762,9 @@ impl World {
         pre_assets: u64,
     ) -> Result<(), String> {
         self.check_covered_wallets()?;
+        if let Did::Mismatch(m) = did {
+            return Err(format!("{name}: {m}"));
+        }
         let p = self.pool();
         let now = self.env.now;
         let liquid = self.env.vault_liquid();
@@ -630,7 +803,14 @@ impl World {
                 }
             }
         }
-        if sum != p.total_staked || count != p.total_stakers {
+        // A venue redeem's rounding loss is marked off total_staked only (never off a record).
+        let loss = sum.saturating_sub(p.total_staked);
+        let allowed = if self.venue {
+            VENUE_ROUNDING * self.steps
+        } else {
+            0
+        };
+        if sum < p.total_staked || loss > allowed || count != p.total_stakers {
             return Err(format!(
                 "stakes: records {sum}/{count}, pool {}/{}",
                 p.total_staked, p.total_stakers
@@ -706,6 +886,18 @@ impl World {
                 p.total_allocated
             ));
         }
+        // The venue: the pool's collateral account holds exactly what the books say is deployed.
+        if self.venue {
+            let held = self
+                .env
+                .token_amount(&self.env.venue.unwrap().pool_collateral);
+            if held != p.deployed_collateral {
+                return Err(format!(
+                    "collateral: account {held}, pool {}",
+                    p.deployed_collateral
+                ));
+            }
+        }
         // Holdings vs books; only paid claims may leave the books short.
         let assets = liquid + p.deployed_book;
         let owed = p.total_staked
@@ -730,10 +922,19 @@ impl World {
 
         let was_paused = pre.is_paused(now);
         if ok {
-            // Only the two exits move money out while paused: a staker's emergency exit and a
-            // backer's completed withdrawal ("works while paused", the backer's emergency exit).
-            let exit = matches!(did, Did::Emergency | Did::CapitalOut { staker: None, .. });
-            if was_paused && !exit && assets < pre_assets {
+            // Only these move money out while paused: a staker's emergency exit, a backer's
+            // completed withdrawal ("works while paused", the backer's emergency exit), and yield
+            // claims ("any time, paused or not").
+            let exit = matches!(
+                did,
+                Did::Emergency | Did::YieldOut | Did::CapitalOut { staker: None, .. }
+            );
+            let rounding = if matches!(did, Did::Venue) || self.venue {
+                VENUE_ROUNDING
+            } else {
+                0
+            };
+            if was_paused && !exit && assets + rounding < pre_assets {
                 return Err(format!(
                     "{name} moved money while paused: {pre_assets} -> {assets}"
                 ));
@@ -782,6 +983,18 @@ impl World {
     }
 }
 
+/// The first event of type `E` in a transaction's logs.
+fn event<E: AnchorDeserialize + Discriminator>(logs: &[String]) -> Option<E> {
+    logs.iter().find_map(|l| {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(l.strip_prefix("Program data: ")?)
+            .ok()?;
+        (raw.get(..8)? == E::DISCRIMINATOR)
+            .then(|| E::try_from_slice(&raw[8..]).ok())
+            .flatten()
+    })
+}
+
 /// Largest books-over-holdings gap of one episode.
 fn run_episode(seed: u64, stats: &mut BTreeMap<&'static str, (u64, u64)>) -> Result<u64, String> {
     let mut w = World::new(seed);
@@ -789,6 +1002,7 @@ fn run_episode(seed: u64, stats: &mut BTreeMap<&'static str, (u64, u64)>) -> Res
         let pre = w.pool();
         let pre_assets = w.assets();
         let (name, ok, did) = w.step();
+        w.steps += 1;
         let e = stats.entry(name).or_default();
         e.0 += 1;
         e.1 += ok as u64;
