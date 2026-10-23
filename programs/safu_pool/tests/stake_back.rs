@@ -559,7 +559,9 @@ fn with_a_maturity_each_deposit_keeps_its_own_clock() {
     env.ok(&[ix], &[&b]);
     env.warp(top / 2);
     let ix = env.back_ix(&b.pubkey(), 2 * unit());
-    env.ok(&[ix], &[&b]);
+    let logs = env.send_logs(&[ix], &[&b]).unwrap();
+    // Nothing matured yet, so nothing is reported.
+    assert!(event::<safu_pool::events::BackingMatured>(&logs).is_none());
     let m = env.mature_ix(&b.pubkey());
     let anyone = env.funded(unit());
     assert_err(
@@ -568,7 +570,9 @@ fn with_a_maturity_each_deposit_keeps_its_own_clock() {
     );
     // The first counts on its own clock; the top-up keeps waiting.
     env.warp(top - top / 2);
-    env.ok(std::slice::from_ref(&m), &[&anyone]);
+    let logs = env.send_logs(std::slice::from_ref(&m), &[&anyone]).unwrap();
+    let matured: safu_pool::events::BackingMatured = event(&logs).unwrap();
+    assert_eq!(matured.amount, unit());
     let r = env.backer_state(&b.pubkey());
     assert_eq!(
         (r.amount, r.pending_count, r.pending[0].amount),
@@ -738,6 +742,23 @@ fn requests_share_the_days_free_capital_pro_rata_whatever_the_order() {
     let u1 = env.usdc(&b1.pubkey());
     assert_err(collect(&mut env, &b1), PoolError::NothingToCollectYet);
     assert_eq!(env.usdc(&b1.pubkey()), u1);
+    // The next day a sliver is free again: shares follow what each is still owed, now that both
+    // have been paid part of it. Equal again here.
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let p = env.pool_state();
+    let capacity = p.total_staked + p.total_backed;
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated = capacity - free);
+    let open = env.pool_state().total_backer_open;
+    let owed1 = {
+        let r = env.backer_state(&b1.pubkey());
+        r.withdraw_amount - r.withdraw_paid
+    };
+    let u1 = env.usdc(&b1.pubkey());
+    collect(&mut env, &b1).unwrap();
+    assert_eq!(
+        env.usdc(&b1.pubkey()) - u1,
+        pool_core::drip::share(free, owed1, open).unwrap()
+    );
     // And never more than was free.
     let p = env.pool_state();
     assert!(p.total_allocated <= p.total_staked + p.total_backed);
@@ -912,4 +933,21 @@ fn a_payment_must_name_the_pools_usdc_mint() {
         m.pubkey = other;
     }
     assert_err(env.send(&[ix], &[&s]), PoolError::WrongMint);
+}
+
+#[test]
+fn protocol_revenue_reaches_the_treasury() {
+    let mut env = Env::new();
+    env.staker(bounds().0);
+    // Revenue on the books, and cash in the vault above everything owed.
+    let revenue = unit();
+    env.edit::<Pool>(&env.pool(), |p| p.protocol_yield_balance = revenue);
+    let vault = env.vault();
+    env.add_token(&vault, revenue);
+    let (admin, t) = (env.admin.insecure_clone(), env.treasury.pubkey());
+    let before = env.usdc(&t);
+    let ix = env.withdraw_yield_ix(&admin.pubkey(), &t, revenue);
+    env.ok(&[ix], &[&admin]);
+    assert_eq!(env.usdc(&t), before + revenue);
+    assert_eq!(env.pool_state().protocol_yield_balance, 0);
 }

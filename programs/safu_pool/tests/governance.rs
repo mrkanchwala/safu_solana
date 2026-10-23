@@ -473,3 +473,31 @@ fn an_older_pool_refuses_every_call_until_migrate_runs() {
     set_pool_version(&mut env, ACCOUNT_VERSION + 1);
     assert_err(migrate(&mut env), PoolError::NotMigrated);
 }
+
+#[test]
+fn migrate_on_a_current_pool_does_nothing() {
+    let mut env = Env::new();
+    let caller = env.funded(0);
+    let ix = env.ix(
+        safu_pool::accounts::Migrate { pool: env.pool() },
+        safu_pool::instruction::Migrate {},
+    );
+    let logs = env.send_logs(&[ix], &[&caller]).unwrap();
+    assert!(event::<safu_pool::events::PoolMigrated>(&logs).is_none());
+    assert_eq!(env.pool_state().version, ACCOUNT_VERSION);
+}
+
+#[test]
+fn the_guardian_has_no_say_in_its_own_replacement() {
+    let (mut env, r) = funded_env();
+    let change = GovChange::Guardian(Keypair::new().pubkey());
+    assert_err(
+        propose(&mut env, &r.guardian, change),
+        PoolError::GovTargetCannotApprove,
+    );
+    propose(&mut env, &r.admin, change).unwrap();
+    assert_err(
+        approve(&mut env, &r.guardian, change),
+        PoolError::GovTargetCannotApprove,
+    );
+}

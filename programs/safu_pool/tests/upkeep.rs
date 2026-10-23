@@ -204,8 +204,12 @@ fn the_watch_list_is_walked_two_places_a_transaction_and_shrinks_from_the_head()
         places.iter().flatten().last().unwrap() + 1
     );
     // The first two still wait at most for their gates; walk until the middle place is checked.
+    // Two places a transaction over three: the middle one is checked within two more.
+    let mut walks = 0;
     while !env.watch_state(1).done {
+        assert!(walks < 2, "the done place was never marked");
         any_tx(&mut env);
+        walks += 1;
     }
     assert_eq!(env.pool_state().watch_head, 0);
     // Cancel the head: the next pass closes it, and the done place behind it.
@@ -273,4 +277,39 @@ fn the_largest_transaction_fits_one_packet() {
     let cu = env.send_cu(&[ix], &[&b]).unwrap();
     println!("backing with full upkeep: {cu} compute units");
     assert!(cu < 100_000);
+}
+
+#[test]
+fn a_claim_in_the_line_stays_on_the_watch_list() {
+    let mut env = Env::new();
+    let s = queued(&mut env);
+    assert_eq!(env.watch_state(0).claim, env.claim_addr(&s.pubkey(), &TX));
+    any_tx(&mut env);
+    any_tx(&mut env);
+    // Still in the line: watched until the line releases or clears it.
+    assert!(env.exists(&env.watch_entry(0)) && !env.watch_state(0).done);
+    assert_eq!(env.pool_state().watch_head, 0);
+}
+
+#[test]
+fn upkeep_places_must_be_at_their_own_addresses() {
+    let mut env = Env::new();
+    env.edit::<safu_pool::state::Pool>(&env.pool(), |p| {
+        for k in [K::ApproveWindowSecs, K::InactivitySecs] {
+            p.settings[k.index()] = k.bounds().1;
+        }
+    });
+    env.matured_backer(4 * backing());
+    claimants(&mut env, &[TX, TX2]);
+    let mut metas = env.upkeep_metas();
+    assert_eq!(metas.len(), 8);
+    // The two watch places, each complete, passed in each other's slot.
+    metas.rotate_left(4);
+    let b = env.funded(unit());
+    let mut ix = env.back_ix(&b.pubkey(), unit());
+    ix.accounts.extend(metas);
+    assert_err(
+        env.send_bare(&[ix], &[&b]).map(|_| ()),
+        PoolError::UpkeepAccountsMissing,
+    );
 }

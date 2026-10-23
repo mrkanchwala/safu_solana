@@ -551,7 +551,13 @@ fn a_dead_queued_claim_expires_and_the_line_moves_past_it() {
         env.claim_state(&s[0].pubkey(), &TX).status,
         ClaimStatus::Expired
     );
+    assert_eq!(env.stake_state(&s[0].pubkey()).reserved_claim, None);
     assert!(env.exists(&env.queue_entry(0)));
+    // A place holds exactly one entry: its rent is no more than that.
+    assert_eq!(
+        env.svm.get_account(&env.queue_entry(0)).unwrap().data.len(),
+        8 + <safu_pool::state::QueueEntry as anchor_lang::Space>::INIT_SPACE
+    );
     // The next transaction moves the line past the dead place (upkeep), the one after releases the
     // second claim.
     env.matured_backer(4 * backing());
@@ -884,6 +890,21 @@ fn claims_share_the_days_cap_pro_rata_whatever_the_order() {
     // Each took its whole share today: nothing more until tomorrow.
     let ix = env.stream_ix(&s1.pubkey(), &TX, &s1.pubkey());
     assert_err(env.send(&[ix], &[&s1]), PoolError::DailyOutflowCapReached);
+    // Tomorrow the shares follow what each is still owed, now that part of it is paid.
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let p = env.pool_state();
+    let (capacity, snap_allocated) = (p.total_staked + p.total_backed, p.total_allocated);
+    let c1 = env.claim_state(&s1.pubkey(), &TX);
+    let base = capacity.max(c1.capacity_snapshot);
+    let cap =
+        pool_core::claim::payout_cap(base, p.total_allocated, p.settings().payout_rates()).unwrap();
+    let want = pool_core::drip::share(cap, c1.entitlement - c1.streamed, snap_allocated).unwrap();
+    let ix = env.stream_ix(&s1.pubkey(), &TX, &s1.pubkey());
+    env.ok(&[ix], &[&s1]);
+    assert_eq!(
+        env.claim_state(&s1.pubkey(), &TX).streamed - c1.streamed,
+        want
+    );
 }
 
 #[test]
@@ -1004,9 +1025,14 @@ fn cancel_of_a_partly_paid_claim_restores_only_the_unpaid_stake() {
     env.ok(&[ix], &[&s]);
     let paid = env.claim_state(&s.pubkey(), &TX).streamed;
     assert!(paid > 0 && paid < entitlement());
+    // Another claim's reservation, which the cancel must leave alone.
+    let other = unit();
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated += other);
     let admin = env.admin.insecure_clone();
     let ix = env.cancel_claim_ix(&admin.pubkey(), &s.pubkey(), &TX);
     env.ok(&[ix], &[&admin]);
+    assert_eq!(env.pool_state().total_allocated, other);
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated -= other);
     // What was paid stays paid and comes off the stake.
     let r = env.stake_state(&s.pubkey());
     assert!(!r.forfeited && r.forfeited_by.is_none());
@@ -1321,6 +1347,10 @@ fn override_correction_carries_what_was_already_paid() {
     let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
     env.ok(&[ix], &[&s]);
     let paid = env.claim_state(&s.pubkey(), &TX).streamed;
+    assert!(paid > 0);
+    // Another claim's reservation, which the correction must leave alone.
+    let other = unit();
+    env.edit::<Pool>(&env.pool(), |p| p.total_allocated += other);
     let corrected = 2 * entitlement();
     both_approve(&mut env, &s.pubkey(), TX, corrected, TIER_A).unwrap();
     let c = env.claim_state(&s.pubkey(), &TX);
@@ -1329,7 +1359,7 @@ fn override_correction_carries_what_was_already_paid() {
         (corrected, paid, ClaimStatus::Active)
     );
     // Allocation = new entitlement (the old unpaid part was released first).
-    assert_eq!(env.pool_state().total_allocated, corrected);
+    assert_eq!(env.pool_state().total_allocated, other + corrected);
 }
 
 #[test]
@@ -1372,5 +1402,88 @@ fn the_ed25519_header_is_two_bytes_and_one_offsets_entry() {
     assert_eq!(
         check_ed25519_data(&header[..15], 0, &signer, b"m").unwrap_err(),
         PoolError::MalformedEd25519Instruction.into()
+    );
+}
+
+#[test]
+fn a_partly_paid_stale_claim_returns_only_its_unpaid_rest() {
+    let (mut env, s) = setup();
+    active(&mut env, &s);
+    env.warp(COOLDOWN_SECS + VESTING_SECS / 2);
+    let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    let c = env.claim_state(&s.pubkey(), &TX);
+    assert!(c.streamed > 0);
+    env.warp(c.last_collected + c.inactivity_window + 1 - env.now);
+    let expire = env.transition_ix(
+        &s.pubkey(),
+        &TX,
+        safu_pool::instruction::ExpireStaleClaim {},
+    );
+    let anyone = env.funded(unit());
+    let logs = env.send_logs(&[expire], &[&anyone]).unwrap();
+    let ev: safu_pool::events::ClaimExpired = event(&logs).unwrap();
+    assert_eq!(ev.released, c.entitlement - c.streamed);
+    assert_eq!(env.pool_state().total_allocated, 0);
+}
+
+#[test]
+fn unsuspend_restarts_an_active_claims_collection_window() {
+    let (mut env, s) = setup();
+    active(&mut env, &s);
+    let admin = env.admin.insecure_clone();
+    let claim = env.claim_addr(&s.pubkey(), &TX);
+    let ix = env.suspend_ix(&s.pubkey(), None, true);
+    env.ok(&[ix], &[&admin]);
+    env.warp(pool_core::params::SECONDS_PER_DAY);
+    let ix = env.suspend_ix(&s.pubkey(), Some(claim), false);
+    env.ok(&[ix], &[&admin]);
+    let c = env.claim_state(&s.pubkey(), &TX);
+    assert_eq!(c.last_collected, env.now);
+    assert_eq!(c.blocked_mark, env.pool_state().blocked_secs(env.now));
+}
+
+#[test]
+fn an_override_needs_the_admin_whoever_signs_first() {
+    let (mut env, s) = setup();
+    let (admin, co) = (env.admin.insecure_clone(), env.co_signer.insecure_clone());
+    // The co-signer alone does not complete it.
+    let ix = env.override_ix(&co.pubkey(), &s.pubkey(), TX, entitlement(), TIER_B);
+    env.ok(&[ix], &[&co]);
+    assert_eq!(
+        env.claim_state(&s.pubkey(), &TX).status,
+        ClaimStatus::Unused
+    );
+    let ix = env.override_ix(&admin.pubkey(), &s.pubkey(), TX, entitlement(), TIER_B);
+    env.ok(&[ix], &[&admin]);
+    assert_eq!(
+        env.claim_state(&s.pubkey(), &TX).status,
+        ClaimStatus::Active
+    );
+}
+
+#[test]
+fn a_stream_one_unit_short_of_cash_is_paid_from_the_rounding_reserve() {
+    let (mut env, s) = setup();
+    active(&mut env, &s);
+    env.warp(COOLDOWN_SECS + VESTING_SECS);
+    // Today's share is 1,000 units; free cash is one unit less.
+    let amount = 1_000;
+    let today = pool_core::claim::day_of(env.now);
+    let claim = env.claim_addr(&s.pubkey(), &TX);
+    env.edit::<safu_pool::state::Claim>(&claim, |c| {
+        c.share_day = today;
+        c.share_left = amount;
+    });
+    let liquid = env.vault_liquid();
+    env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = liquid - (amount - 1));
+    let before = env.usdc(&s.pubkey());
+    let ix = env.stream_ix(&s.pubkey(), &TX, &s.pubkey());
+    env.ok(&[ix], &[&s]);
+    assert_eq!(env.usdc(&s.pubkey()), before + amount);
+    let p = env.pool_state();
+    assert_eq!(
+        (p.cash_short_days, p.rounding_reserve),
+        (0, liquid - amount)
     );
 }

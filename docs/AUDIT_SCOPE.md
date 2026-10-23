@@ -65,6 +65,9 @@ Stellar they are separate contracts (`covered-registry`, `cctp-adapter`, `safu-a
 SAFU is sold to wallets, apps and protocols that run their own pool under their own name. We would
 like the audit to cover that use, so a partner deployment does not need a new audit each time.
 
+The lending protocol's own contracts are out of scope: SAFU only uses audited venues and relies on
+their audits. The audit covers SAFU's code, its settings and the connector that calls the venue.
+
 **Partner pools with their own settings.** A partner pool is a new deployment of the same audited
 binary (verifiable build), with its own roles and its own values for the adjustable settings. Every
 setting has hard bounds and ordering rules in the code (`pool-core/src/settings.rs`); values are
