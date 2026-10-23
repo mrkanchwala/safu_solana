@@ -1,6 +1,8 @@
 //! Every clock and every setting's hard range, pinned to its number. The other tests use these
 //! constants by name, so a changed constant moves the test's expectation with it; these do not.
 //! Each value is checked on the build under test: the normal one, or the fast-clock `demo` build.
+//! The normal-build numbers match the Stellar pool's (`safu_multichain` `protection-pool`), which
+//! sets the same rules.
 
 use pool_core::params::*;
 use pool_core::settings::SettingKey as K;

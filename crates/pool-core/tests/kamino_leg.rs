@@ -103,8 +103,10 @@ fn collateral_and_liquidity_convert_at_the_reserve_rate_rounding_down() {
     assert_eq!(r.liquidity_for(10 * USDC).unwrap(), 12 * USDC);
     assert_eq!(r.collateral_for(1).unwrap(), 0);
     assert_eq!(r.liquidity_for(1).unwrap(), 1);
-    // An empty reserve mints 1:1.
+    // An empty reserve mints 1:1, as does one with no collateral out or no liquidity in.
     assert_eq!(reserve(0, 0, 0).collateral_for(5).unwrap(), 5);
+    assert_eq!(reserve(20 * USDC, 0, 0).collateral_for(5).unwrap(), 5);
+    assert_eq!(reserve(0, 0, 20 * USDC).collateral_for(5).unwrap(), 5);
 }
 
 #[test]
@@ -148,6 +150,17 @@ fn a_redeem_needs_cash_in_the_reserve_after_queued_tickets_and_room_under_the_ca
     assert_eq!(queued.redeemable().unwrap(), 8 * USDC - 1);
     assert!(!r.redeem_ok(all, true, now).unwrap());
     assert!(!r.redeem_ok(0, false, now).unwrap());
+    // The reserve's own emergency flag stops it too.
+    let stopped = Reserve {
+        emergency: true,
+        ..r
+    };
+    assert!(!stopped.redeem_ok(all, false, now).unwrap());
+    // At 1:1, exactly the redeemable amount goes through and one unit more does not.
+    let even = reserve(20 * USDC, 0, 20 * USDC);
+    let most = even.redeemable().unwrap();
+    assert!(even.redeem_ok(most, false, now).unwrap());
+    assert!(!even.redeem_ok(most + 1, false, now).unwrap());
     // The withdrawal cap: 5 left this interval, reset once the interval runs out.
     let capped = Reserve {
         cap: WithdrawCap {
@@ -164,6 +177,17 @@ fn a_redeem_needs_cash_in_the_reserve_after_queued_tickets_and_room_under_the_ca
         .unwrap());
     assert_eq!(capped.cap.room(1_100), 10 * USDC);
     assert_eq!(WithdrawCap::default().room(now), u64::MAX);
+    // Either switch alone turns the cap off: no capacity, or no interval.
+    let no_interval = WithdrawCap {
+        interval: 0,
+        ..capped.cap
+    };
+    assert_eq!(no_interval.room(now), u64::MAX);
+    let no_capacity = WithdrawCap {
+        capacity: 0,
+        ..capped.cap
+    };
+    assert_eq!(no_capacity.room(now), u64::MAX);
 }
 
 #[test]
@@ -194,6 +218,12 @@ fn the_market_emergency_flag_is_read_from_a_lending_market_only() {
     assert_eq!(market_emergency(&m), Ok(true));
     m[0] ^= 1;
     assert_eq!(market_emergency(&m), Err(CoreError::BadAccount));
+    // A real market account is longer than the bytes read; one byte short is refused.
+    let mut long = vec![0u8; MARKET_MIN_LEN + 4_000];
+    put(&mut long, 0, &ACCOUNT_LENDING_MARKET);
+    assert_eq!(market_emergency(&long), Ok(false));
+    long.truncate(MARKET_MIN_LEN - 1);
+    assert_eq!(market_emergency(&long), Err(CoreError::BadAccount));
 }
 
 #[test]
