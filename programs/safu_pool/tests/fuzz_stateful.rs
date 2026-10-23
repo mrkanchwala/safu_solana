@@ -23,19 +23,24 @@
 mod common;
 
 use anchor_lang::prelude::Pubkey;
+use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::InstructionData;
 use anchor_lang::{AnchorDeserialize, Discriminator};
 use base64::Engine;
+use common::cctp::{Cctp, HomeKey};
 use common::klend;
 use common::*;
+use pool_core::cctp as c;
 use pool_core::params::{DEMO_BUILD, SECONDS_PER_DAY, SECONDS_PER_HOUR};
 use pool_core::settings::SETTING_COUNT;
 use safu_pool::approval::ClaimApproval;
 use safu_pool::constants::*;
 use safu_pool::events::{BackerWithdrawn, Withdrawn};
+use safu_pool::instruction::{ApproveChange, CancelChange, ProposeChange, ProposeRecovery};
 use safu_pool::state::{
     BackerRecord, Claim, ClaimStatus, CoveredWallet, Pool, StakeRecord, StakerWallets,
 };
+use safu_pool::state::{GovChange, GovKind};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use std::collections::BTreeMap;
@@ -105,6 +110,12 @@ struct World {
     steps: u64,
     /// The last refusal's error, for `FUZZ_WHY`.
     last_err: String,
+    /// Seeds 2 mod 4: Circle's CCTP programs, two home-chain owners (an Ethereum key and a Stellar
+    /// key), each with a stake and a backing identity. The kit's own env is a spare, swapped with
+    /// `env` while a CCTP step runs.
+    cctp: Option<(Cctp, Vec<HomeKey>)>,
+    /// Those identities, for the record sums.
+    cctp_ids: Vec<Pubkey>,
 }
 
 /// What a step did, for the step-specific checks.
@@ -132,8 +143,20 @@ enum Did {
 impl World {
     fn new(seed: u64) -> World {
         let venue = seed % 2 == 1;
+        let (mut cctp, mut cctp_ids) = (None, Vec::new());
         let mut env = if venue {
             klend::setup_on(&klend::MAINNET, DEPLOY_BPS[(seed / 2 % 5) as usize])
+        } else if seed % 4 == 2 {
+            let mut kit = Cctp::new();
+            let owners = vec![HomeKey::eth(), HomeKey::stellar()];
+            for o in &owners {
+                for mode in [c::MODE_STAKE, c::MODE_BACK] {
+                    cctp_ids.push(kit.identity(mode, o));
+                }
+            }
+            let env = std::mem::replace(&mut kit.env, Env::new());
+            cctp = Some((kit, owners));
+            env
         } else {
             Env::new()
         };
@@ -159,6 +182,8 @@ impl World {
             drained: None,
             steps: 0,
             last_err: String::new(),
+            cctp,
+            cctp_ids,
         }
     }
 
@@ -181,7 +206,11 @@ impl World {
     }
 
     fn stake_rec(&self, i: usize) -> Option<StakeRecord> {
-        let a = self.env.stake_record(&self.stakers[i].kp.pubkey());
+        self.stake_rec_of(&self.stakers[i].kp.pubkey())
+    }
+
+    fn stake_rec_of(&self, owner: &Pubkey) -> Option<StakeRecord> {
+        let a = self.env.stake_record(owner);
         self.env.exists(&a).then(|| self.env.read(&a))
     }
 
@@ -200,6 +229,7 @@ impl World {
         let stakers = self.stakers.iter().map(|s| s.kp.pubkey());
         owners
             .chain(stakers)
+            .chain(self.cctp_ids.iter().copied())
             .filter_map(|o| self.backer_rec_of(&o))
             .collect()
     }
@@ -302,11 +332,67 @@ impl World {
         Some(from[self.rng.below(from.len() as u64) as usize])
     }
 
+    /// Mostly a claim at `stage` (so each step meets claims it can move on), else any claim.
+    fn claim_at(&mut self, stage: &[ClaimStatus]) -> Option<ClaimRef> {
+        let at: Vec<ClaimRef> = self
+            .claims
+            .iter()
+            .copied()
+            .filter(|c| self.claim(c).is_some_and(|cl| stage.contains(&cl.status)))
+            .collect();
+        if at.is_empty() || self.rng.chance(20) {
+            return self.open_claim();
+        }
+        Some(at[self.rng.below(at.len() as u64) as usize])
+    }
+
     fn transition(&mut self, c: ClaimRef, data: impl InstructionData) -> bool {
         let s = self.stakers[c.staker].kp.pubkey();
         let ix = self.env.transition_ix(&s, &c.tx, data);
         let payer = self.env.admin.insecure_clone();
         self.send(&[ix], &payer)
+    }
+
+    /// A home-chain owner's step through CCTP: a burn arriving, its deposit, a signed withdraw back
+    /// to the held account, or the held USDC sent home. Run on the kit with `env` swapped in.
+    fn cctp_step(&mut self) -> (&'static str, bool, Did) {
+        let (mut kit, owners) = self.cctp.take().expect("CCTP seed");
+        std::mem::swap(&mut self.env, &mut kit.env);
+        let o = &owners[self.rng.below(owners.len() as u64) as usize];
+        let mode = [c::MODE_STAKE, c::MODE_BACK][self.rng.below(2) as usize];
+        let id = kit.identity(mode, o);
+        let opened = kit.env.exists(&kit.account(&id));
+        let relayer = kit.relayer.insecure_clone();
+        let (name, res) = match self.rng.below(4) {
+            0 => {
+                let a = self.amount(0);
+                let m = kit.burn(o, mode, a);
+                let ix = kit.receive_ix(mode, o, m);
+                ("cctp_receive", kit.env.send(&[ix], &[&relayer]))
+            }
+            1 => ("cctp_deploy", kit.deploy(&id, mode)),
+            2 if opened => {
+                let id = kit.identity(c::MODE_STAKE, o);
+                let have = self.stake_rec_of(&id).map_or(0, |r| r.amount);
+                let res = if kit.env.exists(&kit.account(&id)) {
+                    let inner = kit.withdraw_metas(&id);
+                    let amount = self.amount(have);
+                    let data = safu_pool::instruction::Withdraw { amount }.data();
+                    kit.act(o, &id, inner, data)
+                } else {
+                    Err("no account".into())
+                };
+                ("cctp_withdraw", res)
+            }
+            3 if opened => ("cctp_send_home", kit.send_home(o, &id).map(|_| ())),
+            _ => ("cctp_no_account", Err("no account".into())),
+        };
+        std::mem::swap(&mut self.env, &mut kit.env);
+        self.cctp = Some((kit, owners));
+        if let Err(e) = &res {
+            self.last_err = e.clone();
+        }
+        (name, res.is_ok(), Did::Other)
     }
 
     /// One random step. Returns its name, whether it went through, and what it did.
@@ -320,7 +406,42 @@ impl World {
         let ben = self.stakers[si].beneficiary;
         let bk = self.backers[bi].insecure_clone();
         let bpk = bk.pubkey();
-        match self.rng.below(50) {
+        match self.rng.below(52) {
+            49 | 50 if self.cctp.is_some() => self.cctp_step(),
+            51 => {
+                // Governance on the deploy share (the one change the fuzz's own keys survive): any
+                // role proposes, approves, cancels or starts a recovery; anyone executes.
+                let roles = [
+                    self.env.admin.insecure_clone(),
+                    self.env.co_signer.insecure_clone(),
+                    self.env.guardian.insecure_clone(),
+                ];
+                let who = &roles[self.rng.below(3) as usize];
+                let kind = GovKind::DeployBps as u8;
+                let v = [
+                    0,
+                    2_000,
+                    MAX_DEPLOY_BPS,
+                    MAX_DEPLOY_BPS + 1,
+                    self.pool().deploy_bps,
+                ][self.rng.below(5) as usize];
+                let change = GovChange::DeployBps(v);
+                let (name, ix) = match self.rng.below(5) {
+                    0 => ("gov_propose", ProposeChange { change }.data()),
+                    1 => ("gov_approve", ApproveChange { change }.data()),
+                    2 => ("gov_cancel", CancelChange { kind }.data()),
+                    3 => ("gov_recovery", ProposeRecovery { change }.data()),
+                    _ => {
+                        let ix = self.env.execute_change_ix(kind, None);
+                        return ("gov_execute", self.send(&[ix], who), Did::Other);
+                    }
+                };
+                let ix = Instruction {
+                    data: ix,
+                    ..self.env.gov_ix(&who.pubkey(), CancelChange { kind })
+                };
+                (name, self.send(&[ix], who), Did::Other)
+            }
             0 | 1 => {
                 let a = self.amount(0);
                 let ix = self.env.stake_ix(&spk, a, ben);
@@ -456,7 +577,7 @@ impl World {
                 }
                 ("submit_claim", ok, Did::Other)
             }
-            15 | 31 | 32 => match self.open_claim() {
+            15 | 31 | 32 => match self.claim_at(&[ClaimStatus::PendingTime]) {
                 Some(c) => (
                     "unlock_pending_claim",
                     self.transition(c, safu_pool::instruction::UnlockPendingClaim {}),
@@ -482,7 +603,7 @@ impl World {
                 }
                 None => ("try_release_queued_claim", false, Did::Other),
             },
-            17 | 18 | 33 | 34 => match self.open_claim() {
+            17 | 18 | 33 | 34 => match self.claim_at(&[ClaimStatus::AwaitingApproval]) {
                 Some(c) => {
                     let s = self.stakers[c.staker].kp.insecure_clone();
                     let ix = self.env.approve_claim_ix(&s.pubkey(), &c.tx);
@@ -490,7 +611,7 @@ impl World {
                 }
                 None => ("approve_claim", false, Did::Other),
             },
-            19 | 20 | 35 | 36 | 37 => match self.open_claim() {
+            19 | 20 | 35 | 36 | 37 => match self.claim_at(&[ClaimStatus::Active]) {
                 Some(c) => {
                     let s = self.stakers[c.staker].kp.insecure_clone();
                     let b = self.stakers[c.staker].beneficiary;
@@ -518,7 +639,11 @@ impl World {
                 }
                 None => ("cancel_claim", false, Did::Other),
             },
-            22 => match self.open_claim() {
+            22 => match self.claim_at(&[
+                ClaimStatus::Reserved,
+                ClaimStatus::PendingTime,
+                ClaimStatus::AwaitingApproval,
+            ]) {
                 Some(c) => {
                     let (name, ok) = match self.rng.below(3) {
                         0 => (
@@ -795,8 +920,12 @@ impl World {
 
         // Stakes: live records sum to total_staked exactly (no loss path), count exact.
         let (mut sum, mut count) = (0u64, 0u64);
-        for i in 0..STAKERS {
-            if let Some(r) = self.stake_rec(i) {
+        let owners = self.stakers.iter().map(|s| s.kp.pubkey());
+        for o in owners
+            .chain(self.cctp_ids.iter().copied())
+            .collect::<Vec<_>>()
+        {
+            if let Some(r) = self.stake_rec_of(&o) {
                 if !r.forfeited {
                     sum += r.amount;
                     count += (r.amount > 0) as u64;

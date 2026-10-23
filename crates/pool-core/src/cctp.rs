@@ -80,6 +80,10 @@ pub mod burn {
 /// Leading zero bytes of an EVM address left-padded to 32 bytes.
 pub const EVM_PADDING: usize = 12;
 
+/// Circle's TokenMessenger account: where its fee recipient sits (the receive call passes that
+/// recipient's USDC account). Read by clients only.
+pub const TOKEN_MESSENGER_FEE_RECIPIENT: usize = 109;
+
 /// Who controls a CCTP stake: the key that burned USDC on the home chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {

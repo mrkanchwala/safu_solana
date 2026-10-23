@@ -3,6 +3,7 @@
 
 use anchor_lang::prelude::*;
 use pool_core::params as p;
+use pool_core::{cctp, kamino};
 
 #[constant]
 pub const DEMO_BUILD: bool = p::DEMO_BUILD;
@@ -212,6 +213,54 @@ pub const CCTP_MODE_BACK: u8 = pool_core::cctp::MODE_BACK;
 pub const CCTP_ACTION_DOMAIN: &[u8] = pool_core::cctp::ACTION_DOMAIN;
 #[constant]
 pub const MAX_ACTION_TTL_SECS: i64 = p::MAX_ACTION_TTL_SECS;
+/// What a Stellar owner's wallet prefixes before signing (SEP-53 `signMessage`).
+#[constant]
+pub const CCTP_SEP53_PREFIX: &[u8] = pool_core::cctp::SEP53_PREFIX;
+
+// Outside layouts clients need to name accounts and read messages: Circle's v2 message and burn
+// body, and Kamino's reserve. Facts about those programs, defined once in pool-core, read here.
+#[constant]
+pub const CCTP_HEADER_SOURCE_DOMAIN: u64 = cctp::header::SOURCE_DOMAIN as u64;
+#[constant]
+pub const CCTP_HEADER_DESTINATION_DOMAIN: u64 = cctp::header::DESTINATION_DOMAIN as u64;
+#[constant]
+pub const CCTP_HEADER_NONCE: u64 = cctp::header::NONCE as u64;
+#[constant]
+pub const CCTP_HEADER_DESTINATION_CALLER: u64 = cctp::header::DESTINATION_CALLER as u64;
+#[constant]
+pub const CCTP_HEADER_BODY: u64 = cctp::header::BODY as u64;
+#[constant]
+pub const CCTP_BURN_TOKEN: u64 = cctp::burn::BURN_TOKEN as u64;
+#[constant]
+pub const CCTP_BURN_MINT_RECIPIENT: u64 = cctp::burn::MINT_RECIPIENT as u64;
+#[constant]
+pub const CCTP_BURN_AMOUNT: u64 = cctp::burn::AMOUNT as u64;
+#[constant]
+pub const CCTP_BURN_MESSAGE_SENDER: u64 = cctp::burn::MESSAGE_SENDER as u64;
+#[constant]
+pub const CCTP_BURN_HOOK_DATA: u64 = cctp::burn::HOOK_DATA as u64;
+#[constant]
+pub const CCTP_EVM_PADDING: u64 = cctp::EVM_PADDING as u64;
+#[constant]
+pub const CCTP_TOKEN_MESSENGER_FEE_RECIPIENT: u64 = cctp::TOKEN_MESSENGER_FEE_RECIPIENT as u64;
+#[constant]
+pub const KLEND_LENDING_MARKET_AUTH_SEED: &[u8] = kamino::LENDING_MARKET_AUTH_SEED;
+#[constant]
+pub const KLEND_NULL_KEY: Pubkey = Pubkey::new_from_array(kamino::NULL_KEY);
+#[constant]
+pub const KLEND_RESERVE_LENDING_MARKET: u64 = kamino::R_LENDING_MARKET as u64;
+#[constant]
+pub const KLEND_RESERVE_LIQUIDITY_SUPPLY: u64 = kamino::R_LIQ_SUPPLY_VAULT as u64;
+#[constant]
+pub const KLEND_RESERVE_COLLATERAL_MINT: u64 = kamino::R_COLL_MINT as u64;
+#[constant]
+pub const KLEND_RESERVE_SCOPE_FEED: u64 = kamino::R_SCOPE_FEED as u64;
+#[constant]
+pub const KLEND_RESERVE_SWITCHBOARD_PRICE: u64 = kamino::R_SWITCHBOARD_PRICE as u64;
+#[constant]
+pub const KLEND_RESERVE_SWITCHBOARD_TWAP: u64 = kamino::R_SWITCHBOARD_TWAP as u64;
+#[constant]
+pub const KLEND_RESERVE_PYTH: u64 = kamino::R_PYTH as u64;
 /// Watch-list places each upkeep checks.
 #[constant]
 pub const UPKEEP_WATCH_PER_CALL: u64 = p::UPKEEP_WATCH_PER_CALL as u64;
