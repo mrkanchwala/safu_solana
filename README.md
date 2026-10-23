@@ -1,61 +1,89 @@
 # SAFU Staking on Solana
 
-Automatic payouts when a wallet gets drained. SAFU is a shared protection pool on Solana: you stake
-SOL and pick up to two wallets to cover, on Solana or Ethereum. If one is drained through a malicious
-link or token approval, a stolen key, a sandwich attack or a wrongful liquidation, you file a claim and
-our scanner checks the drain transactions. Once it confirms the loss, the pool pays you back, up to 15,
-10 or 5 times your stake depending on the covered wallet's history, and nobody votes on it.
+One USDC pool on Solana that pays you back when a wallet you registered is drained. Covered wallets
+can sit on Solana, Ethereum or Stellar. Payouts follow rules set in advance, and nobody votes on a
+claim.
 
-Status: live on Solana devnet at https://solana.safustaking.com, with Ethereum cover read on Sepolia.
-This is a test-network build with no real users.
+This branch, `solana-usdc-pool`, is the USDC pool going to audit: the same rules, roles and settings
+as the Stellar pool in [safu_multichain](https://github.com/mrkanchwala/safu_multichain), rebuilt in
+Anchor. `main` still holds the earlier SOL demo pool (Marinade staking). The USDC pool is not
+deployed yet; a devnet run comes before the audit.
 
 ## How it works
 
-- **Stakers** stake SOL and register up to two covered wallets, proving they own each one.
-- **Backers** add SOL without cover to make the pool bigger, and share the staking yield with stakers.
-- The pool lends its idle USDC on Kamino Lend while it waits for claims, and keeps enough cash for open claims.
-- A claim names up to five drain transactions within 30 days of the drain. The scanner checks each one on
-  its own chain, the oracle signs the verdict with a key held in a cloud key vault, and the program
-  checks that Ed25519 signature and the tier ceiling before it pays.
-- A claim can be approved once the stake is 90 days old. The payout then streams over 45 days after a
-  7-day cooldown, and a daily payout cap tightens as more of the pool is in use, so a wave of claims
-  is paid in order.
-- Program upgrades need two keys to sign together (Squads).
+1. **Stake USDC** from a Solana wallet, or from an Ethereum or Stellar wallet over Circle CCTP v2. A
+   stake from another chain lives in an identity account that only your own key at home controls,
+   and its payouts and withdrawals go back home. Anything above the maximum stake goes into backing:
+   it earns yield and is never forfeited on a claim.
+2. **Register up to three covered wallets** on any mix of Solana, Ethereum and Stellar. You prove
+   each one is yours; a covered wallet is bound to your stake for good.
+3. **File a claim** within 30 days of a drain, citing up to 20 drain transactions. The scanner checks
+   each one on its own chain, the oracle signs the result with a key held in AWS KMS, and the program
+   checks that signature against its own limits before any money moves.
+4. **Collect the payout.** A claim filed before your stake is 90 days old is recorded at full value
+   and held until day 90. You approve it in one click, a 7-day cooldown runs, and the payout streams
+   to you over 45 days. If the pool is short of room on a given day, claims wait in a line and are
+   released strictly in the order they joined. A paid claim forfeits the stake, and that address can
+   never stake again.
 
-## Tech
+**How much.** Each covered wallet has a tier (A, B or C) based on its on-chain history. The program
+caps a payout at 15x your stake for Tier A, 10x for Tier B and 5x for Tier C (adjustable within
+bounds; a cut applies only to new stakes), and the amount paid is the real loss up to that ceiling.
 
-Anchor and Rust for the program, with every pool rule written as a pure function in `crates/pool-core`
-and covered by unit and property tests. LiteSVM for program tests (Kamino Lend's mainnet program loaded for the yield tests), plus fuzzing. Kamino Lend for yield,
-Squads for the upgrade authority, Ed25519 checks on oracle verdicts. The site uses React, Vite and
-@solana/kit. The loss scanner runs in Python on a private backend and reads chain data through Helius
-and Alchemy.
+**Yield.** Idle USDC is lent on Kamino Lend, up to 80% of the pool. By default the yield on your own
+stake goes to you. Backers add USDC that helps the pool pay large claims on time; backing counts from
+day one and leaves through a daily drip.
 
-## Roadmap
+**Points.** One point per dollar per day, for stakers and backers at separately set rates. Points are
+burned on a paid claim.
 
-- Let stakers borrow against what they staked while their cover stays on.
-- Earn more on the money waiting in the pool.
-- Accept USDC from any chain through Circle's CCTP.
-- Partner pools: wallets, apps and protocols run their own SAFU pool so their users are covered.
+**Changing the rules.** Each adjustable number has hard bounds and changes only through a proposal,
+a second key's approval and 7 days in public. Roles, the oracle and the yield venue change only with
+two of three roles and 7 days. A code upgrade goes through a Squads multisig of the same three roles,
+2 of 3, with a 7-day time lock. Details: [docs/AUDITOR_DISCLOSURES.md](docs/AUDITOR_DISCLOSURES.md).
 
-## Repo layout
+## Repository layout
 
-- `crates/pool-core`: every pool rule as a pure function, with unit and property tests.
-- `programs/safu_pool`: the Anchor program.
-- `app/`: the site.
-- `config/`: deploy values per cluster.
-- `docs/PORT_MAP.md`: how this maps to the multichain pool.
-- `DISCLOSURE.md`: prior work.
+```
+programs/safu_pool/     The Anchor program: stake, back, claims and the claim line, payout streams,
+                        settings, governance, covered wallets, the Kamino Lend leg, CCTP v2
+crates/pool-core/       Every pool rule as a pure function, with unit and property tests
+app/                    The site (React, Vite, @solana/kit)
+config/                 Deploy values per cluster
+scripts/                Fuzz runner, mutation-test runner, Squads multisig, local chain, hardcode check
+docs/                   Audit scope, auditor disclosures, testing, port map from the Stellar pool
+```
+
+The claim backend (scanner, tier engine, loss pricing, oracle signing, CCTP relayer) is kept in a
+private repository. Scoring rules are not published, so a claim cannot be shaped to pass them.
 
 ## Build and test
 
 ```bash
-cargo test -p pool-core && cargo test -p pool-core --features demo
-NO_DNA=1 anchor build && cargo test -p safu_pool
-NO_DNA=1 anchor build -- --features demo && cargo test -p safu_pool --features demo
-./scripts/check_no_hardcodes.sh
+cargo fmt --check && ./scripts/check_no_hardcodes.sh
+NO_DNA=1 anchor build && cargo test
+NO_DNA=1 anchor build -- --features demo && cargo test -p safu_pool -p pool-core --features demo
 ```
 
-Local chain for the claim backend: `./scripts/localnet.sh` (demo build, a test USDC mint, fresh
-ledger each start). `config/pool.localnet.json` points clients at it.
+| Suite | Tests | Where it runs |
+|---|---|---|
+| Program (LiteSVM, with Kamino Lend and Circle CCTP loaded) | 200 per build | Local and CI |
+| Rule library (`pool-core`) | 87 per build | Local and CI |
+| Stateful fuzz | 50 step kinds | Build server, capped container |
+| Mutation testing (cargo-mutants) | sharded runs | GitHub Actions |
+| Site (vitest) | 33 | Local and CI |
 
-Licensed under Apache-2.0.
+What each suite covers and how to run it: [docs/TESTING.md](docs/TESTING.md). What is in and out of
+audit scope: [docs/AUDIT_SCOPE.md](docs/AUDIT_SCOPE.md). How each piece maps to the Stellar pool:
+[docs/PORT_MAP.md](docs/PORT_MAP.md).
+
+## Status
+
+Not audited yet, and not deployed. Known, deliberate design choices are written up for the auditor
+in [docs/AUDITOR_DISCLOSURES.md](docs/AUDITOR_DISCLOSURES.md), and the threat model is in
+[docs/STRIDE_THREAT_MODEL.pdf](docs/STRIDE_THREAT_MODEL.pdf). Prior work this code builds on:
+[DISCLOSURE.md](DISCLOSURE.md).
+
+## License
+
+Licensed under Apache 2.0, with the full text in [LICENSE](LICENSE).
