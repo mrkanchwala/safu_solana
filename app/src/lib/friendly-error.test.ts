@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import { toFriendlyError } from "./friendly-error";
 
 describe("toFriendlyError", () => {
-  it("says 'not enough SOL' for a System program 0x1, not a Marinade refusal", () => {
-    const r = toFriendlyError(new Error("insufficient funds: Program 11111111111111111111111111111111 failed: custom program error: 0x1"));
-    expect(r.message).toBe("Not enough SOL in this wallet.");
+  it("tells missing SOL (fee) from missing USDC", () => {
+    const sol = toFriendlyError(new Error("insufficient funds: Program 11111111111111111111111111111111 failed: custom program error: 0x1"));
+    expect(sol.message).toBe("Not enough SOL in this wallet to pay the network fee.");
+    const usdc = toFriendlyError(new Error("insufficient USDC: Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA failed: custom program error: 0x1"));
+    expect(usdc.message).toBe("Not enough USDC in this wallet.");
   });
 
   it("matches a known backend rejection reason", () => {
@@ -61,10 +63,14 @@ describe("toFriendlyError", () => {
     expect(r.message).not.toMatch(/NotOracle|PROGRAM/);
   });
 
-  it("explains a Marinade refusal without naming a pool rule", () => {
-    const r = toFriendlyError(new Error("MARINADE_REFUSED: Program MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD failed: custom program error: 0x178e"));
-    expect(r.message).toContain("Marinade");
-    expect(r.message).not.toMatch(/0x|MARINADE_/);
+  it("explains a lending-venue refusal without a code", () => {
+    const r = toFriendlyError(new Error("VENUE_REFUSED: Program KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD failed: custom program error: 0x178e"));
+    expect(r.message).toContain("lending venue");
+    expect(r.message).not.toMatch(/0x|VENUE_/);
+  });
+
+  it("explains a wallet with no USDC account", () => {
+    expect(toFriendlyError(new Error("NO_USDC_ACCOUNT")).message).toContain("no USDC account");
   });
 
   it("explains missing SOL", () => {

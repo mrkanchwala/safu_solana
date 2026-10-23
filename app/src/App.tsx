@@ -7,7 +7,7 @@ import { ClaimFilePanel } from "./components/ClaimFilePanel";
 import { BackPanel } from "./components/BackPanel";
 import { useClient } from "./lib/client";
 import { POOL } from "./lib/pool";
-import { fmtSol, stakeBounds } from "./lib/reads";
+import { fmtUsdc, stakeBounds } from "./lib/reads";
 import { usePool } from "./lib/usePool";
 
 type Tab = "stake" | "back" | "file" | "collect";
@@ -42,9 +42,9 @@ export default function App() {
             <em>Automatically. No vote. No appeal.</em>
           </h1>
           <p>
-            A shared SOL pool on Solana. Stake, register the wallets you want covered, and if one is drained
-            through phishing, a bad approval or a stolen key, the payout comes back to you in SOL. While it
-            waits, the pool's SOL earns staking yield through Marinade.
+            A shared USDC pool on Solana. Stake, register the wallets you want covered, and if one is drained
+            through phishing, a bad approval or a stolen key, the payout comes back to you in USDC. While it
+            waits, most of the pool's USDC is lent on Kamino, and the yield is shared with stakers.
           </p>
         </div>
       </section>
@@ -78,20 +78,20 @@ export default function App() {
           <div className="sub">Live numbers, read straight from the pool on {NET}.</div>
           <div className="stat-grid">
             <div className="stat-card">
-              <div className="v">{pool ? fmtSol(pool.total_staked, 2) : "--"}</div>
-              <div className="k">SOL staked</div>
+              <div className="v">{pool ? fmtUsdc(pool.total_staked) : "--"}</div>
+              <div className="k">USDC staked</div>
             </div>
             <div className="stat-card">
               <div className="v">{pool ? pool.total_stakers.toString() : "--"}</div>
               <div className="k">Stakers</div>
             </div>
             <div className="stat-card">
-              <div className="v">{pool ? fmtSol(pool.total_backed, 2) : "--"}</div>
-              <div className="k">SOL backing</div>
+              <div className="v">{pool ? fmtUsdc(pool.total_backed) : "--"}</div>
+              <div className="k">USDC backing</div>
             </div>
             <div className="stat-card">
-              <div className="v">{pool ? fmtSol(stakeBounds(pool).max, 2) : "--"}</div>
-              <div className="k">Max stake (SOL)</div>
+              <div className="v">{pool ? fmtUsdc(stakeBounds(pool).max) : "--"}</div>
+              <div className="k">Max stake (USDC)</div>
             </div>
           </div>
         </div>

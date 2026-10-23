@@ -3,7 +3,7 @@ import { useClient } from "../lib/client";
 import { fileClaim } from "../lib/claimApi";
 import type { FileClaimResult } from "../lib/claimApi";
 import { toFriendlyError } from "../lib/friendly-error";
-import { fmtSol } from "../lib/reads";
+import { fmtUsdc } from "../lib/reads";
 import { explorerTx, num } from "../lib/pool";
 
 // File a claim tab. ONE claim per stake, bundling up to MAX_TXIDS_PER_CLAIM drain transactions from the
@@ -58,7 +58,7 @@ export function ClaimFilePanel() {
             ) : <span>&nbsp;</span>}
           </div>
           <div className="field-input">
-            <input placeholder="Solana signature or Ethereum tx hash (0x...)" value={r} onChange={(e) => setRow(i, e.target.value)} aria-label={`Drain transaction ${i + 1}`} />
+            <input placeholder="Solana signature, Ethereum (0x...) or Stellar tx hash" value={r} onChange={(e) => setRow(i, e.target.value)} aria-label={`Drain transaction ${i + 1}`} />
           </div>
         </div>
       ))}
@@ -93,7 +93,7 @@ export function ClaimFilePanel() {
           </div>
           <div className="side-stat">
             <div className="k">Payout</div>
-            <div className="v">{fmtSol(BigInt(result.entitlement_lamports))} SOL</div>
+            <div className="v">{fmtUsdc(BigInt(result.entitlement_usdc))} USDC</div>
           </div>
           <div className="side-stat">
             <div className="k">Tier</div>

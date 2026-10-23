@@ -2,18 +2,16 @@ import { useEffect, useState } from "react";
 import { useAction, useClient } from "../lib/client";
 import { approveClaim, collectClaim, releaseQueuedClaim, unlockPendingClaim } from "../lib/actions";
 import { num, setting } from "../lib/pool";
-import { unstakeFeeBps } from "../lib/program";
-import { fmtDuration, fmtSol, readMyClaim, readMyStake, refreshSoon, vested } from "../lib/reads";
+import { fmtDuration, fmtUsdc, readMyClaim, readMyStake, refreshSoon, vested } from "../lib/reads";
 import type { ClaimStatus, MyClaim, MyStake } from "../lib/reads";
 import { usePool } from "../lib/usePool";
-import { FeeNote } from "./StakePanel";
 import { TxStatus } from "./TxStatus";
 
 // Collect payout tab. The claim's steps, each a button when it's the next one:
 //   Reserved (waiting on the pool's daily room) -> "Try to move it forward" (anyone can)
 //   PendingTime (stake younger than the time gate) -> "Start the claim" once the gate passes (anyone can)
 //   AwaitingApproval -> "Approve claim" (the staker only; gives up the stake, starts the payout)
-//   Active -> "Collect payout" after the cooldown (the staker signs; SOL goes to the staking wallet)
+//   Active -> "Collect payout" after the cooldown (the staker signs; USDC goes to the staking wallet)
 const TIME_GATE = Number(num("TIME_GATE_SECS"));
 const TIER_NAME: Record<number, string> = {
   [Number(num("TIER_A"))]: "A",
@@ -52,7 +50,6 @@ export function ClaimsPanel() {
   const VESTING = pool ? Number(setting(pool, "VESTING_SECS")) : 0;
   const [stake, setStake] = useState<MyStake | null>(null);
   const [claim, setClaim] = useState<MyClaim | null>(null);
-  const [feeBps, setFeeBps] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,12 +61,9 @@ export function ClaimsPanel() {
       }
       const s = await readMyStake(pool, staker).catch(() => null);
       const c = await readMyClaim(s).catch(() => null);
-      const left = c ? c.data.entitlement - c.data.streamed : 0n;
-      const fee = c && c.data.status === "Active" && left > 0n ? await unstakeFeeBps(pool, left).catch(() => null) : null;
       if (!cancelled) {
         setStake(s);
         setClaim(c);
-        setFeeBps(fee);
       }
     })();
     return () => {
@@ -80,12 +74,12 @@ export function ClaimsPanel() {
   const done = <T,>(p: Promise<T>) => p.finally(() => refreshSoon(() => setRefreshKey((k) => k + 1)));
   const need = () => {
     if (!staker || !claim) throw new Error("You don't have a claim open.");
-    return { staker, claim: claim.address };
+    return claim;
   };
-  const releaseAction = useAction(() => done((async () => { const n = need(); return releaseQueuedClaim(client, pool, n.staker, n.claim); })()));
-  const unlockAction = useAction(() => done((async () => { const n = need(); return unlockPendingClaim(client, pool, n.staker, n.claim); })()));
-  const approveAction = useAction(() => done((async () => approveClaim(client, pool, need().claim))()));
-  const collectAction = useAction(() => done((async () => collectClaim(client, pool, need().claim, stake?.beneficiary ?? staker ?? ""))()));
+  const releaseAction = useAction(() => done((async () => { const c = need(); return releaseQueuedClaim(client, pool, c.address, c.data); })()));
+  const unlockAction = useAction(() => done((async () => { const c = need(); return unlockPendingClaim(client, pool, c.address, c.data); })()));
+  const approveAction = useAction(() => done((async () => approveClaim(client, pool, need().address))()));
+  const collectAction = useAction(() => done((async () => collectClaim(client, pool, need().address))()));
 
   const status = claim?.data.status;
   const gateOpensAt = stake ? Number(stake.staked_at) + TIME_GATE : 0;
@@ -130,7 +124,7 @@ export function ClaimsPanel() {
         {status === "AwaitingApproval" ? (
           <>
             <div className="ramp-disclosure" style={{ marginTop: 8 }}>
-              Approving gives up your staked SOL and starts the payout: a {fmtDuration(COOLDOWN)} wait, then
+              Approving gives up your staked USDC and starts the payout: a {fmtDuration(COOLDOWN)} wait, then
               it pays out over {fmtDuration(VESTING)}. Only you can do this, it can't be undone, and it has to
               happen by {new Date(Number(claim!.data.approve_deadline) * 1000).toLocaleString()}.
             </div>
@@ -154,9 +148,8 @@ export function ClaimsPanel() {
             disabled={status !== "Active" || cooldownLeft > 0 || collectable <= 0n || collectAction.isRunning}
             onClick={() => collectAction.dispatch()}
           >
-            {collectAction.isRunning ? "Sending..." : collectable > 0n ? `Collect ${fmtSol(collectable)} SOL` : "Collect payout"}
+            {collectAction.isRunning ? "Sending..." : collectable > 0n ? `Collect ${fmtUsdc(collectable)} USDC` : "Collect payout"}
           </button>
-          {status === "Active" ? <FeeNote bps={feeBps} /> : null}
         </div>
         <TxStatus action={collectAction} />
       </div>
@@ -165,11 +158,11 @@ export function ClaimsPanel() {
           <>
             <div className="side-stat">
               <div className="k">Payout total</div>
-              <div className="v">{fmtSol(claim.data.entitlement)} SOL</div>
+              <div className="v">{fmtUsdc(claim.data.entitlement)} USDC</div>
             </div>
             <div className="side-stat">
               <div className="k">Paid so far</div>
-              <div className="v">{fmtSol(claim.data.streamed)} SOL</div>
+              <div className="v">{fmtUsdc(claim.data.streamed)} USDC</div>
             </div>
             <div className="side-stat">
               <div className="k">Tier</div>
@@ -181,7 +174,7 @@ export function ClaimsPanel() {
             <div className="k">How this works</div>
             <div className="v good">
               After you approve, the payout builds up over time. Each time you press Collect, whatever has built
-              up so far is sent to your staking wallet, in SOL.
+              up so far is sent to your staking wallet, in USDC.
             </div>
           </div>
         )}

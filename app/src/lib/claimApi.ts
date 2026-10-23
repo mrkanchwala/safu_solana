@@ -5,8 +5,8 @@
 // backend reads the loss, the hack time and the tier from the chain, and the oracle submits the claim.
 import type { AppClient } from "./client";
 
-/** Chains a covered wallet can be on. Ethereum is Sepolia while the pool is on devnet. */
-export type CoverChain = "solana" | "sepolia";
+/** Chains a covered wallet can be on. Ethereum is Sepolia and Stellar is testnet while the pool is on devnet. */
+export type CoverChain = "solana" | "sepolia" | "stellar";
 
 export type CoveredWalletResponse = {
   staker: string;
@@ -29,7 +29,7 @@ export type FileClaimResult = {
   tx_signature: string;
   staker: string;
   wallets: string[];
-  entitlement_lamports: number;
+  entitlement_usdc: number; // USDC base units
   tier: string;
   demo_mode: Record<string, string>;
 };

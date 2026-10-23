@@ -1,7 +1,8 @@
-// Chain reads for the panels: the pool, a stake, a backing, a claim. Layouts come from the IDL.
+// Chain reads for the panels: the pool, a stake, a backing, a claim. Layouts come from the IDL; yield
+// and what a backer can collect come from the program's own views (`view_staker`, `view_backer`).
 import { num, setting } from "./pool";
-import { backerAddress, poolAddress, readAccount, stakeAddress } from "./program";
-import type { PoolRecord } from "./program";
+import { backerAddress, hasVenue, poolAddress, readAccount, stakeAddress, view } from "./program";
+import type { Accounts, PoolRecord } from "./program";
 
 export type { PoolRecord };
 
@@ -14,29 +15,30 @@ export function refreshSoon(bump: () => void): void {
 }
 
 export type StakeRecord = {
-  staker: string; beneficiary: string; amount: bigint; yield_index_at: bigint; staked_at: bigint;
-  penalty_locked_until: bigint; forfeited: boolean; suspended: boolean;
+  staker: string; beneficiary: string; amount: bigint; staked_at: bigint;
+  forfeited: boolean; suspended: boolean; yield_owed: bigint;
   active_claim: string | null; reserved_claim: string | null;
 };
 
+export type PendingDeposit = { amount: bigint; matures_at: bigint };
+
 export type BackerRecord = {
-  backer: string; amount: bigint; pending_amount: bigint; pending_matures_at: bigint;
-  withdraw_amount: bigint; withdraw_ready_at: bigint; yield_index_at: bigint; yield_owed: bigint;
+  backer: string; amount: bigint; pending: PendingDeposit[]; pending_count: number;
+  withdraw_amount: bigint; withdraw_paid: bigint; yield_owed: bigint;
 };
 
 export type ClaimStatus =
   | "Unused" | "Reserved" | "PendingTime" | "AwaitingApproval" | "Active" | "Completed" | "Cancelled" | "Expired";
 
 export type ClaimRecord = {
-  staker: string; hack_timestamp: bigint; entitlement: bigint; streamed: bigint; stake: bigint;
+  staker: string; entitlement: bigint; streamed: bigint;
   cooldown_ends: bigint; vesting_ends: bigint; tier: number; status: ClaimStatus; approve_deadline: bigint;
-  last_collected: bigint;
+  queue_seq: bigint;
 };
 
-const PRECISION = num("YIELD_INDEX_PRECISION");
-
-/** pool-core yields::owed. */
-const owed = (amount: bigint, now: bigint, at: bigint) => (now > at ? (amount * (now - at)) / PRECISION : 0n);
+/** The views count yield not yet harvested when given the venue's reserve (as last refreshed). */
+const viewAccounts = (pool: PoolRecord, record: Record<string, string>): Accounts =>
+  hasVenue(pool) ? { ...record, reserve: pool.yield_venue } : record;
 
 export async function readPool(): Promise<PoolRecord | null> {
   return readAccount<PoolRecord>("Pool", await poolAddress());
@@ -45,17 +47,28 @@ export async function readPool(): Promise<PoolRecord | null> {
 export type MyStake = StakeRecord & { yieldOwed: bigint };
 
 export async function readMyStake(pool: PoolRecord, staker: string): Promise<MyStake | null> {
-  const s = await readAccount<StakeRecord>("StakeRecord", await stakeAddress(staker));
+  const stake_record = await stakeAddress(staker);
+  const s = await readAccount<StakeRecord>("StakeRecord", stake_record);
   if (!s) return null;
-  return { ...s, yieldOwed: s.forfeited ? 0n : owed(s.amount, pool.staker_yield_index, s.yield_index_at) };
+  const live = !s.forfeited && s.amount > 0n;
+  const v = live ? await view<{ yield_owed: bigint }>("view_staker", viewAccounts(pool, { stake_record }), staker).catch(() => null) : null;
+  return { ...s, yieldOwed: v?.yield_owed ?? s.yield_owed };
 }
 
-export type MyBacking = BackerRecord & { yieldOwed: bigint };
+export type MyBacking = BackerRecord & {
+  yieldOwed: bigint;
+  /** What "Collect" pays now from an open withdrawal (the day's drip). */
+  collectable: bigint;
+  /** Deposits not yet counting, oldest first. */
+  maturing: PendingDeposit[];
+};
 
 export async function readMyBacking(pool: PoolRecord, backer: string): Promise<MyBacking | null> {
-  const b = await readAccount<BackerRecord>("BackerRecord", await backerAddress(backer));
+  const backer_record = await backerAddress(backer);
+  const b = await readAccount<BackerRecord>("BackerRecord", backer_record);
   if (!b) return null;
-  return { ...b, yieldOwed: b.yield_owed + owed(b.amount, pool.backer_yield_index, b.yield_index_at) };
+  const v = await view<{ yield_owed: bigint; collectable: bigint }>("view_backer", viewAccounts(pool, { backer_record }), backer).catch(() => null);
+  return { ...b, yieldOwed: v?.yield_owed ?? b.yield_owed, collectable: v?.collectable ?? 0n, maturing: b.pending.slice(0, b.pending_count) };
 }
 
 export type MyClaim = { address: string; data: ClaimRecord };
@@ -77,7 +90,8 @@ export function vested(c: ClaimRecord, now: number): bigint {
   return (c.entitlement * BigInt(elapsed)) / BigInt(end - start);
 }
 
-/** Stake bounds: pool cap x min/max stake bps, all live settings (pool-core stake::bounds). */
+/** Stake bounds: pool cap x min/max stake bps, all live settings (pool-core stake::bounds). Above
+ *  the max, the rest of a deposit goes in as backing. */
 export function stakeBounds(pool: PoolRecord): { min: bigint; max: bigint } {
   const bps = num("BPS_DENOMINATOR");
   const cap = setting(pool, "POOL_CAP");
@@ -90,25 +104,26 @@ export function withdrawCheck(pool: PoolRecord, stake: bigint, amount: bigint): 
   if (amount > stake) return "That's more than your stake.";
   const left = stake - amount;
   const { min } = stakeBounds(pool);
-  if (left > 0n && left < min) return `What stays must be at least ${fmtSol(min, 2)} SOL. Take it all out instead.`;
+  if (left > 0n && left < min) return `What stays must be at least ${fmtUsdc(min)} USDC. Take it all out instead.`;
   return null;
 }
 
-export const LAMPORTS = 1_000_000_000n;
+const DECIMALS = Number(num("USDC_DECIMALS"));
+const UNIT = num("USDC_UNIT");
 
-export function fmtSol(lamports: bigint, dp = 4): string {
-  const neg = lamports < 0n;
-  const v = neg ? -lamports : lamports;
-  const whole = v / LAMPORTS;
-  const frac = (v % LAMPORTS).toString().padStart(9, "0").slice(0, dp);
-  return `${neg ? "-" : ""}${whole.toLocaleString()}${dp ? "." + frac : ""}`;
+/** USDC base units -> "1,234.56" (`dp` decimals, cut, not rounded). */
+export function fmtUsdc(units: bigint, dp = 2): string {
+  const neg = units < 0n;
+  const v = neg ? -units : units;
+  const frac = (v % UNIT).toString().padStart(DECIMALS, "0").slice(0, dp);
+  return `${neg ? "-" : ""}${(v / UNIT).toLocaleString()}${dp ? "." + frac : ""}`;
 }
 
-/** "1.5" -> lamports, exact (no float). Null on anything that isn't a plain positive decimal. */
-export function parseSol(s: string): bigint | null {
-  const m = /^\s*(\d*)(?:\.(\d{0,9}))?\s*$/.exec(s);
+/** "1.5" -> USDC base units, exact (no float). Null on anything that isn't a plain positive decimal. */
+export function parseUsdc(s: string): bigint | null {
+  const m = new RegExp(`^\\s*(\\d*)(?:\\.(\\d{0,${DECIMALS}}))?\\s*$`).exec(s);
   if (!m || (!m[1] && !m[2])) return null;
-  return BigInt(m[1] || "0") * LAMPORTS + BigInt((m[2] || "").padEnd(9, "0"));
+  return BigInt(m[1] || "0") * UNIT + BigInt((m[2] || "").padEnd(DECIMALS, "0"));
 }
 
 export function fmtDuration(secs: number): string {

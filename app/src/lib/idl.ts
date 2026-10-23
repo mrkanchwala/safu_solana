@@ -120,6 +120,13 @@ export function encodeIx(name: string, args: Record<string, unknown>): Uint8Arra
   return new Uint8Array(out);
 }
 
+/** An instruction's return data (the views), decoded by its IDL `returns` type. */
+export function decodeReturn<T = Record<string, unknown>>(name: string, data: Uint8Array): T {
+  const ix = IDL.instructions.find((i) => i.name === name);
+  if (!ix?.returns) throw new Error(`IDL instruction ${name} returns nothing`);
+  return read(ix.returns, data, { at: 0 }) as T;
+}
+
 /** The IDL name of a custom program error code (Anchor codes start at 6000), if any. */
 export function programErrorName(code: number): string | null {
   return IDL.errors?.find((e) => e.code === code)?.name ?? null;

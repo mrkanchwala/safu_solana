@@ -4,36 +4,27 @@ import { claimYield, stake, withdraw } from "../lib/actions";
 import { addCoveredWallet, confirmCoveredWallet } from "../lib/claimApi";
 import type { CoverChain, CoveredWalletResponse } from "../lib/claimApi";
 import { num, setting } from "../lib/pool";
-import { unstakeFeeBps } from "../lib/program";
-import { fmtSol, parseSol, readCoveredWallets, readMyStake, refreshSoon, rememberCoveredWallet, stakeBounds, withdrawCheck } from "../lib/reads";
+import { fmtUsdc, parseUsdc, readCoveredWallets, readMyStake, refreshSoon, rememberCoveredWallet, stakeBounds, withdrawCheck } from "../lib/reads";
 import type { CoveredWallet, MyStake } from "../lib/reads";
 import { usePool } from "../lib/usePool";
 import { toFriendlyError } from "../lib/friendly-error";
 import { TxStatus } from "./TxStatus";
 
-// Stake tab. SOL goes into the pool, which deploys most of it to Marinade (mSOL) for yield. Payouts
+// Stake tab. USDC goes into the pool, which lends most of it on Kamino for yield. Above the max stake,
+// the rest of a deposit goes in as backing (the program splits it). Payouts
 // (withdrawal, yield, claim payouts) go back to the staking wallet. Covered wallets are separate
 // wallets proven by a self-transfer; the staking wallet itself can never be one (burn-wallet staking,
 // same rule as the multichain site, enforced by the claim API too).
 const MAX_COVERED_WALLETS = Number(num("MAX_COVERED_WALLETS"));
 const WALLETS_TEXT = MAX_COVERED_WALLETS === 1 ? "1 wallet" : `${MAX_COVERED_WALLETS} wallets`;
-// Covered wallets can be on Solana or Ethereum, any mix. The API checks the same address formats.
+// Covered wallets can be on Solana, Ethereum or Stellar, any mix. The API checks the same address formats.
 const CHAINS: { id: CoverChain; label: string; placeholder: string; valid: (a: string) => boolean }[] = [
   { id: "solana", label: "Solana", placeholder: "Solana wallet address", valid: (a) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a) },
   { id: "sepolia", label: "Ethereum (Sepolia)", placeholder: "Ethereum address (0x...)", valid: (a) => /^0x[0-9a-fA-F]{40}$/.test(a) },
+  { id: "stellar", label: "Stellar (testnet)", placeholder: "Stellar address (G...)", valid: (a) => /^G[A-Z2-7]{55}$/.test(a) },
 ];
 const chainLabel = (id?: string) => CHAINS.find((c) => c.id === (id ?? "solana"))?.label ?? id ?? "Solana";
 const RATIOS = [num("TIER_A_RATIO"), num("TIER_B_RATIO"), num("TIER_C_RATIO")];
-
-export function FeeNote({ bps }: { bps: number | null }) {
-  if (bps === null) return null;
-  return (
-    <div className="ramp-disclosure" style={{ marginTop: 8 }}>
-      If the pool has to unstake mSOL to pay you, Marinade's fee on that part comes out of the payment
-      (about {(bps / 100).toFixed(2)}% right now). Usually the pool has enough SOL on hand and there is no fee.
-    </div>
-  );
-}
 
 export function StakePanel() {
   const client = useClient();
@@ -41,7 +32,6 @@ export function StakePanel() {
   const [refreshKey, setRefreshKey] = useState(0);
   const { pool } = usePool(refreshKey);
   const [myStake, setMyStake] = useState<MyStake | null>(null);
-  const [feeBps, setFeeBps] = useState<number | null>(null);
   const [coveredWallets, setCoveredWallets] = useState<CoveredWallet[]>([]);
 
   const [stakeAmount, setStakeAmount] = useState("");
@@ -61,10 +51,8 @@ export function StakePanel() {
         return;
       }
       const s = await readMyStake(pool, staker).catch(() => null);
-      const fee = s && s.amount > 0n ? await unstakeFeeBps(pool, s.amount + s.yieldOwed).catch(() => null) : null;
       if (!cancelled) {
         setMyStake(s);
-        setFeeBps(fee);
         setCoveredWallets(readCoveredWallets(staker));
       }
     })();
@@ -74,18 +62,19 @@ export function StakePanel() {
   }, [pool, staker]);
 
   const bounds = pool ? stakeBounds(pool) : null;
-  const lamports = parseSol(stakeAmount);
-  const amountValid = !!bounds && lamports !== null && lamports >= bounds.min && lamports <= bounds.max;
+  const units = parseUsdc(stakeAmount);
+  const amountValid = !!bounds && units !== null && units >= bounds.min;
+  const overflow = bounds && units !== null && units > bounds.max ? units - bounds.max : 0n;
   const live = !!myStake && !myStake.forfeited;
   const done = () => refreshSoon(() => setRefreshKey((k) => k + 1));
 
   // Clear the amount only once it went through: a declined or failed send keeps it for a retry.
-  const stakeAction = useAction(() => stake(client, pool, lamports ?? 0n).then((r) => (setStakeAmount(""), r)).finally(done));
+  const stakeAction = useAction(() => stake(client, pool, units ?? 0n).then((r) => (setStakeAmount(""), r)).finally(done));
   // Blank = the whole stake. A part must leave at least the min stake (checked here and on-chain).
-  const withdrawLamports = withdrawAmount.trim() === "" ? (myStake?.amount ?? 0n) : parseSol(withdrawAmount);
+  const withdrawUnits = withdrawAmount.trim() === "" ? (myStake?.amount ?? 0n) : parseUsdc(withdrawAmount);
   const withdrawProblem =
-    live && pool ? (withdrawLamports === null ? "Enter an amount in SOL." : withdrawCheck(pool, myStake.amount, withdrawLamports)) : null;
-  const withdrawAction = useAction(() => withdraw(client, pool, withdrawLamports ?? 0n).then((r) => (setWithdrawAmount(""), r)).finally(done));
+    live && pool ? (withdrawUnits === null ? "Enter an amount in USDC." : withdrawCheck(pool, myStake.amount, withdrawUnits)) : null;
+  const withdrawAction = useAction(() => withdraw(client, pool, withdrawUnits ?? 0n).then((r) => (setWithdrawAmount(""), r)).finally(done));
   const takeYieldAction = useAction(() => claimYield(client, pool).finally(done));
 
   function registered(r: CoveredWalletResponse) {
@@ -140,17 +129,23 @@ export function StakePanel() {
         <div className="field-group">
           <div className="field-label">
             <span>Stake</span>
-            <span>{bounds ? `${fmtSol(bounds.min, 2)}–${fmtSol(bounds.max, 2)} SOL` : " "}</span>
+            <span>{bounds ? `${fmtUsdc(bounds.min)}–${fmtUsdc(bounds.max)} USDC` : " "}</span>
           </div>
           <div className="field-input">
-            <input placeholder="0" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} inputMode="decimal" aria-label="Stake amount in SOL" />
-            <span className="unit">SOL</span>
+            <input placeholder="0" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} inputMode="decimal" aria-label="Stake amount in USDC" />
+            <span className="unit">USDC</span>
           </div>
         </div>
         <button className="primary-action" disabled={!staker || !amountValid || !!myStake || stakeAction.isRunning} onClick={() => stakeAction.dispatch()}>
           {stakeAction.isRunning ? "Staking..." : "Stake"}
         </button>
         <TxStatus action={stakeAction} />
+        {overflow > 0n && bounds ? (
+          <div className="ramp-disclosure" style={{ marginTop: 8 }}>
+            {fmtUsdc(bounds.max)} USDC becomes your stake (the max) and the other {fmtUsdc(overflow)} USDC backs the
+            pool: it shares in the yield but gives no coverage, and taking it out works like any backing.
+          </div>
+        ) : null}
         <div className="ramp-disclosure" style={{ marginTop: 8 }}>
           Payouts go back to this same wallet. Stake from a separate wallet you're comfortable connecting
           here, and cover the wallets that hold your money below, without ever connecting them.
@@ -170,11 +165,11 @@ export function StakePanel() {
             <>
               <div className="side-stat">
                 <div className="k">Principal (coverage is based on this)</div>
-                <div className="v">{fmtSol(myStake.amount)} SOL</div>
+                <div className="v">{fmtUsdc(myStake.amount)} USDC</div>
               </div>
               <div className="side-stat">
                 <div className="k">Yield earned</div>
-                <div className="v">{fmtSol(myStake.yieldOwed, 6)} SOL</div>
+                <div className="v">{fmtUsdc(myStake.yieldOwed, 6)} USDC</div>
               </div>
               {myStake.forfeited ? (
                 <div className="side-stat">
@@ -192,8 +187,8 @@ export function StakePanel() {
               <span>blank = all of it</span>
             </div>
             <div className="field-input">
-              <input placeholder={fmtSol(myStake.amount)} value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} inputMode="decimal" aria-label="Amount to withdraw in SOL" />
-              <span className="unit">SOL</span>
+              <input placeholder={fmtUsdc(myStake.amount)} value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} inputMode="decimal" aria-label="Amount to withdraw in USDC" />
+              <span className="unit">USDC</span>
             </div>
             {withdrawAmount.trim() !== "" && withdrawProblem ? <div className="ramp-disclosure">{withdrawProblem}</div> : null}
           </div>
@@ -210,11 +205,10 @@ export function StakePanel() {
         <TxStatus action={withdrawAction} />
         {live && myStake.yieldOwed > 0n ? (
           <button className="secondary-action" style={{ width: "100%", marginTop: 8 }} disabled={takeYieldAction.isRunning} onClick={() => takeYieldAction.dispatch()}>
-            {takeYieldAction.isRunning ? "Sending..." : `Take ${fmtSol(myStake.yieldOwed, 6)} SOL yield, keep my stake`}
+            {takeYieldAction.isRunning ? "Sending..." : `Take ${fmtUsdc(myStake.yieldOwed, 6)} USDC yield, keep my stake`}
           </button>
         ) : null}
         <TxStatus action={takeYieldAction} />
-        {live ? <FeeNote bps={feeBps} /> : null}
 
         <div className="field-group" style={{ marginTop: 20 }}>
           <div className="field-label">
@@ -223,9 +217,9 @@ export function StakePanel() {
           </div>
           <div className="ramp-disclosure">
             Register a wallet before it's drained, because a claim can only name a wallet already on this list.
-            You can cover {WALLETS_TEXT}, Solana or Ethereum in any mix, not your staking wallet. To prove a
-            wallet is yours, it sends a tiny amount to itself on its own chain. A covered wallet can't be removed
-            later, and a loss on Ethereum is paid in SOL at the SOL price when the drain was detected.
+            You can cover {WALLETS_TEXT}, Solana, Ethereum or Stellar in any mix, not your staking wallet. To prove
+            a wallet is yours, it sends a tiny amount to itself on its own chain. A covered wallet can't be removed
+            later, and a loss is paid in USDC at its USD value when the drain was detected.
           </div>
           {coveredWallets.map((w) => (
             <div className="side-stat" key={`${w.chain ?? "solana"}-${w.wallet}`}>
@@ -279,11 +273,11 @@ export function StakePanel() {
       <div>
         <div className="side-stat">
           <div className="k">Pool cap</div>
-          <div className="v">{pool ? fmtSol(setting(pool, "POOL_CAP"), 0) : "--"} SOL</div>
+          <div className="v">{pool ? fmtUsdc(setting(pool, "POOL_CAP"), 0) : "--"} USDC</div>
         </div>
         <div className="side-stat">
           <div className="k">Total staked</div>
-          <div className="v">{pool ? fmtSol(pool.total_staked, 2) : "--"} SOL</div>
+          <div className="v">{pool ? fmtUsdc(pool.total_staked) : "--"} USDC</div>
         </div>
         <div className="side-stat">
           <div className="k">Stakers</div>

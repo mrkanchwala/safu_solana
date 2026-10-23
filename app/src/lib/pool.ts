@@ -8,11 +8,7 @@ export interface PoolConfig {
   rpcUrl: string;
   /** Same-origin chain-read path on the deployed site (the claim API relays it); unset = rpcUrl. */
   siteRpcPath?: string;
-  poolCapLamports: number;
   computeUnitLimit: number;
-  /** The server counts matured backing of at least this many lamports; smaller amounts the backer presses. */
-  crankMinLamports: number;
-  marinade: { program: string; state: string; msolMint: string };
 }
 
 export type IdlType =
@@ -28,13 +24,14 @@ export type IdlAccountItem = {
   writable?: boolean;
   signer?: boolean;
   address?: string;
+  optional?: boolean;
   pda?: { seeds: IdlSeed[]; program?: unknown };
   accounts?: IdlAccountItem[];
 };
 export interface Idl {
   address: string;
   constants: { name: string; type: string; value: string }[];
-  instructions: { name: string; discriminator: number[]; args: IdlField[]; accounts: IdlAccountItem[] }[];
+  instructions: { name: string; discriminator: number[]; args: IdlField[]; accounts: IdlAccountItem[]; returns?: IdlType }[];
   accounts: { name: string; discriminator: number[] }[];
   types: { name: string; type: { kind: "struct"; fields: IdlField[] } | { kind: "enum"; variants: { name: string }[] } }[];
   errors?: { code: number; name: string; msg?: string }[];
@@ -63,6 +60,11 @@ export function num(name: string): bigint {
  *  its `SETTING_` prefix. Settings change through the program's timelock, so never use a constant. */
 export function setting(pool: { settings: bigint[] }, name: string): bigint {
   return pool.settings[Number(num(`SETTING_${name}`))];
+}
+
+/** A pubkey constant from the IDL (Kamino's program id and null key). */
+export function pubkey(name: string): string {
+  return rawConstant(name).value;
 }
 
 /** A byte-string constant from the IDL (PDA seeds, the approval domain). */

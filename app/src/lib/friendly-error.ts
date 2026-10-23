@@ -4,7 +4,7 @@
  * rewritten for the Solana pool:
  *   - program errors: `PROGRAM_ERROR:<name>` from lib/program.ts, names from the IDL (PROGRAM_ERRORS);
  *   - backend reason codes: backend/colosseum_app.py (ACTION_HINTS);
- *   - wallet errors: rejections, missing SOL (PATTERNS);
+ *   - wallet errors: rejections, missing SOL or USDC (PATTERNS);
  *   - the app's own messages, already plain English (OWN_MESSAGES).
  *
  * IMPORTANT: an unmatched error still falls through to a plain-English generic message at the
@@ -57,19 +57,23 @@ const PROGRAM_ERRORS: Record<string, string> = {
   DailyOutflowCapReached: DAILY_LIMIT,
   ClaimAlreadyCompleted: "This payout has already been paid in full.",
   Insolvent: NO_LIQUIDITY,
-  UnstakeFeeTooHigh: "Marinade's unstake fee is too high right now. Nothing was lost. Try again later.",
   NothingToClaim: "There's no yield to take yet.",
   WrongBeneficiary: OUR_SIDE,
-  WrongMarinadeAccount: OUR_SIDE,
+  NothingToCollectYet: "Nothing is ready to collect yet. Your withdrawal is paid out a little each day, so try again tomorrow.",
+  BackerCapitalNotFree: "Open claims need that money right now, so it stays in the pool until they're paid. Nothing is lost. Try again later.",
+  TooManyPendingDeposits: "You have the most new backing deposits that can wait at once. Wait for one to start counting, then add more.",
+  VenueUnavailable: `The pool's lending venue isn't available right now. ${TRY_LATER}`,
+  UpkeepAccountsMissing: `The pool was busy and moved while this was sent. ${TRY_LATER}`,
 };
 
 /** Backend reason codes and fixed phrases (colosseum_app.py), matched as substrings. */
 const ACTION_HINTS: Record<string, string> = {
-  // Marinade refused the unstake a payout needed (lib/program.ts explain).
-  MARINADE_REFUSED: "Marinade couldn't turn the pool's mSOL back into SOL for this right now. Nothing was lost. Try again later, or try a smaller amount.",
+  // Kamino refused a deposit or withdrawal the pool made (lib/program.ts explain).
+  VENUE_REFUSED: "The pool's lending venue couldn't move the money for this right now. Nothing was lost. Try again later, or try a smaller amount.",
+  NO_USDC_ACCOUNT: "This wallet has no USDC account yet. Receive any amount of USDC to it first, then try again.",
   STAKER_WALLET: "A covered wallet can't be your staking wallet. Stake from a separate wallet and cover the ones that hold your money.",
   WALLET_INVALID: "That isn't a valid address for the chain you picked. Check it and try again.",
-  CHAIN_UNSUPPORTED: "Covered wallets can be on Solana or Ethereum only.",
+  CHAIN_UNSUPPORTED: "Covered wallets can be on Solana, Ethereum or Stellar only.",
   WALLET_NOT_COVERED:
     "That wallet isn't one of your covered wallets, or wasn't added before this happened. Covered wallets have to be added before anything happens to them.",
   SCAN_FAILED: "We couldn't check that transaction right now. Try again in a moment.",
@@ -95,7 +99,8 @@ const ACTION_HINTS: Record<string, string> = {
 /** Wallet and network errors, which have no fixed code. Checked after the codes above. */
 const PATTERNS: [RegExp, string][] = [
   [/user rejected|reject.*request|declined|denied/i, "Request was declined in the wallet."],
-  [/insufficient lamports|no record of a prior credit|insufficient funds/i, "Not enough SOL in this wallet."],
+  [/insufficient usdc/i, "Not enough USDC in this wallet."],
+  [/insufficient lamports|no record of a prior credit|insufficient funds/i, "Not enough SOL in this wallet to pay the network fee."],
   [/blockhash not found|block height exceeded/i, "This took too long to sign. Try again."],
   [/failed to fetch|networkerror|load failed/i, "We couldn't reach SAFU. Check your connection and try again."],
   // The API answered, so the connection is fine: a 5xx is a fault on SAFU's side.
