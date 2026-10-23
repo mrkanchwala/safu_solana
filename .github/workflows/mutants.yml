@@ -5,6 +5,8 @@ name: Mutation testing (manual)
 # The LiteSVM tests load the built program, not its source, so cargo runs through
 # scripts/mutants_cargo.sh, which rebuilds the SBF program from each mutated tree before its tests.
 # Every mutant runs the whole workspace's tests (pool-core mutants reach the program too).
+# A program build is close to single-threaded (codegen-units = 1, fat LTO), so each 4-core runner
+# tests 3 mutants at once: 20 shards x 3 = 60 at a time, about an hour for the whole program.
 #
 # A run is only real if mutants were CAUGHT: a setup fault shows up as everything missed. Each shard
 # fails if it caught nothing, so read the summary before trusting the numbers.
@@ -79,7 +81,7 @@ jobs:
           export CARGO="$PWD/scripts/mutants_cargo.sh"
           # The binary directly: `cargo mutants` would have cargo overwrite CARGO with itself.
           eval cargo-mutants mutants -p safu_pool -p pool-core --test-workspace=true $SELECT \
-            --shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 1 --output .
+            --shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 3 --output .
           echo "cargo-mutants exit: $?"
           exit 0
 
