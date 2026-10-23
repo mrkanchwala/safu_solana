@@ -108,6 +108,9 @@ struct World {
     drained: Option<u64>,
     /// Steps taken in this episode, for the venue rounding allowance.
     steps: u64,
+    /// klend rounding taken while the stakes were too small to mark it off (a backer-only pool):
+    /// left unbooked by design (disclosed), at most `VENUE_ROUNDING` a step.
+    unbooked: u64,
     /// The last refusal's error, for `FUZZ_WHY`.
     last_err: String,
     /// Seeds 2 mod 4: Circle's CCTP programs, two home-chain owners (an Ethereum key and a Stellar
@@ -181,6 +184,7 @@ impl World {
             venue,
             drained: None,
             steps: 0,
+            unbooked: 0,
             last_err: String::new(),
             cctp,
             cctp_ids,
@@ -1036,7 +1040,12 @@ impl World {
                 ));
             }
         }
-        // Holdings vs books; only paid claims may leave the books short.
+        // Holdings vs books; only paid claims may leave the books short, plus klend rounding taken
+        // while the stakes were too small to mark it off.
+        let stakes = pre.total_staked.min(p.total_staked);
+        if self.venue && stakes < VENUE_ROUNDING {
+            self.unbooked += VENUE_ROUNDING - stakes;
+        }
         let assets = liquid + p.deployed_book;
         let owed = p.total_staked
             + p.total_backed
@@ -1045,10 +1054,10 @@ impl World {
             + p.protocol_yield_balance;
         let gap = owed.saturating_sub(assets);
         self.max_gap = self.max_gap.max(gap);
-        if gap > self.paid {
+        if gap > self.paid + self.unbooked {
             return Err(format!(
-                "books {owed} > held {assets} + claims paid {}",
-                self.paid
+                "books {owed} > held {assets} + claims paid {} + unbooked rounding {}",
+                self.paid, self.unbooked
             ));
         }
         // Settings stay in range and in order.
