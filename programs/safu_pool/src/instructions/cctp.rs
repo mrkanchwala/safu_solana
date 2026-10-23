@@ -44,7 +44,7 @@ pub enum OwnerSignature {
 }
 
 /// Pool calls a CCTP owner may make. `set_beneficiary` is not one: payouts stay with the identity.
-const ALLOWED_CALLS: [&[u8]; 11] = [
+pub(crate) const ALLOWED_CALLS: [&[u8]; 11] = [
     ix::Stake::DISCRIMINATOR,
     ix::Back::DISCRIMINATOR,
     ix::Withdraw::DISCRIMINATOR,

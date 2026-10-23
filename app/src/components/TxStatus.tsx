@@ -2,6 +2,7 @@ import { toFriendlyError } from "../lib/friendly-error";
 import { explorerTx } from "../lib/pool";
 
 type Action = {
+  isRunning?: boolean;
   isError: boolean;
   isSuccess?: boolean;
   error: unknown;
@@ -13,6 +14,10 @@ const SOLANA_SIG = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
 // Plain-English only, no exceptions. No raw error text, stack trace, or "technical details"
 // toggle is ever shown. See lib/friendly-error.ts for where the raw error gets translated.
 export function TxStatus({ action }: { action: Action }) {
+  if (action.isRunning) {
+    // lib/actions.ts resends once if the pool moved before the first one landed: a second prompt.
+    return <div className="tx-status">Approve in your wallet. If the pool changes meanwhile, it asks you once more.</div>;
+  }
   if (action.isError) {
     const friendly = toFriendlyError(action.error);
     if (friendly.cancelled) return null;

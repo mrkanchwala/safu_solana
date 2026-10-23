@@ -19,7 +19,7 @@ const NO_LIQUIDITY = "The pool can't pay this out right now. Nothing was lost. T
 
 /** Program errors (IDL `errors`) a user can actually hit. Admin/oracle ones are left out on purpose:
  *  a user can't cause them, so they get OUR_SIDE. */
-const PROGRAM_ERRORS: Record<string, string> = {
+export const PROGRAM_ERRORS: Record<string, string> = {
   Paused: "The pool is paused right now. Try again later.",
   StakeOutOfRange: "That amount is outside the pool's stake limits shown above the box.",
   PoolCapExceeded: "The pool is full right now, so it can't take this stake.",

@@ -167,3 +167,29 @@ proptest! {
         prop_assert!(book + p <= (cap as u128 * MAX_DEPLOY_BPS as u128 / BPS_DENOMINATOR as u128) as u64 || p == 0);
     }
 }
+
+#[test]
+fn stake_bounds_match_the_shared_vector() {
+    let mut n = 0;
+    for line in include_str!("vectors/stake_bounds.txt")
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+    {
+        let (input, want) = line.split_once(':').unwrap();
+        let v: Vec<u64> = input
+            .split_whitespace()
+            .map(|x| x.parse().unwrap())
+            .collect();
+        let w: Vec<u64> = want
+            .split_whitespace()
+            .map(|x| x.parse().unwrap())
+            .collect();
+        let mut s = settings(CAP);
+        s.values[pool_core::settings::SettingKey::PoolCap.index()] = v[0] as i64;
+        s.values[pool_core::settings::SettingKey::MinStakeBps.index()] = v[1] as i64;
+        s.values[pool_core::settings::SettingKey::MaxStakeBps.index()] = v[2] as i64;
+        assert_eq!(stake::bounds(&s), Ok((w[0], w[1])), "{line}");
+        n += 1;
+    }
+    assert!(n >= 4);
+}

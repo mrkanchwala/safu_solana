@@ -1,7 +1,7 @@
 // Chain reads for the panels: the pool, a stake, a backing, a claim. Layouts come from the IDL; yield
 // and what a backer can collect come from the program's own views (`view_staker`, `view_backer`).
 import { num, setting } from "./pool";
-import { backerAddress, hasVenue, poolAddress, readAccount, stakeAddress, view } from "./program";
+import { backerAddress, hasVenue, poolAddress, readAccount, refreshReserveIx, stakeAddress, view } from "./program";
 import type { Accounts, PoolRecord } from "./program";
 
 export type { PoolRecord };
@@ -36,9 +36,14 @@ export type ClaimRecord = {
   queue_seq: bigint;
 };
 
-/** The views count yield not yet harvested when given the venue's reserve (as last refreshed). */
+/** The views count yield not yet harvested when given the venue's reserve; klend's refresh runs first
+ *  in the same simulation, so that growth is at the current rate, not the last refresh's. */
 const viewAccounts = (pool: PoolRecord, record: Record<string, string>): Accounts =>
   hasVenue(pool) ? { ...record, reserve: pool.yield_venue } : record;
+const refreshFirst = async (pool: PoolRecord) => {
+  const ix = await refreshReserveIx(pool).catch(() => null);
+  return ix ? [ix] : [];
+};
 
 export async function readPool(): Promise<PoolRecord | null> {
   return readAccount<PoolRecord>("Pool", await poolAddress());
@@ -51,7 +56,7 @@ export async function readMyStake(pool: PoolRecord, staker: string): Promise<MyS
   const s = await readAccount<StakeRecord>("StakeRecord", stake_record);
   if (!s) return null;
   const live = !s.forfeited && s.amount > 0n;
-  const v = live ? await view<{ yield_owed: bigint }>("view_staker", viewAccounts(pool, { stake_record }), staker).catch(() => null) : null;
+  const v = live ? await view<{ yield_owed: bigint }>("view_staker", viewAccounts(pool, { stake_record }), staker, await refreshFirst(pool)).catch(() => null) : null;
   return { ...s, yieldOwed: v?.yield_owed ?? s.yield_owed };
 }
 
@@ -67,7 +72,7 @@ export async function readMyBacking(pool: PoolRecord, backer: string): Promise<M
   const backer_record = await backerAddress(backer);
   const b = await readAccount<BackerRecord>("BackerRecord", backer_record);
   if (!b) return null;
-  const v = await view<{ yield_owed: bigint; collectable: bigint }>("view_backer", viewAccounts(pool, { backer_record }), backer).catch(() => null);
+  const v = await view<{ yield_owed: bigint; collectable: bigint }>("view_backer", viewAccounts(pool, { backer_record }), backer, await refreshFirst(pool)).catch(() => null);
   return { ...b, yieldOwed: v?.yield_owed ?? b.yield_owed, collectable: v?.collectable ?? 0n, maturing: b.pending.slice(0, b.pending_count) };
 }
 
@@ -81,6 +86,9 @@ export async function readMyClaim(stake: StakeRecord | null): Promise<MyClaim | 
   return data ? { address: a, data } : null;
 }
 
+// Display only, below: what the panels show before a call. The program decides every call itself;
+// these never gate anything it would accept.
+
 /** pool-core claim::vested: linear from cooldown end to vesting end. */
 export function vested(c: ClaimRecord, now: number): bigint {
   const start = Number(c.cooldown_ends);
@@ -93,9 +101,13 @@ export function vested(c: ClaimRecord, now: number): bigint {
 /** Stake bounds: pool cap x min/max stake bps, all live settings (pool-core stake::bounds). Above
  *  the max, the rest of a deposit goes in as backing. */
 export function stakeBounds(pool: PoolRecord): { min: bigint; max: bigint } {
+  return boundsOf(setting(pool, "POOL_CAP"), setting(pool, "MIN_STAKE_BPS"), setting(pool, "MAX_STAKE_BPS"));
+}
+
+/** Same cases as the program's (crates/pool-core/tests/vectors/stake_bounds.txt). */
+export function boundsOf(cap: bigint, minBps: bigint, maxBps: bigint): { min: bigint; max: bigint } {
   const bps = num("BPS_DENOMINATOR");
-  const cap = setting(pool, "POOL_CAP");
-  return { min: (cap * setting(pool, "MIN_STAKE_BPS")) / bps, max: (cap * setting(pool, "MAX_STAKE_BPS")) / bps };
+  return { min: (cap * minBps) / bps, max: (cap * maxBps) / bps };
 }
 
 /** What a withdrawal of `amount` leaves, or why it can't go (pool-core stake::check_withdraw). */

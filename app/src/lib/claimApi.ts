@@ -1,9 +1,11 @@
 // Talks to backend/colosseum_app.py (the claim API). Message formats MUST stay byte-identical with it:
-//   SAFU_SOLANA_COVERED_WALLET:v2:{staker}:{chain}:{wallet}:{ts}
-//   SAFU_SOLANA_CLAIM:v1:{staker}:{tx1,tx2,...}:{ts}
+//   SAFU_SOLANA_COVERED_WALLET:v3:{cluster}:{staker}:{chain}:{wallet}:{ts}
+//   SAFU_SOLANA_CLAIM:v2:{cluster}:{staker}:{tx1,tx2,...}:{ts}
+// The cluster is named so a devnet signature never works on another cluster.
 // The staking wallet signs each one (Solana signMessage). Nothing about the payout is typed in: the
 // backend reads the loss, the hack time and the tier from the chain, and the oracle submits the claim.
 import type { AppClient } from "./client";
+import { POOL } from "./pool";
 
 /** Chains a covered wallet can be on. Ethereum is Sepolia and Stellar is testnet while the pool is on devnet. */
 export type CoverChain = "solana" | "sepolia" | "stellar";
@@ -58,7 +60,7 @@ export async function addCoveredWallet(
   wallet: string,
 ): Promise<CoveredWalletResponse> {
   const timestamp = now();
-  const signature = await client.signMessage(`SAFU_SOLANA_COVERED_WALLET:v2:${staker}:${chain}:${wallet}:${timestamp}`);
+  const signature = await client.signMessage(`SAFU_SOLANA_COVERED_WALLET:v3:${POOL.cluster}:${staker}:${chain}:${wallet}:${timestamp}`);
   return postJson("/covered-wallets", { staker, chain, wallet, timestamp, signature });
 }
 
@@ -69,6 +71,6 @@ export function confirmCoveredWallet(staker: string, chain: CoverChain, wallet: 
 export async function fileClaim(client: AppClient, staker: string, txHashes: string[]): Promise<FileClaimResult> {
   const tx_hashes = txHashes.map((t) => t.trim());
   const timestamp = now();
-  const signature = await client.signMessage(`SAFU_SOLANA_CLAIM:v1:${staker}:${tx_hashes.join(",")}:${timestamp}`);
+  const signature = await client.signMessage(`SAFU_SOLANA_CLAIM:v2:${POOL.cluster}:${staker}:${tx_hashes.join(",")}:${timestamp}`);
   return postJson("/claim", { staker, tx_hashes, timestamp, signature });
 }

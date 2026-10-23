@@ -1,0 +1,6 @@
+# pool_core::stake::bounds, shared by the program, backend (solana_relay.py) and site (reads.ts) tests.
+# One case per line: pool_cap min_stake_bps max_stake_bps : min max (USDC base units, rounded down).
+100000000000 10 100 : 100000000 1000000000
+50000000 1 125 : 5000 625000
+333333333 7 3 : 233333 99999
+0 1 1 : 0 0

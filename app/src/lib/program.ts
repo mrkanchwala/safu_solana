@@ -22,7 +22,7 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit";
 import type { Address, Instruction, Transaction } from "@solana/kit";
-import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
+import { getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } from "@solana-program/compute-budget";
 import { IDL, POOL, PROGRAM_ID, bytes, num, pubkey } from "./pool";
 import type { IdlAccountItem } from "./pool";
 import { decodeAccount, decodeReturn, encodeIx, programErrorName } from "./idl";
@@ -80,6 +80,15 @@ export async function fetchAccount(a: string): Promise<RawAccount | null> {
   };
 }
 
+/** Several accounts in one request (null where one doesn't exist), in the order asked. */
+export async function fetchAccounts(addrs: string[]): Promise<(RawAccount | null)[]> {
+  if (addrs.length === 0) return [];
+  const { value } = await rpc.getMultipleAccounts(addrs.map((a) => address(a)), { encoding: "base64", commitment: "confirmed" }).send();
+  return value.map((v) =>
+    v ? { data: new Uint8Array(getBase64Encoder().encode(v.data[0])), lamports: BigInt(v.lamports), owner: v.owner } : null,
+  );
+}
+
 /** A program account decoded by its IDL layout; null if it doesn't exist. Refuses an account the
  *  program doesn't own (same check as the backend's _account_data). */
 export async function readAccount<T>(name: string, a: string): Promise<T | null> {
@@ -121,13 +130,11 @@ export async function cashAccounts(pool: PoolRecord): Promise<Accounts> {
   const reserve = await fetchAccount(pool.yield_venue);
   if (!reserve || reserve.owner !== klend) throw new Error("The pool's lending venue can't be read right now. Nothing was lost. Try again in a few minutes.");
   const at = (name: string) => keyAt(reserve.data, Number(num(name)));
-  const set = (name: string) => {
-    const k = at(name);
-    return k === SYSTEM_PROGRAM_ID || k === pubkey("KLEND_NULL_KEY") ? null : k;
-  };
   const market = at("KLEND_RESERVE_LENDING_MARKET");
   const collateral = at("KLEND_RESERVE_COLLATERAL_MINT");
-  const oracle = set("KLEND_RESERVE_SCOPE_FEED") ?? set("KLEND_RESERVE_PYTH");
+  const source = priceSource(reservePriceSlots(reserve.data));
+  if (!source) throw new Error("The pool's lending venue can't be used right now. Nothing was lost. Try again later.");
+  const oracle = source.account;
   return {
     ...base,
     klend_program: klend,
@@ -137,15 +144,64 @@ export async function cashAccounts(pool: PoolRecord): Promise<Accounts> {
     reserve_liquidity_supply: at("KLEND_RESERVE_LIQUIDITY_SUPPLY"),
     reserve_collateral_mint: collateral,
     pool_collateral: await pda([bytes("SEED_LEG"), key(await poolAddress()), key(collateral)]),
-    ...(oracle ? { oracle } : {}),
+    oracle,
     instructions: SYSVAR_INSTRUCTIONS_ID,
+  };
+}
+
+export type PriceSlots = { scope: string; pyth: string; switchboardPrice: string; switchboardTwap: string };
+
+const reservePriceSlots = (data: Uint8Array): PriceSlots => {
+  const at = (name: string) => keyAt(data, Number(num(name)));
+  return {
+    scope: at("KLEND_RESERVE_SCOPE_FEED"),
+    pyth: at("KLEND_RESERVE_PYTH"),
+    switchboardPrice: at("KLEND_RESERVE_SWITCHBOARD_PRICE"),
+    switchboardTwap: at("KLEND_RESERVE_SWITCHBOARD_TWAP"),
+  };
+};
+
+/** pool_core::kamino price source: Scope alone or Pyth alone, else null (the program refuses the
+ *  venue). Unset is all zeros or klend's placeholder. Same cases as the program's
+ *  (crates/pool-core/tests/vectors/price_source.txt). */
+export function priceSource(s: PriceSlots): { kind: "scope" | "pyth"; account: string } | null {
+  const set = (k: string) => (k === SYSTEM_PROGRAM_ID || k === pubkey("KLEND_NULL_KEY") ? null : k);
+  const scope = set(s.scope);
+  const pyth = set(s.pyth);
+  if ((scope === null) === (pyth === null) || set(s.switchboardPrice) || set(s.switchboardTwap)) return null;
+  return scope ? { kind: "scope", account: scope } : { kind: "pyth", account: pyth! };
+}
+
+/** klend `refresh_reserve` for the pool's venue, as the program calls it (kamino.rs `refresh`): a view
+ *  run after it counts growth at the current rate. Null without a venue. */
+export async function refreshReserveIx(pool: PoolRecord): Promise<Instruction | null> {
+  if (!hasVenue(pool)) return null;
+  const klend = pubkey("KLEND_PROGRAM_ID");
+  const reserve = await fetchAccount(pool.yield_venue);
+  if (!reserve || reserve.owner !== klend) return null;
+  const source = priceSource(reservePriceSlots(reserve.data));
+  if (!source) return null;
+  const ro = (a: string) => ({ address: address(a), role: AccountRole.READONLY });
+  const none = klend;
+  return {
+    programAddress: address(klend),
+    accounts: [
+      { address: address(pool.yield_venue), role: AccountRole.WRITABLE },
+      ro(keyAt(reserve.data, Number(num("KLEND_RESERVE_LENDING_MARKET")))),
+      ro(source.kind === "pyth" ? source.account : none),
+      ro(none),
+      ro(none),
+      ro(source.kind === "scope" ? source.account : none),
+    ],
+    data: bytes("KLEND_IX_REFRESH_RESERVE"),
   };
 }
 
 // --- upkeep (the remaining accounts every user instruction carries) --------------------------------
 
-/** pool_core::upkeep::watch_places: from the cursor on, wrapping to the head, each at most once. */
-function watchPlaces(head: bigint, tail: bigint, cursor: bigint): bigint[] {
+/** pool_core::upkeep::watch_places: from the cursor on, wrapping to the head, each at most once. Same
+ *  cases as the program's (crates/pool-core/tests/vectors/watch_places.txt). */
+export function watchPlaces(head: bigint, tail: bigint, cursor: bigint): bigint[] {
   if (head >= tail) return [];
   const norm = (c: bigint) => (c < head || c >= tail ? head : c);
   const out: bigint[] = [];
@@ -158,14 +214,15 @@ function watchPlaces(head: bigint, tail: bigint, cursor: bigint): bigint[] {
   return out;
 }
 
-/** `WatchEntry` only travels as an upkeep account, so Anchor leaves it out of the IDL. Its layout is
- *  state.rs `WatchEntry`: claim, payer, after Anchor's discriminator (same read as the backend). */
-async function readWatchEntry(a: string): Promise<{ claim: string; payer: string } | null> {
-  const acc = await fetchAccount(a);
+/** `WatchEntry` only travels as an upkeep account, so Anchor leaves it out of the IDL's account types;
+ *  the program publishes its offsets as IDL constants (`WATCH_ENTRY_*_AT`), read the same way as the
+ *  backend. */
+export async function decodeWatchEntry(acc: RawAccount | null): Promise<{ claim: string; payer: string } | null> {
   if (!acc || acc.owner !== PROGRAM_ID) return null;
-  const disc = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("account:WatchEntry"))).subarray(0, 8);
+  const claimAt = Number(num("WATCH_ENTRY_CLAIM_AT"));
+  const disc = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("account:WatchEntry"))).subarray(0, claimAt);
   if (!disc.every((x, i) => x === acc.data[i])) return null;
-  return { claim: keyAt(acc.data, 8), payer: keyAt(acc.data, 40) };
+  return { claim: keyAt(acc.data, claimAt), payer: keyAt(acc.data, Number(num("WATCH_ENTRY_PAYER_AT"))) };
 }
 
 /** The head of the claim line, then the watch places, 4 writable accounts each (place, its claim,
@@ -173,19 +230,26 @@ async function readWatchEntry(a: string): Promise<{ claim: string; payer: string
  *  transaction lands, the program refuses with UpkeepAccountsMissing and actions.ts resends once. */
 export async function upkeepMetas(pool: PoolRecord, now: number): Promise<Meta[]> {
   if (BigInt(now) < pool.paused_until) return [];
-  const places: [string, { claim: string; payer: string } | null][] = [];
-  if (pool.queue_head < pool.queue_tail) {
-    const q = await queueAddress(pool.queue_head);
-    places.push([q, await readAccount<{ claim: string; payer: string }>("QueueEntry", q)]);
-  }
-  for (const pos of watchPlaces(pool.watch_head, pool.watch_tail, pool.watch_cursor)) {
-    const w = await watchAddress(pos);
-    places.push([w, await readWatchEntry(w)]);
-  }
+  // Two requests in all: the places, then their claims.
+  const queued = pool.queue_head < pool.queue_tail ? [await queueAddress(pool.queue_head)] : [];
+  const watched = await Promise.all(watchPlaces(pool.watch_head, pool.watch_tail, pool.watch_cursor).map(watchAddress));
+  const raw = await fetchAccounts([...queued, ...watched]);
+  const entries = await Promise.all(
+    raw.map((acc, i) =>
+      i < queued.length
+        ? acc && acc.owner === PROGRAM_ID ? decodeAccount<{ claim: string; payer: string }>("QueueEntry", acc.data) : null
+        : decodeWatchEntry(acc),
+    ),
+  );
+  const missing = () => new Error("The pool moved while this was being prepared. Nothing was lost. Try again.");
+  if (entries.some((e) => !e)) throw missing();
+  const claims = await fetchAccounts(entries.map((e) => e!.claim));
   const metas: Meta[] = [];
-  for (const [place, entry] of places) {
-    const claim = entry ? await readAccount<{ staker: string }>("Claim", entry.claim) : null;
-    if (!entry || !claim) throw new Error("The pool moved while this was being prepared. Nothing was lost. Try again.");
+  for (const [i, place] of [...queued, ...watched].entries()) {
+    const entry = entries[i]!;
+    const acc = claims[i];
+    const claim = acc && acc.owner === PROGRAM_ID ? decodeAccount<{ staker: string }>("Claim", acc.data) : null;
+    if (!claim) throw missing();
     for (const a of [place, entry.claim, await stakeAddress(claim.staker), entry.payer]) {
       metas.push({ address: address(a), role: AccountRole.WRITABLE });
     }
@@ -242,14 +306,14 @@ export async function idlIx(name: string, given: Accounts, args: Record<string, 
 
 /** A view (`view_staker`, `view_backer`) run by simulation: nothing is signed or written. The fee
  *  payer only has to exist, so the connected wallet is used. */
-export async function view<T>(name: string, given: Accounts, feePayer: string): Promise<T> {
+export async function view<T>(name: string, given: Accounts, feePayer: string, before: Instruction[] = []): Promise<T> {
   const ix = await idlIx(name, given);
   const { value: blockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
   const msg = pipe(
     createTransactionMessage({ version: "legacy" }),
     (m) => setTransactionMessageFeePayer(address(feePayer), m),
     (m) => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
-    (m) => appendTransactionMessageInstructions([ix], m),
+    (m) => appendTransactionMessageInstructions([...before, ix], m),
   );
   const wire = getBase64EncodedWireTransaction(compileTransaction(msg));
   const { value } = await rpc
@@ -305,15 +369,41 @@ function explain(e: unknown): Error {
   return e instanceof Error ? e : new Error(String(e));
 }
 
+/** The compute limit and price before the instructions. */
+export const withBudget = (ixs: Instruction[], microLamports: bigint): Instruction[] => [
+  getSetComputeUnitLimitInstruction({ units: POOL.computeUnitLimit }),
+  getSetComputeUnitPriceInstruction({ microLamports }),
+  ...ixs,
+];
+
+/** The recent fee level for the accounts these instructions write (median of the nonzero recent
+ *  fees), capped at the config's `maxComputeUnitPrice`, as the backend sets it. 0 if the RPC has no
+ *  answer: a missing fee never blocks a send. */
+export async function priorityFee(ixs: Instruction[]): Promise<bigint> {
+  const writable = [...new Set(ixs.flatMap((ix) => (ix.accounts ?? []).filter((m) => m.role === AccountRole.WRITABLE || m.role === AccountRole.WRITABLE_SIGNER).map((m) => m.address)))];
+  try {
+    const fees = (await rpc.getRecentPrioritizationFees(writable.slice(0, 128)).send())
+      .map((f) => BigInt(f.prioritizationFee))
+      .filter((f) => f > 0n)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const median = fees.length ? fees[Math.floor(fees.length / 2)] : 0n;
+    const cap = BigInt(POOL.maxComputeUnitPrice);
+    return median < cap ? median : cap;
+  } catch {
+    return 0n;
+  }
+}
+
 /** Builds, has the wallet sign, sends and confirms. Returns the transaction signature. */
 export async function send(wallet: Signer, ixs: Instruction[]): Promise<string> {
   if (!wallet.address) throw new Error("Connect a wallet first.");
+  const fee = await priorityFee(ixs);
   const { value: blockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
   const msg = pipe(
     createTransactionMessage({ version: "legacy" }),
     (m) => setTransactionMessageFeePayer(address(wallet.address!), m),
     (m) => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
-    (m) => appendTransactionMessageInstructions([getSetComputeUnitLimitInstruction({ units: POOL.computeUnitLimit }), ...ixs], m),
+    (m) => appendTransactionMessageInstructions(withBudget(ixs, fee), m),
   );
   const signedBytes = await wallet.solanaSignTransaction(new Uint8Array(getTransactionEncoder().encode(compileTransaction(msg))));
   const signed = getTransactionDecoder().decode(signedBytes) as Transaction;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { toFriendlyError } from "./friendly-error";
+import { PROGRAM_ERRORS, toFriendlyError } from "./friendly-error";
+import { IDL } from "./pool";
 
 describe("toFriendlyError", () => {
   it("tells missing SOL (fee) from missing USDC", () => {
@@ -81,5 +82,10 @@ describe("toFriendlyError", () => {
     for (const code of ["CHAIN_UNAVAILABLE: x", "BROADCAST_FAILED: x", "PRICE_UNAVAILABLE: x", "TooManyWallets: x"]) {
       expect(toFriendlyError(new Error(code)).message).not.toMatch(/[A-Z]{3,}_[A-Z]|TooMany/);
     }
+  });
+
+  it("names only errors the program has", () => {
+    const names = new Set((IDL.errors ?? []).map((e) => e.name));
+    expect(Object.keys(PROGRAM_ERRORS).filter((k) => !names.has(k))).toEqual([]);
   });
 });

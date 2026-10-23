@@ -1,0 +1,12 @@
+# pool_core::kamino price source: the one price account the pool passes klend, shared by the program,
+# backend (solana_relay.py) and site (program.ts) tests.
+# One case per line: scope pyth switchboard_price switchboard_twap : the account, or "refused".
+# "-" is all zeros, "nu11" is klend's placeholder (both mean unset), a letter is a real account.
+A - - - : A
+- B - - : B
+nu11 B - nu11 : B
+A nu11 - - : A
+- - - - : refused
+A B - - : refused
+A - C - : refused
+- B - C : refused

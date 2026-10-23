@@ -9,6 +9,8 @@ export interface PoolConfig {
   /** Same-origin chain-read path on the deployed site (the claim API relays it); unset = rpcUrl. */
   siteRpcPath?: string;
   computeUnitLimit: number;
+  /** Highest priority fee a transaction pays, micro-lamports per compute unit. */
+  maxComputeUnitPrice: number;
 }
 
 export type IdlType =

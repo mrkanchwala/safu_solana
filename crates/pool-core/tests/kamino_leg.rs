@@ -289,3 +289,39 @@ proptest! {
         prop_assert!(growth - worth <= value / deployed + 1);
     }
 }
+
+#[test]
+fn the_price_source_matches_the_shared_vector() {
+    let key = |s: &str| match s {
+        "-" => [0u8; 32],
+        "nu11" => NULL_KEY,
+        l => [l.as_bytes()[0]; 32],
+    };
+    let mut n = 0;
+    for line in include_str!("vectors/price_source.txt")
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+    {
+        let (input, want) = line.split_once(':').unwrap();
+        let f: Vec<&str> = input.split_whitespace().collect();
+        let mut d = reserve_bytes(0, 0, 0);
+        for (at, k) in [
+            R_SCOPE_FEED,
+            R_PYTH,
+            R_SWITCHBOARD_PRICE,
+            R_SWITCHBOARD_TWAP,
+        ]
+        .into_iter()
+        .zip(&f)
+        {
+            put(&mut d, at, &key(k));
+        }
+        let want = match want.trim() {
+            "refused" => None,
+            l => Some(key(l)),
+        };
+        assert_eq!(parse_reserve(&d).unwrap().price.account(), want, "{line}");
+        n += 1;
+    }
+    assert!(n >= 8);
+}

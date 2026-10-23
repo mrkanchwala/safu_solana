@@ -13,7 +13,8 @@ async function build(pool: PoolRecord, name: string, accounts: Accounts, args: R
 }
 
 /** Sends one instruction. If the pool moved between the read and the landing (its claim line or watch
- *  list advanced), the program refuses with UpkeepAccountsMissing: read the pool again, resend once. */
+ *  list advanced), the program refuses with UpkeepAccountsMissing: read the pool again, resend once.
+ *  That is a second wallet prompt; TxStatus tells the user to expect it. */
 async function run(w: Signer, pool: PoolRecord | null, name: string, accounts: Accounts, args: Record<string, unknown> = {}, money = true) {
   if (!w.address) throw new Error("Connect a wallet first.");
   if (!pool) throw new Error("The pool isn't available right now. Try again in a minute.");

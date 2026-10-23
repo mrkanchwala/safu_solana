@@ -176,15 +176,15 @@ pub const SEED_LEG: &[u8] = b"leg";
 /// Kamino Lend (klend), the only yield venue program the pool calls (mainnet id; also the owner of
 /// every reserve the pool reads).
 #[constant]
-pub const KLEND_PROGRAM_ID: Pubkey = pubkey!("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
+pub const KLEND_PROGRAM_ID: Pubkey = pubkey!("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"); // hardcode-ok: the one definition, published in the IDL
 /// Circle CCTP v2 (`pool_core::cctp`): stake and back from Ethereum and Stellar. Same ids on devnet
 /// and mainnet.
 #[constant]
 pub const CCTP_MESSAGE_TRANSMITTER_ID: Pubkey =
-    pubkey!("CCTPV2Sm4AdWt5296sk4P66VBZ7bEhcARwFaaS9YPbeC");
+    pubkey!("CCTPV2Sm4AdWt5296sk4P66VBZ7bEhcARwFaaS9YPbeC"); // hardcode-ok: the one definition, published in the IDL
 #[constant]
 pub const CCTP_TOKEN_MESSENGER_MINTER_ID: Pubkey =
-    pubkey!("CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe");
+    pubkey!("CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe"); // hardcode-ok: the one definition, published in the IDL
 /// Signs Circle's `receive_message` as the burn's `destinationCaller`: `[SEED_CCTP_AUTHORITY, pool]`.
 #[constant]
 pub const SEED_CCTP_AUTHORITY: &[u8] = b"cctp_authority";
@@ -249,6 +249,10 @@ pub const CCTP_TOKEN_MESSENGER_FEE_RECIPIENT: u64 = cctp::TOKEN_MESSENGER_FEE_RE
 pub const KLEND_LENDING_MARKET_AUTH_SEED: &[u8] = kamino::LENDING_MARKET_AUTH_SEED;
 #[constant]
 pub const KLEND_NULL_KEY: Pubkey = Pubkey::new_from_array(kamino::NULL_KEY);
+/// klend `refresh_reserve` discriminator: clients put it before a view so growth is read at the
+/// current rate.
+#[constant]
+pub const KLEND_IX_REFRESH_RESERVE: &[u8] = &kamino::IX_REFRESH_RESERVE;
 #[constant]
 pub const KLEND_RESERVE_LENDING_MARKET: u64 = kamino::R_LENDING_MARKET as u64;
 #[constant]
@@ -266,6 +270,13 @@ pub const KLEND_RESERVE_PYTH: u64 = kamino::R_PYTH as u64;
 /// Watch-list places each upkeep checks.
 #[constant]
 pub const UPKEEP_WATCH_PER_CALL: u64 = p::UPKEEP_WATCH_PER_CALL as u64;
+/// The pool calls a CCTP owner may make through `cctp_act`, by instruction name, for clients. A test
+/// below checks them against the program's own list.
+#[constant]
+pub const CCTP_ALLOWED_CALLS: &str =
+    "stake,back,withdraw,emergency_exit,claim_yield,approve_claim,\
+claim_stream,request_backer_withdrawal,cancel_backer_withdrawal,complete_backer_withdrawal,\
+claim_backer_yield";
 /// `WatchEntry` only travels as an upkeep account, so Anchor leaves it out of the IDL's account
 /// types. Its layout, for clients: byte offsets of `claim`, `payer` and `done` after the 8-byte
 /// discriminator (`sha256("account:WatchEntry")[..8]`). A test below checks them against the struct.
@@ -295,6 +306,23 @@ mod tests {
 
     /// `pool_core::kamino::NULL_KEY` is raw bytes (pool-core has no chain dependencies).
     #[test]
+    fn the_allowed_call_names_match_the_programs_list() {
+        let names: Vec<&str> = CCTP_ALLOWED_CALLS.split(',').collect();
+        let discs: Vec<Vec<u8>> = names
+            .iter()
+            .map(|n| {
+                solana_sha256_hasher::hash(format!("global:{n}").as_bytes()).to_bytes()[..8]
+                    .to_vec()
+            })
+            .collect();
+        let want: Vec<Vec<u8>> = crate::instructions::cctp::ALLOWED_CALLS
+            .iter()
+            .map(|d| d.to_vec())
+            .collect();
+        assert_eq!(discs, want);
+    }
+
+    #[test]
     fn the_watch_entry_offsets_match_the_struct() {
         let entry = crate::state::WatchEntry {
             claim: Pubkey::new_from_array([1; 32]),
@@ -321,7 +349,7 @@ mod tests {
     fn the_klend_null_key_is_its_address() {
         assert_eq!(
             KLEND_NULL_KEY,
-            pubkey!("nu11111111111111111111111111111111111111111")
+            pubkey!("nu11111111111111111111111111111111111111111") // hardcode-ok: test of the IDL value
         );
     }
 }
