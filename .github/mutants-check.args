@@ -1,4 +1,5 @@
 # One cargo-mutants filter per line. The last 19 mutants-full-1 misses (leg.rs), rerun after the new
+# (Line numbers are those of commit 6ca83ab, the mutants-check-5 run; leg.rs has moved since.)
 # tests (six are listed in docs/MUTATION_EQUIVALENTS.md and stay missed).
 -F '^programs/safu_pool/src/leg\.rs:125:15:\ replace\ >\ with\ >=\ in\ record_redeem$'
 -F '^programs/safu_pool/src/leg\.rs:178:23:\ replace\ <\ with\ >\ in\ Money<.a,\ .info>::deposit$'

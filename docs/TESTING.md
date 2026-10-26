@@ -5,7 +5,7 @@ from 2026-10-23 on branch `solana-usdc-pool`.
 
 | Suite | Tests | Where it runs |
 |---|---|---|
-| Program (LiteSVM) | 229 per build | Local and CI, normal and demo builds |
+| Program (LiteSVM) | 230 per build | Local and CI, normal and demo builds |
 | Rule library (`pool-core`) | 93 per build | Local and CI, normal and demo builds |
 | Stateful fuzz | 1 harness, 50 step kinds | Build server, in a capped Docker container |
 | Mutation testing (cargo-mutants) | 1,273 mutants | GitHub Actions, started by tag |
@@ -28,10 +28,11 @@ cargo deny check                                       # licences and advisories
 ```
 
 The program tests load the built `target/deploy/safu_pool.so`, so build before testing. CI
-(`.github/workflows/ci.yml`) runs all of the above on both builds, checks the binary is not empty,
+(`.github/workflows/ci.yml`) runs all of the above on both builds, checks the binary is not empty, loads it under the devnet and
+mainnet-beta feature sets (`scripts/check_cluster_features.sh`; LiteSVM turns every feature on),
 builds the IDL with the Anchor CLI pinned by `Cargo.lock`, and passes the IDL to the site job.
 
-## 2. Program tests on LiteSVM (229)
+## 2. Program tests on LiteSVM (230)
 
 LiteSVM runs the real program binary. The Kamino Lend tests load klend's mainnet program and real
 reserve, market and price accounts. The CCTP tests load Circle's CCTP v2 programs.
@@ -96,6 +97,8 @@ FUZZ_SEED=<seed> FUZZ_EPISODES=1 ...    # replay one episode
 | 2026-10-23 | demo | 297,500 (1,190 episodes, 7 min) | 0 failures | `1dcf178` |
 | 2026-10-26 | normal | 640,250 (2,561 episodes, 15 min) | 0 failures | `8816860` |
 | 2026-10-26 | demo | 640,250 (2,561 episodes, 15 min) | 0 failures | `8816860` |
+| 2026-10-26 | normal | 169,750 (679 episodes, 4 min) | 0 failures | `9f475ac` |
+| 2026-10-26 | demo | 171,000 (684 episodes, 4 min) | 0 failures | `9f475ac` |
 
 ## 5. Mutation testing
 

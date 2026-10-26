@@ -19,7 +19,7 @@ a different shape, the reason is written in [PORT_MAP.md](PORT_MAP.md).
 
 Line counts exclude `tests/`, `#[cfg(test)]` blocks, comments and blank lines. Measured the same way,
 the Stellar pool's five contracts come to 5,972 lines; its published scope says 5,612 because it was
-counted with a different tool. The program binary is 1,461,776 bytes (normal build).
+counted with a different tool. The program binary is 1,461,768 bytes (normal build, Linux).
 The yield venue slot (`venue.rs`, 2026-10-26) added 98 of these lines to the 7,475 first quoted; the compute guard fix (2026-10-26) 33 more.
 
 The covered-wallet registry and the cross-chain stake path are inside the pool program here. On
@@ -102,7 +102,8 @@ arm in `venue.rs` plus its own file, and a program upgrade.
 - 323 tests on each build (normal and the fast-clock `demo` build): 230 program tests on LiteSVM, with
   Kamino Lend's mainnet program and reserve accounts and Circle's CCTP programs loaded, plus 93
   `pool-core` unit and property tests (`docs/TESTING.md`).
-- Stateful fuzz: 1,280,500 steps across both builds (2026-10-26, venue slot), 0 failures.
+- Stateful fuzz: 1,280,500 steps across both builds (2026-10-26, venue slot), then 340,750 more on the
+  compute guard fix (`9f475ac`, 4 min per build), 0 failures.
 - Mutation testing: 1,273 mutants over the program and `pool-core`. Every mutant the first full run
   missed is now caught by a test, or proven unable to change behaviour
   (`docs/MUTATION_EQUIVALENTS.md`, 19 entries).
