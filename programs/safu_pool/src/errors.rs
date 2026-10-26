@@ -287,6 +287,8 @@ pub enum PoolError {
     CctpBeneficiaryNotOwn,
     #[msg("Nothing bridgeable to send home")]
     CctpNothingToSend,
+    #[msg("Yield venue's program has no adapter in this program")]
+    VenueNotSupported,
 }
 
 impl From<CoreError> for PoolError {

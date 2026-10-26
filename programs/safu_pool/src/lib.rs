@@ -14,6 +14,7 @@ pub mod kamino;
 pub mod leg;
 pub mod state;
 pub mod vault;
+pub mod venue;
 
 use approval::ClaimApproval;
 use instructions::*;

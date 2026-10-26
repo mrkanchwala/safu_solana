@@ -435,6 +435,86 @@ fn governance_installs_only_a_klend_usdc_reserve_and_never_while_deployed() {
     );
 }
 
+/// Proposes, approves and (after the wait) executes a venue change, passing `extra` with the call.
+fn change_venue(env: &mut Env, to: Pubkey, extra: Option<Pubkey>) -> Result<(), String> {
+    use safu_pool::instruction::{ApproveChange, ProposeChange};
+    use safu_pool::state::GovChange;
+    let change = GovChange::YieldVenue(to);
+    let (admin, co) = (env.admin.insecure_clone(), env.co_signer.insecure_clone());
+    let ix = env.gov_ix(&admin.pubkey(), ProposeChange { change });
+    env.send(&[ix], &[&admin])?;
+    let ix = env.gov_ix(&co.pubkey(), ApproveChange { change });
+    env.send(&[ix], &[&co])?;
+    warp(env, pool_core::params::GOV_DELAY_SECS);
+    let anyone = env.funded(0);
+    let mut ix = env.execute_change_ix(safu_pool::constants::GOV_KIND_YIELD_VENUE, None);
+    if let Some(a) = extra {
+        ix.accounts
+            .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(a, false));
+    }
+    env.send(&[ix], &[&anyone])
+}
+
+#[test]
+fn governance_refuses_a_venue_whose_program_has_no_adapter() {
+    let mut env = setup(5_000);
+    env.edit::<Pool>(&env.pool(), |p| p.yield_venue = Pubkey::default());
+    env.venue = None;
+    // A token account: owned by the token program, which no adapter serves.
+    let vault = env.vault();
+    assert_err(
+        change_venue(&mut env, vault, Some(vault)),
+        safu_pool::errors::PoolError::VenueNotSupported,
+    );
+    assert_eq!(env.pool_state().yield_venue, Pubkey::default());
+}
+
+#[test]
+fn a_venue_account_moved_to_another_program_is_refused_on_load_and_in_views() {
+    let mut env = setup(5_000);
+    let b = env.matured_backer(100_000 * USDC);
+    assert!(env.pool_state().deployed_collateral > 0);
+    // The venue account now belongs to a program with no adapter.
+    let reserve_key = venue(&env).reserve;
+    let mut a = env.svm.get_account(&reserve_key).unwrap();
+    a.owner = Pubkey::new_unique();
+    env.svm.set_account(reserve_key, a).unwrap();
+    let anyone = env.funded(0);
+    let ix = leg_call(&env, safu_pool::instruction::EnsureLiquidity {});
+    assert_err(
+        env.send(&[ix], &[&anyone]),
+        safu_pool::errors::PoolError::VenueNotSupported,
+    );
+    let ix = env.ix(
+        safu_pool::accounts::ViewBacker {
+            pool: env.pool(),
+            backer_record: env.backer_record(&b.pubkey()),
+            reserve: Some(reserve_key),
+        },
+        safu_pool::instruction::ViewBacker {},
+    );
+    assert_err(
+        env.send(&[ix], &[&anyone]),
+        safu_pool::errors::PoolError::VenueNotSupported,
+    );
+}
+
+#[test]
+fn a_full_exit_lets_governance_switch_the_venue() {
+    let mut env = setup(5_000);
+    env.matured_backer(100_000 * USDC);
+    let p = env.pool_state();
+    // Everything back from the venue: both books end at exactly zero.
+    admin_provide(&mut env, p.deployed_collateral, 0).unwrap();
+    let p = env.pool_state();
+    assert_eq!((p.deployed_book, p.deployed_collateral), (0, 0));
+    // The venue can now be turned off and set again.
+    change_venue(&mut env, Pubkey::default(), None).unwrap();
+    assert_eq!(env.pool_state().yield_venue, Pubkey::default());
+    change_venue(&mut env, RESERVE, Some(RESERVE)).unwrap();
+    assert_eq!(env.pool_state().yield_venue, RESERVE);
+}
+
 /// Wire size of a one-signer legacy transaction carrying `ix` and `extra` more writable accounts
 /// (the worst-case upkeep places).
 fn legacy_size(ix: &Instruction, payer: &Pubkey, extra: usize) -> usize {

@@ -10,7 +10,6 @@ use anchor_lang::prelude::*;
 use super::{backer, now, stake};
 use crate::constants::SEED_POOL;
 use crate::errors::PoolError;
-use crate::kamino::read_reserve;
 use crate::leg::{credit_yield, harvestable};
 use crate::state::{BackerRecord, Pool, StakeRecord};
 
@@ -23,7 +22,7 @@ fn add_growth(pool: &mut Pool, reserve: &Option<UncheckedAccount>, now: i64) -> 
             pool.yield_venue,
             PoolError::YieldAccountsMissing
         );
-        let growth = harvestable(pool, &read_reserve(reserve)?, now)?;
+        let growth = harvestable(pool, &crate::venue::read(reserve)?, now)?;
         credit_yield(pool, growth)?;
     }
     Ok(())
@@ -50,7 +49,7 @@ pub struct ViewStaker<'info> {
     #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     pub stake_record: Box<Account<'info, StakeRecord>>,
-    /// CHECK: optional; must be `pool.yield_venue`, read by `read_reserve`.
+    /// CHECK: optional; must be `pool.yield_venue`, read by `venue::read`.
     pub reserve: Option<UncheckedAccount<'info>>,
 }
 
@@ -71,7 +70,7 @@ pub struct ViewBacker<'info> {
     #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
     pub backer_record: Box<Account<'info, BackerRecord>>,
-    /// CHECK: optional; must be `pool.yield_venue`, read by `read_reserve`.
+    /// CHECK: optional; must be `pool.yield_venue`, read by `venue::read`.
     pub reserve: Option<UncheckedAccount<'info>>,
 }
 

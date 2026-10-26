@@ -1,6 +1,6 @@
 //! The yield leg (multichain `vault.rs`): push idle USDC into the venue, harvest growth, pull USDC
-//! out for a payment, credit yield. Maths in `pool_core::leg` and `pool_core::kamino`; the calls in
-//! `crate::kamino`.
+//! out for a payment, credit yield. Maths in `pool_core::leg`; the venue's own calls, checks and maths
+//! behind `crate::venue` (today Kamino Lend, `crate::kamino`).
 //!
 //! The pool rebalances itself inside user calls (multichain v1, 2026-09-24): money out pulls from the
 //! venue when cash is short and refills the buffer; money in pushes idle cash to the `deploy_bps`
@@ -8,7 +8,7 @@
 //! back, as yield.
 //!
 //! Solana cannot catch a failed call (multichain uses `try_` calls), so every best-effort step checks
-//! in advance everything a klend call needs (`pool_core::kamino::Reserve::{deposit_ok, redeem_ok}`)
+//! in advance everything a venue call needs (`Venue::{deposit_ok, redeem_ok}`)
 //! and skips if any is not met. A venue that cannot pay never fails the staker's call here: the
 //! payment then refuses as short of cash, or (claim payouts) counts a cash-short day.
 
@@ -23,8 +23,8 @@ use crate::events::{
     DeployBelowFloor, Deployed, DeploymentShortfall, Harvested, Redeemed, YieldCredited,
     LEG_ADMIN_PROVIDE, LEG_KEEPER_DEPLOY, LEG_KEEPER_REBALANCE, LEG_PULL, LEG_PUSH,
 };
-use crate::kamino::Leg;
 use crate::state::Pool;
+use crate::venue::{Quote, Venue};
 use anchor_spl::token::TokenAccount;
 
 use crate::vault::{self, Cash};
@@ -76,7 +76,7 @@ pub fn credit_yield(pool: &mut Pool, amount: u64) -> Result<()> {
 
 /// Growth `harvest` would book now from the reserve as last read, under the daily limit. 0 while
 /// paused, with nothing deployed, or before the harvest clock starts.
-pub fn harvestable(pool: &Pool, reserve: &pool_core::kamino::Reserve, now: i64) -> Result<u64> {
+pub fn harvestable(pool: &Pool, venue: &Quote, now: i64) -> Result<u64> {
     if pool.is_paused(now)
         || pool.deployed_collateral == 0
         || pool.deployed_book == 0
@@ -84,7 +84,7 @@ pub fn harvestable(pool: &Pool, reserve: &pool_core::kamino::Reserve, now: i64) 
     {
         return Ok(0);
     }
-    let value = reserve.liquidity_for(pool.deployed_collateral).core()?;
+    let value = venue.liquidity_for(pool.deployed_collateral)?;
     lg::harvest_growth(
         pool.deployed_book,
         value,
@@ -143,7 +143,7 @@ pub struct Money<'a, 'info> {
     pub pool_info: AccountInfo<'info>,
     pub vault: AccountInfo<'info>,
     pub cash: &'a Cash<'info>,
-    pub leg: Option<Leg<'info>>,
+    pub leg: Option<Venue<'info>>,
 }
 
 impl<'a, 'info> Money<'a, 'info> {
@@ -160,7 +160,7 @@ impl<'a, 'info> Money<'a, 'info> {
         })
     }
 
-    fn leg(&mut self) -> Result<&mut Leg<'info>> {
+    fn leg(&mut self) -> Result<&mut Venue<'info>> {
         self.leg
             .as_mut()
             .ok_or_else(|| error!(PoolError::VenueNotSet))
@@ -170,7 +170,7 @@ impl<'a, 'info> Money<'a, 'info> {
     fn deposit(&mut self, pool: &mut Pool, amount: u64, now: i64, kind: u8) -> Result<u64> {
         let (pool_info, vault, cash) = (self.pool_info.clone(), self.vault.clone(), self.cash);
         let leg = self.leg()?;
-        let expected = leg.state.collateral_for(amount).core()?;
+        let expected = leg.quote().collateral_for(amount)?;
         let before = leg.collateral_held()?;
         leg.deposit(pool, &pool_info, cash, &vault, amount)?;
         let collateral = sub(leg.collateral_held()?, before).core()?;
@@ -218,7 +218,7 @@ impl<'a, 'info> Money<'a, 'info> {
         }
         let leg = self.leg()?;
         leg.refresh()?;
-        if !leg.state.deposit_ok(amount, leg.market_emergency).core()? {
+        if !leg.deposit_ok(amount)? {
             return Ok(0);
         }
         self.deposit(pool, amount, now, LEG_PUSH)?;
@@ -233,12 +233,7 @@ impl<'a, 'info> Money<'a, 'info> {
         }
         let collateral =
             lg::collateral_for(target, pool.deployed_book, pool.deployed_collateral).core()?;
-        let leg = self.leg()?;
-        if !leg
-            .state
-            .redeem_ok(collateral, leg.market_emergency, now)
-            .core()?
-        {
+        if !self.leg()?.redeem_ok(collateral, now)? {
             return Ok(false);
         }
         let received = self.redeem(pool, collateral)?;
@@ -301,7 +296,7 @@ impl<'a, 'info> Money<'a, 'info> {
         }
         let leg = self.leg()?;
         leg.refresh()?;
-        let value = leg.state.liquidity_for(pool.deployed_collateral).core()?;
+        let value = leg.quote().liquidity_for(pool.deployed_collateral)?;
         let collateral = lg::harvest_collateral(
             pool.deployed_collateral,
             pool.deployed_book,
@@ -309,11 +304,7 @@ impl<'a, 'info> Money<'a, 'info> {
             now.saturating_sub(pool.last_harvest_at),
         )
         .core()?;
-        if !leg
-            .state
-            .redeem_ok(collateral, leg.market_emergency, now)
-            .core()?
-        {
+        if !leg.redeem_ok(collateral, now)? {
             return Ok(0);
         }
         let received = self.redeem(pool, collateral)?;
@@ -346,11 +337,8 @@ impl<'a, 'info> Money<'a, 'info> {
             return Ok(0);
         }
         leg.refresh()?;
-        require!(
-            leg.state.deposit_ok(amount, leg.market_emergency).core()?,
-            PoolError::VenueUnavailable
-        );
-        let expected = leg.state.collateral_for(amount).core()?;
+        require!(leg.deposit_ok(amount)?, PoolError::VenueUnavailable);
+        let expected = leg.quote().collateral_for(amount)?;
         let collateral = self.deposit(pool, amount, now, LEG_KEEPER_DEPLOY)?;
         require!(
             collateral >= lg::min_collateral(expected).core()?,
@@ -412,15 +400,10 @@ impl<'a, 'info> Money<'a, 'info> {
     ) -> Result<u64> {
         let leg = self.leg()?;
         leg.refresh()?;
-        require!(
-            leg.state
-                .redeem_ok(collateral, leg.market_emergency, now)
-                .core()?,
-            PoolError::VenueUnavailable
-        );
+        require!(leg.redeem_ok(collateral, now)?, PoolError::VenueUnavailable);
         let min = match min_out {
             Some(m) => m,
-            None => lg::min_collateral(leg.state.liquidity_for(collateral).core()?).core()?,
+            None => lg::min_collateral(leg.quote().liquidity_for(collateral)?).core()?,
         };
         let received = self.redeem(pool, collateral)?;
         require!(received >= min, PoolError::MinAmountNotMet);

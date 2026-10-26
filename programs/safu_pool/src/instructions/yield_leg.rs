@@ -8,7 +8,6 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 use super::now;
 use crate::constants::{SEED_LEG, SEED_POOL, SEED_VAULT};
 use crate::errors::PoolError;
-use crate::kamino::check_venue;
 use crate::leg::Money;
 use crate::state::Pool;
 // Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
@@ -20,7 +19,7 @@ pub struct InitYieldAccount<'info> {
     pub payer: Signer<'info>,
     #[account(seeds = [SEED_POOL], bump = pool.bump, constraint = pool.is_current() @ PoolError::NotMigrated)]
     pub pool: Box<Account<'info, Pool>>,
-    /// CHECK: must be `pool.yield_venue`, a klend USDC reserve (`check_venue`).
+    /// CHECK: must be `pool.yield_venue`, a supported venue for the pool's USDC (`venue::check`).
     #[account(address = pool.yield_venue @ PoolError::VenueNotSet)]
     pub reserve: UncheckedAccount<'info>,
     pub collateral_mint: Box<Account<'info, Mint>>,
@@ -41,10 +40,10 @@ pub struct InitYieldAccount<'info> {
 /// Permissionless: opens the pool's collateral account for the venue's collateral mint. Until it
 /// exists, the pool deploys nothing.
 pub fn init_yield_account(ctx: Context<InitYieldAccount>) -> Result<()> {
-    let reserve = check_venue(&ctx.accounts.pool, &ctx.accounts.reserve.to_account_info())?;
+    let venue = crate::venue::check(&ctx.accounts.pool, &ctx.accounts.reserve.to_account_info())?;
     require_keys_eq!(
         ctx.accounts.collateral_mint.key(),
-        Pubkey::new_from_array(reserve.collateral_mint),
+        venue.collateral_mint(),
         PoolError::YieldAccountsMissing
     );
     Ok(())

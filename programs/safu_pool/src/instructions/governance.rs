@@ -28,7 +28,6 @@ use super::now;
 use crate::constants::{SEED_GOVERNANCE, SEED_POOL};
 use crate::errors::PoolError;
 use crate::events::{GovApproved, GovCancelVote, GovCancelled, GovExecuted, GovProposed};
-use crate::kamino::check_venue;
 use crate::state::{
     GovChange, GovKind, GovProposal, Governance, Pool, ROLES, ROLE_ADMIN, ROLE_CO_SIGNER,
     ROLE_GUARDIAN,
@@ -384,7 +383,7 @@ pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
     let change = change_of(kind, &p);
     validate(pool, &change)?;
     if let GovChange::YieldVenue(k) = change {
-        // A new venue must be a klend USDC reserve, passed as the first remaining account; the
+        // A new venue must be a supported venue for the pool's USDC, passed as the first remaining account; the
         // default key turns the venue off.
         if k != Pubkey::default() {
             let reserve = ctx
@@ -392,7 +391,7 @@ pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
                 .first()
                 .filter(|a| a.key() == k)
                 .ok_or_else(|| error!(PoolError::YieldAccountsMissing))?;
-            check_venue(pool, reserve)?;
+            crate::venue::check(pool, reserve)?;
         }
     }
     apply(pool, &change, new_key)?;

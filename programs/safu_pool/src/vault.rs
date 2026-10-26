@@ -9,8 +9,8 @@ use pool_core::liquidity;
 
 use crate::constants::SEED_POOL;
 use crate::errors::PoolError;
-use crate::kamino::Leg;
 use crate::state::Pool;
+use crate::venue::Venue;
 
 /// The accounts every money-moving instruction needs besides the vault: the USDC mint, the token
 /// program, and the yield venue's accounts. The mint is checked against
@@ -55,9 +55,9 @@ impl<'info> Cash<'info> {
     }
 
     /// The yield venue, loaded and checked (`None` without one). Load once per instruction.
-    pub fn venue(&self, pool: &Pool, pool_key: &Pubkey) -> Result<Option<Leg<'info>>> {
+    pub fn venue(&self, pool: &Pool, pool_key: &Pubkey) -> Result<Option<Venue<'info>>> {
         self.check(pool)?;
-        self.load_leg(pool, pool_key)
+        Venue::load(self, pool, pool_key)
     }
 }
 
