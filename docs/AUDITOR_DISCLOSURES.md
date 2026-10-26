@@ -82,9 +82,10 @@ money, change who gets paid or raise a payout, and the other two roles replace i
 **Tests.** `tests/settings_and_exits.rs` (pause rules), `tests/claims.rs` (suspension rules),
 `tests/stake_back.rs` (`emergency_exit_only_while_paused_and_honours_the_penalty_lock`).
 
-## 5. Kamino Lend, called directly, with every call pre-checked
+## 5. Kamino Lend through the venue slot, with every call pre-checked
 
-**Behaviour.** Idle USDC goes to one Kamino Lend USDC reserve (`Pool.yield_venue`), up to the deploy
+**Behaviour.** Idle USDC goes to one Kamino Lend USDC reserve (`Pool.yield_venue`), through the venue
+slot (`venue.rs`: the adapter is picked by the venue account's owner, today only klend), up to the deploy
 share (at most 80%). Money in (`stake`, `back`, `mature_backing`) pushes idle cash above the buffer.
 Money out (`withdraw`, `claim_stream`, `emergency_exit`, backer withdrawals, yield claims, treasury)
 pulls the shortfall plus a refill of the buffer, or the shortfall alone (`leg.rs`, `kamino.rs`).

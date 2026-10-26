@@ -34,10 +34,12 @@ Stellar they are separate contracts (`covered-registry`, `cctp-adapter`, `safu-a
 | `state.rs` | 600 | Every account and its layout |
 | `instructions/backer.rs` | 530 | Backing, per-deposit clocks, the daily withdrawal drip |
 | `pool-core/src/cctp.rs` | 482 | Circle message parsing, the owner action digest, decimals check |
-| `leg.rs` | 458 | Push, pull and harvest against Kamino; how a redeem lands on the books |
+| `leg.rs` | 441 | Push, pull and harvest through the venue slot; how a redeem lands on the books |
 | `instructions/stake.rs` | 435 | Stake, withdraw, beneficiary, emergency exit |
-| `instructions/governance.rs` | 405 | Two of three roles, 7-day delay, 90-day recovery |
+| `instructions/governance.rs` | 404 | Two of three roles, 7-day delay, 90-day recovery |
 | `instructions/upkeep.rs` | 400 | Upkeep accounts, the watch list, protocol revenue, the rounding reserve |
+| `kamino.rs` | 327 | The Kamino Lend adapter: its accounts, checks and the three klend calls |
+| `venue.rs` | 163 | The yield venue slot: picks the adapter by the venue account's owner |
 
 ## 2. Out of scope
 

@@ -31,27 +31,27 @@ The program tests load the built `target/deploy/safu_pool.so`, so build before t
 (`.github/workflows/ci.yml`) runs all of the above on both builds, checks the binary is not empty,
 builds the IDL with the Anchor CLI pinned by `Cargo.lock`, and passes the IDL to the site job.
 
-## 2. Program tests on LiteSVM (200)
+## 2. Program tests on LiteSVM (229)
 
 LiteSVM runs the real program binary. The Kamino Lend tests load klend's mainnet program and real
 reserve, market and price accounts. The CCTP tests load Circle's CCTP v2 programs.
 
 | File | Tests | What it checks |
 |---|---|---|
-| `claims.rs` | 57 | Oracle signature and the Ed25519 instruction (position, offsets, signer, cluster, revocation), tier ceilings, the claim line in order, daily caps that queue instead of failing, time gate, approval, cooldown and vesting stream, the daily payout share, cash-short days, cancel and penalty lock, suspension and its 30-day lapse, the two-key override |
-| `stake_back.rs` | 42 | Initialize checks (upgrade authority, distinct roles, USDC mint and decimals, classic SPL Token, a demo build refuses mainnet), pause, stake bounds and overflow into backing, beneficiary rules, withdraw, emergency exit, backing from day one, per-deposit clocks, the daily withdrawal drip, covered-wallet registry, the rounding reserve, donations |
+| `claims.rs` | 62 | Oracle signature and the Ed25519 instruction (position, offsets, signer, cluster, revocation), tier ceilings, the claim line in order, daily caps that queue instead of failing, time gate, approval, cooldown and vesting stream, the daily payout share, cash-short days, cancel and penalty lock, suspension and its 30-day lapse, the two-key override |
+| `stake_back.rs` | 46 | Initialize checks (upgrade authority, distinct roles, USDC mint and decimals, classic SPL Token, a demo build refuses mainnet), pause, stake bounds and overflow into backing, beneficiary rules, withdraw, emergency exit, backing from day one, per-deposit clocks, the daily withdrawal drip, covered-wallet registry, the rounding reserve, donations |
 | `settings_and_exits.rs` | 32 | The settings timelock, ranges and order between settings, live settings driving the rules, snapshots on stakes and claims, pause length and gap, paused time added back to every window, partial withdrawal, the free-capital rule for stakers and backers |
-| `cctp.rs` | 20 | Stake and back from Ethereum and Stellar over CCTP v2 with Circle's programs: receive, deploy, owner-signed actions (Ethereum `personal_sign`, Stellar SEP-53), nonce, expiry and cluster, no re-split of a signature into other accounts, send home to Ethereum and through Circle's forwarder to Stellar |
-| `governance.rs` | 17 | Two of three roles plus 7 days, a role has no say in its own replacement, cancelling takes two, new keys sign their own installation, 90-day recovery and how it is stopped, storage version and `migrate` |
-| `kamino.rs` | 15 | Deposit and redeem by CPI into klend, a reserve at its deposit limit, harvest takes only growth, stale prices, pulls for payouts and withdrawals, a cash-short day, every venue account checked before any call, Scope- and Pyth-priced reserves, compute and transaction size with full upkeep |
-| `upkeep.rs` | 8 | A user transaction without the upkeep accounts is refused, one-click approval past the gate, expiry and stale marking on their own, the watch list walk, the largest transaction fits one packet |
+| `cctp.rs` | 21 | Stake and back from Ethereum and Stellar over CCTP v2 with Circle's programs: receive, deploy, owner-signed actions (Ethereum `personal_sign`, Stellar SEP-53), nonce, expiry and cluster, no re-split of a signature into other accounts, send home to Ethereum and through Circle's forwarder to Stellar |
+| `governance.rs` | 21 | Two of three roles plus 7 days, a role has no say in its own replacement, cancelling takes two, new keys sign their own installation, 90-day recovery and how it is stopped, storage version and `migrate` |
+| `kamino.rs` | 28 | Deposit and redeem by CPI into klend, the venue slot refusing a program with no adapter (governance, load, views), a reserve at its deposit limit, harvest takes only growth, stale prices, pulls for payouts and withdrawals, a cash-short day, every venue account checked before any call, Scope- and Pyth-priced reserves, compute and transaction size with full upkeep |
+| `upkeep.rs` | 10 | A user transaction without the upkeep accounts is refused, one-click approval past the gate, expiry and stale marking on their own, the watch list walk, the largest transaction fits one packet |
 | `points_yield.rs` | 4 | Points per dollar per day, yield paid while paused, yield owed through a full exit |
 | `approval_vector.rs` | 1 | The approval message matches the backend's byte for byte |
-| `src/` unit tests | 5 | The Ed25519 instruction parser on malformed input |
+| `src/` unit tests | 4 | Constants against the program: allowed call names, watch-entry offsets, klend's null key |
 
 `tests/common/` holds shared setup, the klend fixture (`klend.rs`) and the CCTP kit (`cctp.rs`).
 
-## 3. Rule library tests (87)
+## 3. Rule library tests (93)
 
 `crates/pool-core` holds every pool rule as a pure function. Property tests (proptest) check that a
 rule holds across random inputs as well as chosen cases.
@@ -60,10 +60,11 @@ rule holds across random inputs as well as chosen cases.
 |---|---|---|
 | `tests/settings.rs` | 22 | Defaults, hard ranges, order between settings, the pause clock, partial withdrawals, money leaves only if open claims still fit |
 | `tests/claim_rules.rs` | 15 | Tier ceilings, entitlement and window checks, admission bands, the oracle's daily limit, vesting (monotone, never above the entitlement), admitted claims never exceed capacity |
-| `tests/kamino_leg.rs` | 15 | Reading a klend reserve, collateral conversion rounding down, deposit and redeem pre-checks, harvest never redeems principal, how a redeem lands on the books |
-| `tests/rules.rs` | 12 | Stake bounds, yield split and conservation, the buffer and push lines |
+| `tests/kamino_leg.rs` | 16 | Reading a klend reserve, collateral conversion rounding down, deposit and redeem pre-checks, harvest never redeems principal, how a redeem lands on the books |
+| `tests/rules.rs` | 14 | Stake bounds, yield split and conservation, the buffer and push lines |
 | `tests/drip.rs` | 5 | The backer withdrawal drip and its daily shares |
 | `tests/points.rs` | 5 | Points index, spendable cash, rounding-reserve draws, the upkeep cursor |
+| `tests/pinned_values.rs` | 3 | Every clock and every setting range pinned to its rule value, per build |
 | `src/` unit tests | 13 | CCTP message parsing and the owner action digest, demo clocks |
 
 ## 4. Stateful fuzz
