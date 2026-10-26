@@ -67,7 +67,7 @@ NO_DNA=1 anchor build -- --features demo && cargo test -p safu_pool -p pool-core
 
 | Suite | Tests | Where it runs |
 |---|---|---|
-| Program (LiteSVM, with Kamino Lend and Circle CCTP loaded) | 228 per build | Local and CI |
+| Program (LiteSVM, with Kamino Lend and Circle CCTP loaded) | 229 per build | Local and CI |
 | Rule library (`pool-core`) | 93 per build | Local and CI |
 | Stateful fuzz | 50 step kinds | Build server, capped container |
 | Mutation testing (cargo-mutants) | 1,273 mutants, every miss caught or proven equivalent | GitHub Actions |

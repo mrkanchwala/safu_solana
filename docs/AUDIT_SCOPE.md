@@ -97,13 +97,13 @@ arm in `venue.rs` plus its own file, and a program upgrade.
 
 ## 5. Testing done so far
 
-- 321 tests on each build (normal and the fast-clock `demo` build): 228 program tests on LiteSVM, with
+- 322 tests on each build (normal and the fast-clock `demo` build): 229 program tests on LiteSVM, with
   Kamino Lend's mainnet program and reserve accounts and Circle's CCTP programs loaded, plus 93
   `pool-core` unit and property tests (`docs/TESTING.md`).
 - Stateful fuzz: 593,250 steps across both builds, 0 failures.
 - Mutation testing: 1,273 mutants over the program and `pool-core`. Every mutant the first full run
   missed is now caught by a test, or proven unable to change behaviour
-  (`docs/MUTATION_EQUIVALENTS.md`, 17 entries).
+  (`docs/MUTATION_EQUIVALENTS.md`, 19 entries).
 - Internal reviews on 2026-10-23: code review, security review with STRIDE, infrastructure review and
   a Solana checklist audit. No critical or high findings; the 7 medium findings and every low finding
   with a fix are fixed and tested.

@@ -1,2 +1,5 @@
-# One cargo-mutants filter per line. Only the lines the venue slot added or changed (diff against ce40dc1).
---in-diff .github/venue-slot.diff
+# One cargo-mutants filter per line. The 3 mutants-check-6 misses (venue slot), rerun after the new
+# deposit-limit test (the two collateral_for ones are listed in docs/MUTATION_EQUIVALENTS.md and stay missed).
+-F '^programs/safu_pool/src/venue\.rs:114:9:\ replace\ Venue<.info>::deposit_ok\ \->\ Result<bool>\ with\ Ok\(true\)$'
+-F '^programs/safu_pool/src/venue\.rs:35:9:\ replace\ Quote::collateral_for\ \->\ Result<u64>\ with\ Ok\(0\)$'
+-F '^programs/safu_pool/src/venue\.rs:35:9:\ replace\ Quote::collateral_for\ \->\ Result<u64>\ with\ Ok\(1\)$'

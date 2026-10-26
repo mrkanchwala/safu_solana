@@ -5,7 +5,7 @@ from 2026-10-23 on branch `solana-usdc-pool`.
 
 | Suite | Tests | Where it runs |
 |---|---|---|
-| Program (LiteSVM) | 228 per build | Local and CI, normal and demo builds |
+| Program (LiteSVM) | 229 per build | Local and CI, normal and demo builds |
 | Rule library (`pool-core`) | 93 per build | Local and CI, normal and demo builds |
 | Stateful fuzz | 1 harness, 50 step kinds | Build server, in a capped Docker container |
 | Mutation testing (cargo-mutants) | 1,273 mutants | GitHub Actions, started by tag |
@@ -43,7 +43,7 @@ reserve, market and price accounts. The CCTP tests load Circle's CCTP v2 program
 | `settings_and_exits.rs` | 32 | The settings timelock, ranges and order between settings, live settings driving the rules, snapshots on stakes and claims, pause length and gap, paused time added back to every window, partial withdrawal, the free-capital rule for stakers and backers |
 | `cctp.rs` | 20 | Stake and back from Ethereum and Stellar over CCTP v2 with Circle's programs: receive, deploy, owner-signed actions (Ethereum `personal_sign`, Stellar SEP-53), nonce, expiry and cluster, no re-split of a signature into other accounts, send home to Ethereum and through Circle's forwarder to Stellar |
 | `governance.rs` | 17 | Two of three roles plus 7 days, a role has no say in its own replacement, cancelling takes two, new keys sign their own installation, 90-day recovery and how it is stopped, storage version and `migrate` |
-| `kamino.rs` | 15 | Deposit and redeem by CPI into klend, harvest takes only growth, stale prices, pulls for payouts and withdrawals, a cash-short day, every venue account checked before any call, Scope- and Pyth-priced reserves, compute and transaction size with full upkeep |
+| `kamino.rs` | 15 | Deposit and redeem by CPI into klend, a reserve at its deposit limit, harvest takes only growth, stale prices, pulls for payouts and withdrawals, a cash-short day, every venue account checked before any call, Scope- and Pyth-priced reserves, compute and transaction size with full upkeep |
 | `upkeep.rs` | 8 | A user transaction without the upkeep accounts is refused, one-click approval past the gate, expiry and stale marking on their own, the watch list walk, the largest transaction fits one packet |
 | `points_yield.rs` | 4 | Points per dollar per day, yield paid while paused, yield owed through a full exit |
 | `approval_vector.rs` | 1 | The approval message matches the backend's byte for byte |
@@ -117,9 +117,10 @@ tag:
 | `mutants-check-3` | `0b0d02c` | 32 | 2 | First misses after new tests; the 2 misses are equivalents |
 | `mutants-check-4` | `bd44c7b` | 26 | 4 | Remaining misses; the 4 misses are equivalents |
 | `mutants-check-5` | `6ca83ab` | 19 | 7 | `leg.rs` misses; the 7 misses are equivalents |
+| `mutants-check-6` | `e24a496` | 49 | 3 | Venue slot's changed lines; 5 unviable. 2 misses are equivalents, 1 got a test |
 
 Every missed mutant is now caught by a test or listed in
-[MUTATION_EQUIVALENTS.md](MUTATION_EQUIVALENTS.md) (17 entries) with the reason it cannot change
+[MUTATION_EQUIVALENTS.md](MUTATION_EQUIVALENTS.md) (19 entries) with the reason it cannot change
 behaviour. A shard that draws only equivalent or unviable mutants shows red: the workflow treats a
 shard with nothing caught as a setup fault, so those shards were checked by hand.
 

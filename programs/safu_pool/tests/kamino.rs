@@ -78,6 +78,27 @@ fn a_stale_price_does_not_stop_deposits_or_redeems() {
     admin_provide(&mut env, 1_000 * USDC, 0).unwrap();
 }
 
+/// A reserve at its deposit limit: klend would refuse the deposit, and Solana cannot catch a failed
+/// call, so the user call skips the push and still goes through; the keeper's deploy is refused.
+#[test]
+fn a_reserve_at_its_deposit_limit_takes_no_push_and_the_keeper_is_refused() {
+    let mut env = setup(5_000);
+    let mut a = env.svm.get_account(&RESERVE).unwrap();
+    a.data[k::R_DEPOSIT_LIMIT..k::R_DEPOSIT_LIMIT + 8].copy_from_slice(&1u64.to_le_bytes());
+    env.svm.set_account(RESERVE, a).unwrap();
+    env.matured_backer(100_000 * USDC);
+    let p = env.pool_state();
+    assert_eq!((p.deployed_book, p.deployed_collateral), (0, 0));
+    assert_eq!(collateral_held(&env), 0);
+    assert_eq!(env.vault_liquid(), 100_000 * USDC);
+    let anyone = env.funded(0);
+    let ix = leg_call(&env, safu_pool::instruction::AutoDeployLiquidity {});
+    assert_err(
+        env.send(&[ix], &[&anyone]),
+        safu_pool::errors::PoolError::VenueUnavailable,
+    );
+}
+
 #[test]
 fn harvest_takes_only_the_growth_as_yield() {
     let mut env = setup(5_000);
