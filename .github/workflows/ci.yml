@@ -53,6 +53,9 @@ jobs:
       - name: One source for addresses and rule numbers
         run: bash scripts/check_no_hardcodes.sh
 
+      - name: Hand-typed addresses exist on a real cluster
+        run: python3 scripts/check_builtin_ids.py programs app/src scripts crates
+
       # The devnet program is the demo build (fast clocks). The tests embed the built program,
       # so each build is followed by its own test and clippy run.
       - name: Build (demo)
