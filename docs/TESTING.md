@@ -93,6 +93,8 @@ FUZZ_SEED=<seed> FUZZ_EPISODES=1 ...    # replay one episode
 |---|---|---|---|---|
 | 2026-10-23 | normal | 295,750 (1,183 episodes, 7 min) | 0 failures | `1dcf178` |
 | 2026-10-23 | demo | 297,500 (1,190 episodes, 7 min) | 0 failures | `1dcf178` |
+| 2026-10-26 | normal | 640,250 (2,561 episodes, 15 min) | 0 failures | `8816860` |
+| 2026-10-26 | demo | 640,250 (2,561 episodes, 15 min) | 0 failures | `8816860` |
 
 ## 5. Mutation testing
 
@@ -118,6 +120,7 @@ tag:
 | `mutants-check-4` | `bd44c7b` | 26 | 4 | Remaining misses; the 4 misses are equivalents |
 | `mutants-check-5` | `6ca83ab` | 19 | 7 | `leg.rs` misses; the 7 misses are equivalents |
 | `mutants-check-6` | `e24a496` | 49 | 3 | Venue slot's changed lines; 5 unviable. 2 misses are equivalents, 1 got a test |
+| `mutants-check-7` | `da8b1d2` | 8 | 2 | The 3 misses rerun: `deposit_ok` now caught; the 2 misses are equivalents |
 
 Every missed mutant is now caught by a test or listed in
 [MUTATION_EQUIVALENTS.md](MUTATION_EQUIVALENTS.md) (19 entries) with the reason it cannot change

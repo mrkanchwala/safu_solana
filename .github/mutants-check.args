@@ -1,5 +1,21 @@
-# One cargo-mutants filter per line. The 3 mutants-check-6 misses (venue slot), rerun after the new
-# deposit-limit test (the two collateral_for ones are listed in docs/MUTATION_EQUIVALENTS.md and stay missed).
--F '^programs/safu_pool/src/venue\.rs:114:9:\ replace\ Venue<.info>::deposit_ok\ \->\ Result<bool>\ with\ Ok\(true\)$'
--F '^programs/safu_pool/src/venue\.rs:35:9:\ replace\ Quote::collateral_for\ \->\ Result<u64>\ with\ Ok\(0\)$'
--F '^programs/safu_pool/src/venue\.rs:35:9:\ replace\ Quote::collateral_for\ \->\ Result<u64>\ with\ Ok\(1\)$'
+# One cargo-mutants filter per line. The last 19 mutants-full-1 misses (leg.rs), rerun after the new
+# tests (six are listed in docs/MUTATION_EQUIVALENTS.md and stay missed).
+-F '^programs/safu_pool/src/leg\.rs:125:15:\ replace\ >\ with\ >=\ in\ record_redeem$'
+-F '^programs/safu_pool/src/leg\.rs:178:23:\ replace\ <\ with\ >\ in\ Money<.a,\ .info>::deposit$'
+-F '^programs/safu_pool/src/leg\.rs:178:23:\ replace\ <\ with\ <=\ in\ Money<.a,\ .info>::deposit$'
+-F '^programs/safu_pool/src/leg\.rs:178:23:\ replace\ <\ with\ ==\ in\ Money<.a,\ .info>::deposit$'
+-F '^programs/safu_pool/src/leg\.rs:203:32:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::push_idle$'
+-F '^programs/safu_pool/src/leg\.rs:216:37:\ replace\ <\ with\ <=\ in\ Money<.a,\ .info>::push_idle$'
+-F '^programs/safu_pool/src/leg\.rs:231:57:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::try_pull$'
+-F '^programs/safu_pool/src/leg\.rs:231:24:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::try_pull$'
+-F '^programs/safu_pool/src/leg\.rs:255:49:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::pull_cash$'
+-F '^programs/safu_pool/src/leg\.rs:255:27:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::pull_cash$'
+-F '^programs/safu_pool/src/leg\.rs:258:32:\ replace\ \-\ with\ \+\ in\ Money<.a,\ .info>::pull_cash$'
+-F '^programs/safu_pool/src/leg\.rs:284:13:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::harvest_with$'
+-F '^programs/safu_pool/src/leg\.rs:283:13:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::harvest_with$'
+-F '^programs/safu_pool/src/leg\.rs:282:13:\ replace\ \|\|\ with\ &&\ in\ Money<.a,\ .info>::harvest_with$'
+-F '^programs/safu_pool/src/leg\.rs:299:89:\ replace\ <\ with\ <=\ in\ Money<.a,\ .info>::harvest_with$'
+-F '^programs/safu_pool/src/leg\.rs:365:9:\ replace\ Money<.a,\ .info>::keeper_rebalance\ \->\ Result<u64>\ with\ Ok\(0\)$'
+-F '^programs/safu_pool/src/leg\.rs:365:9:\ replace\ Money<.a,\ .info>::keeper_rebalance\ \->\ Result<u64>\ with\ Ok\(1\)$'
+-F '^programs/safu_pool/src/leg\.rs:373:22:\ replace\ ==\ with\ !=\ in\ Money<.a,\ .info>::keeper_rebalance$'
+-F '^programs/safu_pool/src/leg\.rs:455:9:\ replace\ Money<.a,\ .info>::pay_strict\ \->\ Result<\(\)>\ with\ Ok\(\(\)\)$'

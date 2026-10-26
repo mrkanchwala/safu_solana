@@ -100,7 +100,7 @@ arm in `venue.rs` plus its own file, and a program upgrade.
 - 322 tests on each build (normal and the fast-clock `demo` build): 229 program tests on LiteSVM, with
   Kamino Lend's mainnet program and reserve accounts and Circle's CCTP programs loaded, plus 93
   `pool-core` unit and property tests (`docs/TESTING.md`).
-- Stateful fuzz: 593,250 steps across both builds, 0 failures.
+- Stateful fuzz: 1,280,500 steps across both builds (2026-10-26, venue slot), 0 failures.
 - Mutation testing: 1,273 mutants over the program and `pool-core`. Every mutant the first full run
   missed is now caught by a test, or proven unable to change behaviour
   (`docs/MUTATION_EQUIVALENTS.md`, 19 entries).
