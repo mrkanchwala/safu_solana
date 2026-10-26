@@ -1,11 +1,11 @@
-//! Kamino Lend (klend), the pool's yield venue: the accounts its calls need, the checks on them, and
-//! the three calls the pool makes (`refresh_reserve`, `deposit_reserve_liquidity`,
+//! Kamino Lend (klend), the pool's first venue adapter: the accounts its calls need, the checks on
+//! them, and the three calls the pool makes (`refresh_reserve`, `deposit_reserve_liquidity`,
 //! `redeem_reserve_collateral`). Layout facts and reserve maths live in `pool_core::kamino`.
 //!
-//! The venue is `Pool.yield_venue`, a klend reserve set by governance. klend is upgradeable and
-//! outside our control: owner, discriminator and length are checked before any byte is read, and
-//! every account the pool is responsible for is checked against the reserve before any call
-//! (arbitrary-CPI guard). The price account is klend's to check; the pool only passes it on.
+//! This adapter serves `Pool.yield_venue` when governance sets it to a klend reserve. klend is
+//! upgradeable and outside our control: owner, discriminator and length are checked before any byte
+//! is read, and every account the pool is responsible for is checked against the reserve before any
+//! call (arbitrary-CPI guard). The price account is klend's to check; the pool only passes it on.
 //!
 //! Instructions are built by hand (discriminator + accounts): no klend CPI crate, whose Anchor
 //! version would fight this one.

@@ -74,7 +74,7 @@ pub fn credit_yield(pool: &mut Pool, amount: u64) -> Result<()> {
     Ok(())
 }
 
-/// Growth `harvest` would book now from the reserve as last read, under the daily limit. 0 while
+/// Growth `harvest` would book now from the venue as last read, under the daily limit. 0 while
 /// paused, with nothing deployed, or before the harvest clock starts.
 pub fn harvestable(pool: &Pool, venue: &Quote, now: i64) -> Result<u64> {
     if pool.is_paused(now)

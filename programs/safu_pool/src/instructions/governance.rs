@@ -383,8 +383,8 @@ pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
     let change = change_of(kind, &p);
     validate(pool, &change)?;
     if let GovChange::YieldVenue(k) = change {
-        // A new venue must be a supported venue for the pool's USDC, passed as the first remaining account; the
-        // default key turns the venue off.
+        // A new venue must be a supported venue for the pool's USDC, passed as the first remaining
+        // account; the default key turns the venue off.
         if k != Pubkey::default() {
             let reserve = ctx
                 .remaining_accounts

@@ -13,13 +13,14 @@ a different shape, the reason is written in [PORT_MAP.md](PORT_MAP.md).
 
 | Part | Path | Lines (source, no tests/comments/blank) | What it does |
 |---|---|---|---|
-| Pool program | `programs/safu_pool/src/` | 6,211 | Stake, back, claims and the claim line, payout streams, settings, governance, the covered-wallet registry, the Kamino Lend USDC leg, yield and points, upkeep inside every user call, and stake or back from Ethereum and Stellar over Circle CCTP v2 |
+| Pool program | `programs/safu_pool/src/` | 6,309 | Stake, back, claims and the claim line, payout streams, settings, governance, the covered-wallet registry, the Kamino Lend USDC leg, yield and points, upkeep inside every user call, and stake or back from Ethereum and Stellar over Circle CCTP v2 |
 | Rule library | `crates/pool-core/src/` | 1,264 | Every pool rule as a pure function (bounds, tiers, admission, drip, yield and points maths, settings ranges, Kamino reserve reading, CCTP message and signature layout), called by the program and read by clients through the IDL |
-| **Total** | | **7,475** | |
+| **Total** | | **7,573** | |
 
 Line counts exclude `tests/`, `#[cfg(test)]` blocks, comments and blank lines. Measured the same way,
 the Stellar pool's five contracts come to 5,972 lines; its published scope says 5,612 because it was
-counted with a different tool. The program binary is 1,454,536 bytes.
+counted with a different tool. The program binary is 1,460,032 bytes (normal build).
+The yield venue slot (`venue.rs`, 2026-10-26) added 98 of these lines to the 7,475 first quoted.
 
 The covered-wallet registry and the cross-chain stake path are inside the pool program here. On
 Stellar they are separate contracts (`covered-registry`, `cctp-adapter`, `safu-account`).
@@ -68,28 +69,35 @@ like the audit to cover that use, so a partner deployment does not need a new au
 The lending protocol's own contracts are out of scope: SAFU only uses audited venues and relies on
 their audits. The audit covers SAFU's code, its settings and the connector that calls the venue.
 
-**Partner pools with their own settings.** A partner pool is a new deployment of the same audited
-binary (verifiable build), with its own roles and its own values for the adjustable settings. Every
+**Partner pools with their own settings.** A partner pool is a new deployment of the audited commit,
+with its own roles and its own values for the adjustable settings. On Solana the program id is
+compiled in (`declare_id!`, `lib.rs`) and Anchor refuses any other id, so each partner pool is its own
+program: the audited source rebuilt with the partner's id (verifiable build), giving a new program
+hash. Only the id differs from the audited source. Every
 setting has hard bounds and ordering rules in the code (`pool-core/src/settings.rs`); values are
 picked inside them, and changes made before the first deposit take effect without the 7-day wait.
 The code stays exactly as audited.
-*Question for the auditor:* can a partner deployment of the audited commit, with any settings
-inside the coded bounds, rely on this audit without a new one? If not, would a short deployment
-review (build hash, settings, roles and addresses checked against the audited commit) be enough,
-and what would it cost per pool?
+*Question for the auditor:* can a partner deployment of the audited commit, rebuilt with its own
+program id and with any settings inside the coded bounds, rely on this audit without a new one? If
+not, would a short deployment review (rebuild and hash, settings, roles and addresses checked against
+the audited commit) be enough, and what would it cost per pool?
 
-**A different lending protocol.** The pool lends its idle USDC on Kamino Lend. The program calls
-klend directly and governance only accepts a Kamino USDC reserve as the venue, so a partner who wants
-the money in their own lending market needs a new connector in the program (deposit, redeem, read
-the position's value, plus the account checks).
+**A different lending protocol.** The pool lends its idle USDC on Kamino Lend through a venue slot
+(`programs/safu_pool/src/venue.rs`), in scope here. The money logic (`leg.rs`) talks only to the
+slot; the slot picks the adapter by the program that owns the venue account, from adapters compiled
+into the program (today only Kamino, `kamino.rs`). An unknown owner is refused at governance, on every
+load and in the views, so governance can never point the pool at an arbitrary program. Each adapter
+owns its accounts in `Cash`, its checks and its maths, and pre-checks its deposit and redeem (Solana
+cannot catch a failed call). A partner who wants their own lending market needs one new adapter: an
+arm in `venue.rs` plus its own file, and a program upgrade.
 *Questions for the auditor:*
-- What would a delta audit of one new lending connector cost, on top of this audit?
-- Would you rather review a general venue interface now (Kamino as the first connector), so each
-  later connector is a smaller review?
+- Does the slot's interface (`Venue`, `Quote` and the adapter rules in `venue.rs`) hold, so a later
+  adapter is reviewed on its own lines plus the slot code it touches?
+- What would a delta review of one new adapter cost, on top of this audit?
 
 ## 5. Testing done so far
 
-- 318 tests on each build (normal and the fast-clock `demo` build): 225 program tests on LiteSVM, with
+- 321 tests on each build (normal and the fast-clock `demo` build): 228 program tests on LiteSVM, with
   Kamino Lend's mainnet program and reserve accounts and Circle's CCTP programs loaded, plus 93
   `pool-core` unit and property tests (`docs/TESTING.md`).
 - Stateful fuzz: 593,250 steps across both builds, 0 failures.

@@ -3,7 +3,8 @@
 #            suites against each build, and the one-source check for addresses and rule numbers
 #   program also builds the IDL and hands it to the app job
 #   app:     lint and unit tests for the site, run against that IDL
-#   audit:   dependency advisories, with the two known ones proven to reach only the test harness
+#   audit:   dependency advisories, with the known ones proven to reach only the test harness or
+#            the host build (the host-only proof runs in the program job, against the SBF target)
 # `--locked` everywhere: a stale Cargo.lock fails instead of resolving something untested.
 
 name: CI
@@ -68,6 +69,25 @@ jobs:
 
       - name: Program is not empty (normal)
         run: test "$(stat -c %s target/deploy/safu_pool.so)" -gt 100000
+
+      # RUSTSEC-2026-0387 (crypto-bigint 0.5.5) comes in through k256, which solana-secp256k1-recover
+      # pulls only off-chain, and the test harness. Ignored in the audit job; proven here on every
+      # run against the on-chain target, so the ignore cannot outlive it.
+      - name: Host-only advisories stay out of the on-chain program
+        run: |
+          rustc_sbf=$(ls -d "$HOME"/.cache/solana/*/platform-tools/rust/bin/rustc | head -n 1)
+          test -x "$rustc_sbf"
+          tree=$(RUSTC="$rustc_sbf" cargo tree --locked -e normal --target sbpf-solana-solana \
+            --manifest-path programs/safu_pool/Cargo.toml)
+          echo "$tree" | grep -q "^safu_pool" || { echo "::error::SBF dependency tree did not resolve"; exit 1; }
+          for c in crypto-bigint@0.5.5; do
+            out=$(RUSTC="$rustc_sbf" cargo tree --locked -e normal --target sbpf-solana-solana \
+              --manifest-path programs/safu_pool/Cargo.toml -i "$c" 2>&1 || true)
+            if [ -n "$out" ] && ! echo "$out" | grep -q -e "nothing to print" -e "did not match any packages"; then
+              echo "::error::$c is in the on-chain program's dependency tree"; echo "$out"; exit 1
+            fi
+            echo "$c: not on-chain"
+          done
 
       - name: Clippy (normal)
         run: cargo clippy --all-targets --locked -- -D warnings
@@ -154,8 +174,9 @@ jobs:
             echo "$c: dev-only"
           done
 
+      # RUSTSEC-2026-0387: host build and test harness only, proven in the program job.
       - name: Audit
-        run: cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093
+        run: cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093 --ignore RUSTSEC-2026-0387
 
       - name: Install cargo-deny 0.20.2
         run: cargo install cargo-deny --version 0.20.2 --locked

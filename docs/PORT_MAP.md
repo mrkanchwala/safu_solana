@@ -75,6 +75,11 @@ form differs (reason given). **Left out** = not in this build.
   venue must be a klend reserve of the pool's USDC on classic SPL Token, passed with the execute call;
   no venue change while anything is deployed. `init_yield_account` then opens the pool's kUSDC account
   (PDA `[leg, pool, collateral mint]`). Until it exists nothing is deployed.
+- **Venue slot (`venue.rs`).** The pool picks the adapter by the program that owns the venue account,
+  from a list compiled into the program (today only klend); an unknown owner is refused at governance,
+  on every load and in the views. Documented difference: multichain accepts any DeFindex vault that
+  answers its interface, Solana accepts only adapters compiled in, so a new lender needs a program
+  upgrade and a review of that adapter.
 - **Every account is checked before any call.** Each money instruction carries the nine venue accounts
   in `Cash` (or the program id in each place when there is no venue). The program checks klend's id,
   the reserve against `yield_venue`, and the market, market authority, supply vault, collateral mint,

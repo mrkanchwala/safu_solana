@@ -4,7 +4,7 @@
 //!
 //! The adapter is chosen by the program that owns the venue account, matched against program ids
 //! compiled into this program. An unknown owner is refused, so governance can only point the pool at
-//! a venue whose adapter was audited with the program; adding one needs a program upgrade.
+//! a venue whose adapter is compiled into this program; adding one needs a program upgrade.
 //!
 //! Rules for an adapter:
 //! - Check owner, discriminator and length before reading any byte; fail closed on a layout change.

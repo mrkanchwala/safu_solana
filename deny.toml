@@ -10,6 +10,7 @@ unmaintained = "workspace"
 ignore = [
     { id = "RUSTSEC-2024-0344", reason = "curve25519-dalek 3.2.0, test harness only" },
     { id = "RUSTSEC-2022-0093", reason = "ed25519-dalek 1.0.1, test harness only" },
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5, host build and test harness only (proven in ci.yml, program job)" },
 ]
 
 [licenses]

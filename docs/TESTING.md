@@ -5,7 +5,7 @@ from 2026-10-23 on branch `solana-usdc-pool`.
 
 | Suite | Tests | Where it runs |
 |---|---|---|
-| Program (LiteSVM) | 225 per build | Local and CI, normal and demo builds |
+| Program (LiteSVM) | 228 per build | Local and CI, normal and demo builds |
 | Rule library (`pool-core`) | 93 per build | Local and CI, normal and demo builds |
 | Stateful fuzz | 1 harness, 50 step kinds | Build server, in a capped Docker container |
 | Mutation testing (cargo-mutants) | 1,273 mutants | GitHub Actions, started by tag |
