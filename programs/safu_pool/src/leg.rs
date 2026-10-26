@@ -14,9 +14,12 @@
 
 use anchor_lang::prelude::*;
 use pool_core::leg as lg;
-use pool_core::params::{HARVEST_MIN_CU, PUSH_MIN_CU};
+use pool_core::params::{
+    CU_GUARD_MAX_INSTRUCTIONS, DEFAULT_CU_LIMIT, HARVEST_MIN_CU, MAX_CU_LIMIT, PUSH_MIN_CU,
+};
 use pool_core::settings::SettingKey;
 use pool_core::{add, liquidity, sub, yields};
+use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 
 use crate::errors::{CoreResultExt, PoolError};
 use crate::events::{
@@ -29,15 +32,39 @@ use anchor_spl::token::TokenAccount;
 
 use crate::vault::{self, Cash};
 
-/// Compute units left in this transaction. Host builds (IDL, unit tests) have no meter.
-pub fn cu_left() -> u64 {
-    #[cfg(target_os = "solana")]
-    // SAFETY: read-only syscall, no arguments.
-    unsafe {
-        solana_define_syscall::definitions::sol_remaining_compute_units()
+/// Compute units this transaction asked for, read from its instructions: its `SetComputeUnitLimit`,
+/// or Solana's 200k default, at most 1.4M. The runtime's own meter (`sol_remaining_compute_units`)
+/// is not active on devnet or mainnet. 0 (the guards skip) unless the outer instruction is this
+/// program's, every other one is a compute-budget or signature-check instruction, so no other
+/// program spends the budget the guards count on, and there are at most `CU_GUARD_MAX_INSTRUCTIONS`,
+/// so reading them stays cheap.
+pub fn cu_limit(instructions: &AccountInfo) -> u64 {
+    let Ok(current) = load_current_index_checked(instructions) else {
+        return 0;
+    };
+    if load_instruction_at_checked(CU_GUARD_MAX_INSTRUCTIONS, instructions).is_ok() {
+        return 0;
     }
-    #[cfg(not(target_os = "solana"))]
-    u64::MAX
+    let mut limit = DEFAULT_CU_LIMIT;
+    let mut i = 0;
+    while let Ok(ix) = load_instruction_at_checked(i, instructions) {
+        if i == usize::from(current) {
+            if ix.program_id != crate::ID {
+                return 0;
+            }
+        } else if ix.program_id == solana_sdk_ids::compute_budget::ID {
+            // `SetComputeUnitLimit`: tag 2, u32 units. The runtime refuses a second one.
+            if let [2, a, b, c, d, ..] = ix.data[..] {
+                limit = u64::from(u32::from_le_bytes([a, b, c, d]));
+            }
+        } else if ix.program_id != solana_sdk_ids::ed25519_program::ID
+            && ix.program_id != solana_sdk_ids::secp256k1_program::ID
+        {
+            return 0;
+        }
+        i += 1;
+    }
+    limit.min(MAX_CU_LIMIT)
 }
 
 pub fn credit_yield(pool: &mut Pool, amount: u64) -> Result<()> {
@@ -166,6 +193,14 @@ impl<'a, 'info> Money<'a, 'info> {
             .ok_or_else(|| error!(PoolError::VenueNotSet))
     }
 
+    /// `cu_limit` of this transaction; 0 without the instructions sysvar.
+    fn cu_limit(&self) -> u64 {
+        self.cash
+            .instructions
+            .as_ref()
+            .map_or(0, |a| cu_limit(&a.to_account_info()))
+    }
+
     /// Deposits `amount` (already checked to go through) and books what came back.
     fn deposit(&mut self, pool: &mut Pool, amount: u64, now: i64, kind: u8) -> Result<u64> {
         let (pool_info, vault, cash) = (self.pool_info.clone(), self.vault.clone(), self.cash);
@@ -211,9 +246,9 @@ impl<'a, 'info> Money<'a, 'info> {
             pool.deploy_bps,
         )
         .core()?;
-        // Not enough compute left for a refresh, the deposit and the rest of the call: the cash
-        // stays in the vault until a later call or the keeper pushes it.
-        if amount == 0 || cu_left() < PUSH_MIN_CU {
+        // The transaction asked for too little compute for a refresh, the deposit and the rest of
+        // the call: the cash stays in the vault until a later call or the keeper pushes it.
+        if amount == 0 || self.cu_limit() < PUSH_MIN_CU {
             return Ok(0);
         }
         let leg = self.leg()?;
@@ -286,12 +321,15 @@ impl<'a, 'info> Money<'a, 'info> {
             pool.last_harvest_at = now.max(1);
             return Ok(0);
         }
-        // No time since the last harvest: the growth limit is 0 whatever the rate. Not enough compute
-        // left for a refresh, a redeem and the rest of the call: the growth waits for the next call.
+        // No time since the last harvest: the growth limit is 0 whatever the rate. The transaction
+        // asked for too little compute for a refresh, a redeem and the rest of the call: the growth
+        // waits for the next call.
         // These are the only skips before the refresh; the rate is always read fresh, never as
         // someone last left it.
         let elapsed = now.saturating_sub(pool.last_harvest_at);
-        if yields::harvest_limit(pool.deployed_book, elapsed).core()? == 0 || cu_left() < min_cu {
+        if yields::harvest_limit(pool.deployed_book, elapsed).core()? == 0
+            || (min_cu > 0 && self.cu_limit() < min_cu)
+        {
             return Ok(0);
         }
         let leg = self.leg()?;

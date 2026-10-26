@@ -365,11 +365,22 @@ impl Env {
         ixs: &[Instruction],
         signers: &[&Keypair],
     ) -> Result<u64, String> {
+        let limit = self.cfg.compute_unit_limit;
+        self.send_with_limit(ixs, signers, limit)
+    }
+
+    /// As `send_cu`, asking for `limit` compute units.
+    pub fn send_with_limit(
+        &mut self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+        limit: u64,
+    ) -> Result<u64, String> {
         let mut ixs = self.with_upkeep(ixs);
         // ComputeBudget `SetComputeUnitLimit` (tag 2, u32 units). Last, so instruction indexes the
         // pool reads (approval signatures) stay where they are.
         let mut data = vec![2u8];
-        data.extend_from_slice(&(self.cfg.compute_unit_limit as u32).to_le_bytes());
+        data.extend_from_slice(&(limit as u32).to_le_bytes());
         ixs.push(Instruction {
             program_id: solana_sdk_ids::compute_budget::ID,
             accounts: vec![],

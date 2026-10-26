@@ -275,11 +275,123 @@ fn heavy_calls_harvest_at_the_site_limit_and_never_fail_at_the_default() {
     }
 }
 
-/// The busiest a user call gets: harvest on a stale price, the push of new cash into klend, then a
-/// full upkeep (the head of the line released, both watch places expiring their claims). It still
-/// fits the site's compute limit.
+/// Each best-effort step runs at exactly its own compute limit (`HARVEST_MIN_CU`, `PUSH_MIN_CU`) and
+/// the call fits it, a day on with no Scope update; one unit below, the step steps aside and the call
+/// still goes through. The limits sit above Solana's default and within the site's. With another
+/// program's instruction in the transaction neither step runs: that program could spend the budget.
 #[test]
-fn a_backing_with_harvest_push_and_full_upkeep_fits_the_site_limit() {
+fn each_step_fits_its_own_limit_and_steps_aside_below_it() {
+    use pool_core::params::{DEFAULT_CU_LIMIT, HARVEST_MIN_CU, PUSH_MIN_CU};
+    let (min, max) = bounds();
+    let amount = min.max(2_000 * USDC);
+    // (harvested, pushed) by one call: the harvest is the only thing that moves `last_harvest_at`.
+    let send = |env: &mut Env, ixs: &[Instruction], s: &solana_keypair::Keypair, limit: u64| {
+        let (h, d) = (
+            env.pool_state().last_harvest_at,
+            env.pool_state().deployed_book,
+        );
+        env.send_with_limit(ixs, &[s], limit).unwrap();
+        let p = env.pool_state();
+        (p.last_harvest_at != h, p.deployed_book > d)
+    };
+    let site = setup(8_000).cfg.compute_unit_limit;
+    assert!(
+        DEFAULT_CU_LIMIT < PUSH_MIN_CU && PUSH_MIN_CU <= HARVEST_MIN_CU && HARVEST_MIN_CU <= site
+    );
+
+    for (limit, runs) in [(HARVEST_MIN_CU, true), (HARVEST_MIN_CU - 1, false)] {
+        // Withdraw that pulls its whole amount from klend.
+        let mut env = setup(8_000);
+        env.matured_backer(100_000 * USDC);
+        let s = env.staker(max);
+        warp(&mut env, 86_400);
+        let idle = env.vault_liquid();
+        env.edit::<Pool>(&env.pool(), |p| p.rounding_reserve = idle);
+        let ix = env.withdraw_part_ix(&s.pubkey(), &s.pubkey(), max);
+        assert_eq!(
+            send(&mut env, &[ix], &s, limit).0,
+            runs,
+            "withdraw at {limit}"
+        );
+        // New stake and new backing: the harvest, then the push.
+        let mut env = setup(8_000);
+        env.matured_backer(100_000 * USDC);
+        warp(&mut env, 86_400);
+        let k = env.funded(amount);
+        let ix = env.stake_ix(&k.pubkey(), amount, k.pubkey());
+        assert_eq!(
+            send(&mut env, &[ix], &k, limit),
+            (runs, true),
+            "stake at {limit}"
+        );
+        warp(&mut env, 86_400);
+        let b = env.funded(50_000 * USDC);
+        let ix = env.back_ix(&b.pubkey(), 50_000 * USDC);
+        assert_eq!(
+            send(&mut env, &[ix], &b, limit),
+            (runs, true),
+            "back at {limit}"
+        );
+    }
+
+    for (limit, runs) in [(PUSH_MIN_CU, true), (PUSH_MIN_CU - 1, false)] {
+        // Same slot as the last harvest: nothing to harvest, only the push.
+        let mut env = setup(8_000);
+        env.matured_backer(100_000 * USDC);
+        warp(&mut env, 86_400);
+        let k = env.funded(amount);
+        let ix = env.stake_ix(&k.pubkey(), amount, k.pubkey());
+        send(&mut env, &[ix], &k, HARVEST_MIN_CU);
+        let k = env.funded(amount);
+        let ix = env.stake_ix(&k.pubkey(), amount, k.pubkey());
+        assert_eq!(
+            send(&mut env, &[ix], &k, limit),
+            (false, runs),
+            "stake at {limit}"
+        );
+        let b = env.funded(50_000 * USDC);
+        let ix = env.back_ix(&b.pubkey(), 50_000 * USDC);
+        assert_eq!(
+            send(&mut env, &[ix], &b, limit),
+            (false, runs),
+            "back at {limit}"
+        );
+    }
+
+    // Another program's instruction alongside, at the site's limit: both steps step aside.
+    let mut env = setup(8_000);
+    env.matured_backer(100_000 * USDC);
+    warp(&mut env, 86_400);
+    let k = env.funded(amount);
+    let ix = env.stake_ix(&k.pubkey(), amount, k.pubkey());
+    let other = solana_system_interface::instruction::transfer(&k.pubkey(), &k.pubkey(), 1);
+    assert_eq!(send(&mut env, &[ix, other], &k, site), (false, false));
+
+    // Signature checks alongside are fine up to `CU_GUARD_MAX_INSTRUCTIONS` in all (the compute
+    // limit included); one more and both steps step aside.
+    use pool_core::params::CU_GUARD_MAX_INSTRUCTIONS;
+    let check = ed25519_ix(&k, b"any", [u16::MAX; 3]);
+    for (extra, runs) in [
+        (CU_GUARD_MAX_INSTRUCTIONS - 2, true),
+        (CU_GUARD_MAX_INSTRUCTIONS - 1, false),
+    ] {
+        warp(&mut env, 86_400);
+        let k = env.funded(amount);
+        let mut ixs = vec![check.clone(); extra];
+        ixs.push(env.stake_ix(&k.pubkey(), amount, k.pubkey()));
+        assert_eq!(
+            send(&mut env, &ixs, &k, site),
+            (runs, runs),
+            "{extra} checks"
+        );
+    }
+}
+
+/// The busiest a user call gets: harvest on a stale price, the push of new cash into klend, then a
+/// full upkeep (the head of the line released, both watch places expiring their claims). It fits
+/// the harvest's own compute limit.
+#[test]
+fn a_backing_with_harvest_push_and_full_upkeep_fits_the_harvest_limit() {
     use safu_pool::constants::TIER_A;
     use safu_pool::state::ClaimStatus;
     let mut env = setup(5_000);
@@ -332,7 +444,9 @@ fn a_backing_with_harvest_push_and_full_upkeep_fits_the_site_limit() {
     // A large backing makes room for the claim in line.
     let b = env.funded(100_000 * USDC);
     let ix = env.back_ix(&b.pubkey(), 100_000 * USDC);
-    let cu = env.send_cu(&[ix], &[&b]).unwrap();
+    let cu = env
+        .send_with_limit(&[ix], &[&b], pool_core::params::HARVEST_MIN_CU)
+        .unwrap();
     println!("backing with harvest, push and full upkeep: {cu} compute units");
     assert_ne!(
         env.pool_state().last_harvest_at,

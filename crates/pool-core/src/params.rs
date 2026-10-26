@@ -171,18 +171,32 @@ pub const MAX_REBALANCE_SLIPPAGE_BPS: u64 = 500;
 /// Most growth one harvest may book, per day since the last harvest, bps of book value.
 pub const HARVEST_MAX_GROWTH_BPS_PER_DAY: u64 = 10;
 
-/// Compute units a harvest inside a user call needs left before it starts: klend's refresh on a stale
-/// price, the redeem, and the rest of the heaviest money call after it. Measured 22 Oct at ~200k (a
-/// new stake: harvest, then the push into klend), plus ~20% margin. Above Solana's 200k default, so
-/// a caller on the default skips the harvest; the site asks for 400k (`computeUnitLimit`). Checked
-/// by `programs/safu_pool/tests/kamino.rs` `heavy_calls_harvest_at_the_site_limit_and_never_fail_at_the_default`.
-pub const HARVEST_MIN_CU: u64 = 240_000;
+/// Compute limit a transaction must ask for before a harvest runs inside a user call
+/// (`leg::cu_limit`): klend's refresh on a stale price, the redeem, and the heaviest money call
+/// around it. Measured 26 Oct: 270k at most (a backing with harvest, push and full upkeep), plus at
+/// most 60k when the call comes through the owner-signed CCTP path, plus ~20% margin. Below it the
+/// harvest steps aside and the call goes through. Must not exceed the site's limit
+/// (`computeUnitLimit` in the pool config). Checked by `programs/safu_pool/tests/kamino.rs`
+/// `each_step_fits_its_own_limit_and_steps_aside_below_it`.
+pub const HARVEST_MIN_CU: u64 = 390_000;
 
-/// Compute units the push of new cash into the venue needs left before it starts: klend's refresh on
-/// a stale price, the deposit, and the rest of the call. Measured 22 Oct at ~146k, plus ~20% margin.
-/// A caller on Solana's 200k default skips the push (the keeper's `auto_deploy_liquidity` does it
-/// later); the site asks for 400k.
-pub const PUSH_MIN_CU: u64 = 175_000;
+/// Compute limit a transaction must ask for before new cash is pushed into the venue
+/// (`leg::cu_limit`): klend's refresh on a stale price, the deposit, and the heaviest call around it
+/// with no harvest. Measured 26 Oct: 201k at most (a stake), plus 18k for a full upkeep and 60k for
+/// the owner-signed CCTP path, plus ~20% margin. Above `DEFAULT_CU_LIMIT`, so a caller on the default
+/// skips the push (the keeper's `auto_deploy_liquidity` does it later). Same test as above.
+pub const PUSH_MIN_CU: u64 = 335_000;
+
+/// Solana's compute limit for a transaction that does not set one, with one program instruction.
+pub const DEFAULT_CU_LIMIT: u64 = 200_000;
+
+/// Most compute a transaction may ask for.
+pub const MAX_CU_LIMIT: u64 = 1_400_000;
+
+/// Most instructions a transaction may carry for the compute guards to trust its limit: the pool's
+/// own calls send at most the compute limit, the compute price, one signature check and the pool's
+/// instruction. More and the best-effort steps step aside.
+pub const CU_GUARD_MAX_INSTRUCTIONS: usize = 4;
 
 // -----------------------------------------------------------------------
 // Yield split

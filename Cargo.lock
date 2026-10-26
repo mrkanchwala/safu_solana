@@ -2517,7 +2517,6 @@ dependencies = [
  "serde_json",
  "sha3",
  "solana-account",
- "solana-define-syscall 3.0.0",
  "solana-instructions-sysvar",
  "solana-keccak-hasher",
  "solana-keypair",

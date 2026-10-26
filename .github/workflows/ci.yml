@@ -58,6 +58,10 @@ jobs:
       - name: Program is not empty (demo)
         run: test "$(stat -c %s target/deploy/safu_pool.so)" -gt 100000
 
+      # LiteSVM turns every feature on; this loads the program under the clusters' real feature sets.
+      - name: Loads on devnet and mainnet feature sets (demo)
+        run: scripts/check_cluster_features.sh target/deploy/safu_pool.so
+
       - name: Clippy (demo)
         run: cargo clippy --all-targets --locked --features demo -p safu_pool -p pool-core -- -D warnings
 
@@ -69,6 +73,10 @@ jobs:
 
       - name: Program is not empty (normal)
         run: test "$(stat -c %s target/deploy/safu_pool.so)" -gt 100000
+
+      # LiteSVM turns every feature on; this loads the program under the clusters' real feature sets.
+      - name: Loads on devnet and mainnet feature sets (normal)
+        run: scripts/check_cluster_features.sh target/deploy/safu_pool.so
 
       # RUSTSEC-2026-0387 (crypto-bigint 0.5.5) comes in through k256, which solana-secp256k1-recover
       # pulls only off-chain, and the test harness. Ignored in the audit job; proven here on every
