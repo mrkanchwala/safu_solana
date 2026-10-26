@@ -98,10 +98,12 @@ jobs:
       - name: cargo mutants
         run: |
           set +e
-          RUN="--shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 3"
+          RUN="--shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             git diff "${{ inputs.base }}" -- programs crates > "$RUNNER_TEMP/changed.diff" || exit 1
-            RUN="$RUN --in-diff $RUNNER_TEMP/changed.diff --in-place --baseline skip -j 1"
+            RUN="$RUN --in-diff $RUNNER_TEMP/changed.diff --in-place --baseline skip"
+          else
+            RUN="$RUN -j 3"
           fi
           case "${{ github.ref_name }}" in
             mutants-check-demo-*)
@@ -126,6 +128,8 @@ jobs:
         if: always()
         run: |
           d=mutants.out
+          # No output at all means cargo-mutants never ran (a bad argument, say), not an empty shard.
+          [ -d $d ] || { echo "NO mutants.out: cargo-mutants did not run, setup fault" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
           for f in caught missed timeout unviable; do
             n=$( [ -f $d/$f.txt ] && wc -l < $d/$f.txt || echo none )
             echo "$f: $n" | tee -a "$GITHUB_STEP_SUMMARY"
