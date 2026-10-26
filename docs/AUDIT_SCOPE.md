@@ -13,14 +13,14 @@ a different shape, the reason is written in [PORT_MAP.md](PORT_MAP.md).
 
 | Part | Path | Lines (source, no tests/comments/blank) | What it does |
 |---|---|---|---|
-| Pool program | `programs/safu_pool/src/` | 6,309 | Stake, back, claims and the claim line, payout streams, settings, governance, the covered-wallet registry, the Kamino Lend USDC leg, yield and points, upkeep inside every user call, and stake or back from Ethereum and Stellar over Circle CCTP v2 |
-| Rule library | `crates/pool-core/src/` | 1,264 | Every pool rule as a pure function (bounds, tiers, admission, drip, yield and points maths, settings ranges, Kamino reserve reading, CCTP message and signature layout), called by the program and read by clients through the IDL |
-| **Total** | | **7,573** | |
+| Pool program | `programs/safu_pool/src/` | 6,339 | Stake, back, claims and the claim line, payout streams, settings, governance, the covered-wallet registry, the Kamino Lend USDC leg, yield and points, upkeep inside every user call, and stake or back from Ethereum and Stellar over Circle CCTP v2 |
+| Rule library | `crates/pool-core/src/` | 1,267 | Every pool rule as a pure function (bounds, tiers, admission, drip, yield and points maths, settings ranges, Kamino reserve reading, CCTP message and signature layout), called by the program and read by clients through the IDL |
+| **Total** | | **7,606** | |
 
 Line counts exclude `tests/`, `#[cfg(test)]` blocks, comments and blank lines. Measured the same way,
 the Stellar pool's five contracts come to 5,972 lines; its published scope says 5,612 because it was
-counted with a different tool. The program binary is 1,460,032 bytes (normal build).
-The yield venue slot (`venue.rs`, 2026-10-26) added 98 of these lines to the 7,475 first quoted.
+counted with a different tool. The program binary is 1,461,776 bytes (normal build).
+The yield venue slot (`venue.rs`, 2026-10-26) added 98 of these lines to the 7,475 first quoted; the compute guard fix (2026-10-26) 33 more.
 
 The covered-wallet registry and the cross-chain stake path are inside the pool program here. On
 Stellar they are separate contracts (`covered-registry`, `cctp-adapter`, `safu-account`).
@@ -34,7 +34,7 @@ Stellar they are separate contracts (`covered-registry`, `cctp-adapter`, `safu-a
 | `state.rs` | 600 | Every account and its layout |
 | `instructions/backer.rs` | 530 | Backing, per-deposit clocks, the daily withdrawal drip |
 | `pool-core/src/cctp.rs` | 482 | Circle message parsing, the owner action digest, decimals check |
-| `leg.rs` | 441 | Push, pull and harvest through the venue slot; how a redeem lands on the books |
+| `leg.rs` | 479 | Push, pull and harvest through the venue slot; how a redeem lands on the books |
 | `instructions/stake.rs` | 435 | Stake, withdraw, beneficiary, emergency exit |
 | `instructions/governance.rs` | 404 | Two of three roles, 7-day delay, 90-day recovery |
 | `instructions/upkeep.rs` | 400 | Upkeep accounts, the watch list, protocol revenue, the rounding reserve |
@@ -99,7 +99,7 @@ arm in `venue.rs` plus its own file, and a program upgrade.
 
 ## 5. Testing done so far
 
-- 322 tests on each build (normal and the fast-clock `demo` build): 229 program tests on LiteSVM, with
+- 323 tests on each build (normal and the fast-clock `demo` build): 230 program tests on LiteSVM, with
   Kamino Lend's mainnet program and reserve accounts and Circle's CCTP programs loaded, plus 93
   `pool-core` unit and property tests (`docs/TESTING.md`).
 - Stateful fuzz: 1,280,500 steps across both builds (2026-10-26, venue slot), 0 failures.

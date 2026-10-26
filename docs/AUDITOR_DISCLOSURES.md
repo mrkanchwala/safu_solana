@@ -109,11 +109,22 @@ paid in full and the loss stays with those who remain. Keeper rebalances accept 
 value; only the admin can redeem lower (`provide_liquidity` with its own `min_out`, works while
 paused).
 
-**Compute.** A harvest needs about 240k compute units and a push about 175k
-(`HARVEST_MIN_CU`, `PUSH_MIN_CU`). Each is skipped when less is left, so a user call never fails for
-lack of compute; the next call does it.
+**Compute.** The harvest and the push each run only when the transaction asked for at least
+`HARVEST_MIN_CU` / `PUSH_MIN_CU` compute units; below that they are skipped and a later call or the
+keeper does them, so a user call never fails for lack of compute. Both constants are the compute
+*limit requested*, not compute left: the runtime's own meter (`sol_remaining_compute_units`) is not
+active on devnet or mainnet, so `leg::cu_limit` reads the transaction's `SetComputeUnitLimit` from
+the instructions sysvar (Solana's `DEFAULT_CU_LIMIT` when there is none, at most `MAX_CU_LIMIT`).
+The measurements behind both values are in their doc comments in `crates/pool-core/src/params.rs`.
+`cu_limit` returns 0, so both steps skip, unless the outer instruction is this program's (its own
+CCTP self-call included), every other instruction is a compute-budget or signature-check
+instruction, and there are at most `CU_GUARD_MAX_INSTRUCTIONS`. Any other program in the
+transaction could spend the budget the guard counts on. The "outer instruction is another program"
+branch has no test of its own (it needs a second program calling in). If it were wrong, the worst
+case is that caller's own transaction failing on compute and rolling back; no funds move. The
+keeper's harvest (`harvest_alone`, minimum 0) never reads the sysvar.
 
-**Tests.** `tests/kamino.rs` (15 tests against the real klend binary and mainnet reserve accounts),
+**Tests.** `tests/kamino.rs` (29 tests against the real klend binary and mainnet reserve accounts),
 `crates/pool-core/tests/kamino_leg.rs`.
 
 ## 6. Rounding dust when a pool has backers but no stakes

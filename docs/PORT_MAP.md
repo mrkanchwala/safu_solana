@@ -103,7 +103,7 @@ form differs (reason given). **Left out** = not in this build.
   table needed. Checked on every CI run by `transaction_sizes_with_the_venue_and_full_upkeep`
   (`tests/kamino.rs`); a claim submission with full upkeep by `tests/upkeep.rs`. The busiest call (backing with harvest, push and full upkeep) is checked against
   the site limit by `a_backing_with_harvest_push_and_full_upkeep_fits_the_harvest_limit`. Client limit
-  `computeUnitLimit` in `config/pool.devnet.json` (400k); the test suite fails if a withdraw with a
+  `computeUnitLimit` in `config/pool.devnet.json` (the value lives only there); the test suite fails if a withdraw with a
   pull exceeds it.
 
 ## CCTP (stake and back from Ethereum and Stellar)
