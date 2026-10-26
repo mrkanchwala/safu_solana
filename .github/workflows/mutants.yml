@@ -18,9 +18,20 @@ name: Mutation testing (manual)
 #                      (cargo-mutants -f/-F filters), to re-test a set of misses after new tests
 #   mutants-check-demo-<n>  the same over .github/mutants-check-demo.args on the demo build, for
 #                      mutants of a demo-only value (dead code in the normal build)
+#
+# Or started by hand on a branch, for the mutants on the lines changed since a commit:
+#   gh workflow run mutants.yml --ref <branch> -f base=<commit>
+# Start it only once CI is green on that commit: this mode skips the unmutated baseline, which CI
+# has just run. It builds in the checkout itself, one mutant at a time, on CI's build cache (shared
+# key `sbf`), so a shard pays for one warm build, not a cold one plus a baseline.
 on:
   push:
     tags: ["mutants-smoke-*", "mutants-full-*", "mutants-check-*"]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Commit to diff against; only mutants on lines changed since it run
+        required: true
 
 permissions:
   contents: read
@@ -54,11 +65,20 @@ jobs:
     name: shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Rust 1.96.0
         run: |
           rustup toolchain install 1.96.0 --profile minimal
           rustup default 1.96.0
+
+      # Read only: a mutated tree must never be saved as the cache.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          shared-key: sbf
+          save-if: false
 
       # Same pinned installer as CI.
       - name: Install Solana CLI 3.1.10
@@ -67,12 +87,22 @@ jobs:
           sh solana-install.sh
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
+      # The release binary, checked against its sha256: a minute faster than building it.
       - name: Install cargo-mutants 27.1.0 (pinned)
-        run: cargo install cargo-mutants --version 27.1.0 --locked
+        run: |
+          f=cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
+          curl -sSfL "https://github.com/sourcefrog/cargo-mutants/releases/download/v27.1.0/$f" -o "$RUNNER_TEMP/$f"
+          echo "dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/$f" -C "$HOME/.cargo/bin" cargo-mutants
 
       - name: cargo mutants
         run: |
           set +e
+          RUN="--shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 3"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git diff "${{ inputs.base }}" -- programs crates > "$RUNNER_TEMP/changed.diff" || exit 1
+            RUN="$RUN --in-diff $RUNNER_TEMP/changed.diff --in-place --baseline skip -j 1"
+          fi
           case "${{ github.ref_name }}" in
             mutants-check-demo-*)
               SELECT="--features demo $(grep -v '^#' .github/mutants-check-demo.args | tr '\n' ' ')" ;;
@@ -88,8 +118,7 @@ jobs:
           # package's tests (0.01s for pool-core), so a pool-core mutant that survives into the
           # program's LiteSVM tests was killed at 20s and reported "timeout" instead of missed.
           eval cargo-mutants mutants -p safu_pool -p pool-core --test-workspace=true $SELECT \
-            --timeout 900 \
-            --shard ${{ matrix.shard }}/${{ needs.plan.outputs.total }} -j 3 --output .
+            --timeout 900 $RUN --output .
           echo "cargo-mutants exit: $?"
           exit 0
 

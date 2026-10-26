@@ -32,7 +32,10 @@ jobs:
           rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt
           rustup default 1.96.0
 
+      # Shared with the hand-started mutation run (mutants.yml), which reads this cache.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: sbf
 
       # Official Anza installer, pinned to the version the program is built and deployed with.
       - name: Install Solana CLI 3.1.10
