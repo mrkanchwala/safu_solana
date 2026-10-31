@@ -37,13 +37,13 @@ export default function App() {
       <section className="hero">
         <div className="wrap">
           <h1>
-            SAFU pays your wallet back.
+            SAFU pays back stolen crypto.
             <br />
             <em>Automatically. No vote. No appeal.</em>
           </h1>
           <p>
-            A shared USDC pool on Solana. Stake, register the wallets you want covered, and if one is drained
-            through phishing, a bad approval or a stolen key, the payout comes back to you in USDC. While it
+            A shared USDC pool on Solana. Stake, register the wallets you want covered, and if crypto is stolen
+            from one through phishing, a bad approval or a stolen key, the payout comes back to you in USDC. While it
             waits, most of the pool's USDC is lent on Kamino, and the yield is shared with stakers.
           </p>
         </div>

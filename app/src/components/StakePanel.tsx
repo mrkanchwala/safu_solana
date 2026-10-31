@@ -216,10 +216,10 @@ export function StakePanel() {
             <span>{coveredWallets.length}/{MAX_COVERED_WALLETS}</span>
           </div>
           <div className="ramp-disclosure">
-            Register a wallet before it's drained, because a claim can only name a wallet already on this list.
+            Register a wallet before crypto is stolen from it, because a claim can only name a wallet already on this list.
             You can cover {WALLETS_TEXT}, Solana, Ethereum or Stellar in any mix, not your staking wallet. To prove
             a wallet is yours, it sends a tiny amount to itself on its own chain. A covered wallet can't be removed
-            later, and a loss is paid in USDC at its USD value when the drain was detected.
+            later, and a loss is paid in USDC at its USD value when the theft was detected.
           </div>
           {coveredWallets.map((w) => (
             <div className="side-stat" key={`${w.chain ?? "solana"}-${w.wallet}`}>
