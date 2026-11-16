@@ -1,5 +1,7 @@
 # SAFU Staking on Solana
 
+**A stake that turns hacks into payouts.** Stake once. If you're hacked, code pays up to 15x.
+
 Automatic payouts when a wallet gets drained. SAFU is a shared protection pool on Solana: you stake
 SOL and pick up to two wallets to cover, on Solana or Ethereum. If one is drained through a malicious
 link or token approval, a stolen key, a sandwich attack or a wrongful liquidation, you file a claim and
