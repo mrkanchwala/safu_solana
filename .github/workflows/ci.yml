@@ -106,11 +106,11 @@ jobs:
       - name: Install cargo-audit 0.22.2
         run: cargo install cargo-audit --version 0.22.2 --locked
 
-      # RUSTSEC-2024-0344 (curve25519-dalek 3.2.0) and RUSTSEC-2022-0093 (ed25519-dalek 1.0.1) come in
-      # through litesvm, the test harness. Proven here on every run, so the ignore cannot outlive it.
+      # RUSTSEC-2024-0344 (curve25519-dalek 3.2.0), RUSTSEC-2022-0093 (ed25519-dalek 1.0.1) and
+      # RUSTSEC-2026-0387 (crypto-bigint 0.5.5) come in through litesvm, the test harness. Proven here on every run, so the ignore cannot outlive it.
       - name: Known advisories reach only dev-dependencies
         run: |
-          for c in curve25519-dalek@3.2.0 ed25519-dalek@1.0.1; do
+          for c in curve25519-dalek@3.2.0 ed25519-dalek@1.0.1 crypto-bigint@0.5.5; do
             out=$(cargo tree --locked -e normal -i "$c" 2>&1 || true)
             if [ -n "$out" ] && ! echo "$out" | grep -q -e "nothing to print" -e "did not match any packages"; then
               echo "::error::$c is in the program's normal dependency tree"; echo "$out"; exit 1
@@ -119,4 +119,4 @@ jobs:
           done
 
       - name: Audit
-        run: cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093
+        run: cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093 --ignore RUSTSEC-2026-0387
