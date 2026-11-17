@@ -1,0 +1,8 @@
+{
+  "name": "bigint-buffer-js",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pure-JS drop-in for bigint-buffer 1.1.5 (its own JS fallback, no native addon). Replaces bigint-buffer to remove GHSA-3gc7-fjrx-p6mg, which is in the native code only.",
+  "main": "index.js",
+  "license": "Apache-2.0"
+}

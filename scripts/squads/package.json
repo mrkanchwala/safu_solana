@@ -6,5 +6,9 @@
   "dependencies": {
     "@solana/web3.js": "1.99.0",
     "@sqds/multisig": "2.1.4"
+  },
+  "overrides": {
+    "jayson": "^5.0.0",
+    "bigint-buffer": "file:./vendor/bigint-buffer-js"
   }
 }
