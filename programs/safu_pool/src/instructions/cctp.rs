@@ -72,6 +72,20 @@ fn identity_seeds<'a>(
     [SEED_CCTP_IDENTITY, pool.as_ref(), mode, domain, owner, bump]
 }
 
+/// The identity PDA's owned seed parts (mode, home domain, bump), for `identity_seeds`.
+fn identity_seed_parts(account: &CctpAccount) -> ([u8; 1], [u8; 4], [u8; 1]) {
+    (
+        [account.mode],
+        account.home_domain.to_be_bytes(),
+        [account.identity_bump],
+    )
+}
+
+/// The identity's `held` USDC account, PDA `[SEED_CCTP_HELD, identity]`.
+fn held_address(identity: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[SEED_CCTP_HELD, identity.as_ref()], &crate::ID).0
+}
+
 /// Calls `program_id` with `accounts` in order, each with whether it is writable. Signers are this
 /// transaction's own plus `pda`, which this program signs as with `seeds`.
 fn invoke_as(
@@ -123,11 +137,7 @@ fn call_as_identity<'info>(
     };
     let mut infos = accounts.to_vec();
     infos.push(program.clone());
-    let (mode, domain, bump) = (
-        [account.mode],
-        account.home_domain.to_be_bytes(),
-        [account.identity_bump],
-    );
+    let (mode, domain, bump) = identity_seed_parts(account);
     let seeds = identity_seeds(pool, &mode, &domain, &account.home_owner, &bump);
     invoke_signed(&call, &infos, &[&seeds])?;
     Ok(())
@@ -492,7 +502,7 @@ pub struct CctpCall<'info> {
 pub fn cctp_deploy<'info>(ctx: Context<'info, CctpCall<'info>>) -> Result<()> {
     let accounts = ctx.remaining_accounts;
     let identity = ctx.accounts.identity.key();
-    let held = Pubkey::find_program_address(&[SEED_CCTP_HELD, identity.as_ref()], &crate::ID).0;
+    let held = held_address(&identity);
     require!(
         accounts.get(DEPOSITOR_AT).map(|a| a.key()) == Some(identity)
             && accounts.get(DEPOSITOR_USDC_AT).map(|a| a.key()) == Some(held),
@@ -686,9 +696,7 @@ pub fn cctp_send_home(
     let amount = c::bridgeable(a.from.amount, scale).core()?;
     require!(amount > 0, PoolError::CctpNothingToSend);
     // Only the held account's USDC is waiting to be deployed; emptying another one leaves it waiting.
-    let held =
-        Pubkey::find_program_address(&[SEED_CCTP_HELD, a.identity.key().as_ref()], &crate::ID).0;
-    let from_held = a.from.key() == held;
+    let from_held = a.from.key() == held_address(&a.identity.key());
     let account = &mut a.account;
     if from_held {
         account.to_deploy = 0;
@@ -731,11 +739,7 @@ pub fn cctp_send_home(
     let circle = &a.circle;
     let identity = a.identity.key();
     let pool_key = a.pool.key();
-    let (mode, domain_be, bump) = (
-        [account.mode],
-        account.home_domain.to_be_bytes(),
-        [account.identity_bump],
-    );
+    let (mode, domain_be, bump) = identity_seed_parts(account);
     let seeds = identity_seeds(&pool_key, &mode, &domain_be, &account.home_owner, &bump);
     invoke_as(
         CCTP_TOKEN_MESSENGER_MINTER_ID,

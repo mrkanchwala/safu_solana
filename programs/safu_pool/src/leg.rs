@@ -120,10 +120,6 @@ pub fn harvestable(pool: &Pool, venue: &Quote, now: i64) -> Result<u64> {
     .core()
 }
 
-fn capacity(pool: &Pool) -> Result<u64> {
-    pool_core::capacity(pool.total_staked, pool.total_backed).core()
-}
-
 /// Shared accounting for every deposit.
 fn record_deposit(pool: &mut Pool, amount: u64, collateral: u64, now: i64, kind: u8) -> Result<()> {
     // The harvest growth limit's clock starts with the first money deployed.
@@ -241,7 +237,7 @@ impl<'a, 'info> Money<'a, 'info> {
         let amount = liquidity::push_amount(
             vault::free_liquid(pool, &self.vault)?,
             pool.total_allocated,
-            capacity(pool)?,
+            pool.capacity().core()?,
             pool.deployed_book,
             pool.deploy_bps,
         )
@@ -286,7 +282,7 @@ impl<'a, 'info> Money<'a, 'info> {
             return Ok(());
         }
         let shortfall = amount - free;
-        let buffer = liquidity::buffer(capacity(pool)?, pool.deploy_bps).core()?;
+        let buffer = liquidity::buffer(pool.capacity().core()?, pool.deploy_bps).core()?;
         self.leg()?.refresh()?;
         if !self.try_pull(pool, add(shortfall, buffer).core()?, now)? {
             self.try_pull(pool, shortfall, now)?;
@@ -365,7 +361,7 @@ impl<'a, 'info> Money<'a, 'info> {
         let amount = liquidity::deploy_room(
             vault::free_liquid(pool, &self.vault)?,
             pool.total_allocated,
-            capacity(pool)?,
+            pool.capacity().core()?,
             pool.deployed_book,
             pool.deploy_bps,
         )
@@ -391,7 +387,7 @@ impl<'a, 'info> Money<'a, 'info> {
         let shortfall = liquidity::rebalance_shortfall(
             vault::free_liquid(pool, &self.vault)?,
             pool.total_allocated,
-            capacity(pool)?,
+            pool.capacity().core()?,
             pool.deployed_book,
             pool.deploy_bps,
         )

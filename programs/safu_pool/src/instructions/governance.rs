@@ -22,7 +22,7 @@
 //! Only role replacements can use the recovery path.
 
 use anchor_lang::prelude::*;
-use pool_core::params::{GOV_DELAY_SECS, MAX_DEPLOY_BPS, RECOVERY_DELAY_SECS};
+use pool_core::params::{GOV_DELAY_SECS, GOV_QUORUM, MAX_DEPLOY_BPS, RECOVERY_DELAY_SECS};
 
 use super::now;
 use crate::constants::{SEED_GOVERNANCE, SEED_POOL};
@@ -270,7 +270,7 @@ pub fn approve_change(ctx: Context<GovCall>, change: GovChange) -> Result<()> {
     );
     require!(p.approvers[role] != caller, PoolError::GovAlreadyApproved);
     p.approvers[role] = caller;
-    if p.eta == 0 && live_votes(pool, kind, &p.approvers) >= 2 {
+    if p.eta == 0 && live_votes(pool, kind, &p.approvers) >= GOV_QUORUM {
         let instant = pool.funded_at == 0 && INSTANT_SETUP_KINDS.contains(&kind);
         // `max(1)`: 0 means "not approved yet".
         p.eta = if instant {
@@ -341,7 +341,7 @@ pub fn cancel_change(ctx: Context<GovCall>, kind: u8) -> Result<()> {
         require!(target_of(kind) != Some(role), PoolError::GovCannotCancel);
         require!(p.cancellers[role] != caller, PoolError::GovAlreadyApproved);
         p.cancellers[role] = caller;
-        if live_votes(pool, kind, &p.cancellers) < 2 {
+        if live_votes(pool, kind, &p.cancellers) < GOV_QUORUM {
             emit!(GovCancelVote {
                 kind: kind as u8,
                 by: caller
@@ -376,7 +376,7 @@ pub fn execute_change(ctx: Context<GovExecute>, kind: u8) -> Result<()> {
         require!(role_of(pool, &p.proposer).is_ok(), PoolError::GovNotReady);
     } else {
         require!(
-            live_votes(pool, kind, &p.approvers) >= 2,
+            live_votes(pool, kind, &p.approvers) >= GOV_QUORUM,
             PoolError::GovNotReady
         );
     }

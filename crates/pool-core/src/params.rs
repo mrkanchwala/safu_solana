@@ -72,6 +72,8 @@ pub const GOV_DELAY_SECS: i64 = clock(7 * SECONDS_PER_DAY, 5 * SECONDS_PER_MINUT
 /// Governance: a role replacement proposed by one role alone (the other two lost) waits this long,
 /// and any other working role can cancel it (multichain `RECOVERY_DELAY_SECONDS`).
 pub const RECOVERY_DELAY_SECS: i64 = clock(90 * SECONDS_PER_DAY, 15 * SECONDS_PER_MINUTE);
+/// Governance: live votes from different roles that approve or cancel a standard change.
+pub const GOV_QUORUM: usize = 2;
 
 // -----------------------------------------------------------------------
 // Backers

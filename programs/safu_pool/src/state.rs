@@ -258,6 +258,11 @@ impl Pool {
         now < self.paused_until
     }
 
+    /// Capacity: stakes plus counted backing (`pool_core::capacity`). The one read path.
+    pub fn capacity(&self) -> pool_core::Result<u64> {
+        pool_core::capacity(self.total_staked, self.total_backed)
+    }
+
     /// The live settings: the one read path for every adjustable number.
     pub fn settings(&self) -> Settings {
         Settings {
@@ -523,6 +528,37 @@ pub struct Claim {
     pub share_left: u64,
     /// Room for fields a later upgrade adds.
     pub reserved: [u8; 64],
+}
+
+impl Claim {
+    /// A new claim on `(staker, tx_hash)`: every amount, clock and window at zero, status `Unused`.
+    /// Callers set what they know with struct update syntax, so the field list lives here once.
+    pub fn new(staker: Pubkey, tx_hash: [u8; 32], bump: u8) -> Claim {
+        Claim {
+            version: ACCOUNT_VERSION,
+            staker,
+            tx_hash,
+            hack_timestamp: 0,
+            entitlement: 0,
+            streamed: 0,
+            stake: 0,
+            cooldown_ends: 0,
+            vesting_ends: 0,
+            capacity_snapshot: 0,
+            tier: 0,
+            status: ClaimStatus::Unused,
+            approve_deadline: 0,
+            last_collected: 0,
+            bump,
+            approve_window: 0,
+            inactivity_window: 0,
+            blocked_mark: 0,
+            queue_seq: 0,
+            share_day: 0,
+            share_left: 0,
+            reserved: [0; 64],
+        }
+    }
 }
 
 /// One place in the claim line. PDA `[SEED_QUEUE, pool, seq (u64 LE)]`. Created when a claim

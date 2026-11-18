@@ -40,8 +40,8 @@ pub struct WithdrawYield<'info> {
     pub cash: Cash<'info>,
 }
 
-/// Protocol revenue to the treasury. Never from the rounding reserve. Within the protocol's balance AND the pool's surplus over
-/// everything it owes (stakes, backing, set-aside yield, open claims), because claims may have spent
+/// Protocol revenue to the treasury. Never from the rounding reserve. Within the protocol's
+/// balance AND the pool's surplus over everything it owes (stakes, backing, set-aside yield, open claims), because claims may have spent
 /// protocol revenue that the balance still counts (as multichain). Not while paused
 /// for the same reason: stakers and backers cannot claim yield then.
 pub fn withdraw_yield(ctx: Context<WithdrawYield>, amount: u64) -> Result<()> {

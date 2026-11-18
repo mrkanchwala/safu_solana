@@ -77,8 +77,8 @@ pub fn collateral_address(pool_key: &Pubkey, collateral_mint: &Pubkey) -> Pubkey
 }
 
 impl<'info> Cash<'info> {
-    /// The leg accounts (in `Cash`): `None` while the pool has no venue, or before its collateral account exists (then nothing can
-    /// have been deployed). Otherwise every account, checked against the pool and the reserve.
+    /// The leg accounts (in `Cash`): `None` while the pool has no venue, or before its collateral
+    /// account exists (then nothing can have been deployed). Otherwise every account, checked against the pool and the reserve.
     pub fn load_leg(&self, pool: &Pool, pool_key: &Pubkey) -> Result<Option<Leg<'info>>> {
         if pool.yield_venue == Pubkey::default() {
             return Ok(None);

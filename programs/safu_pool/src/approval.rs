@@ -31,10 +31,14 @@ pub struct ClaimApproval {
     pub deadline: i64,
 }
 
+/// Bytes after the domain: program id, cluster, then `ClaimApproval` (staker, tx hash, entitlement,
+/// tier, hack time, deadline). Only sizes the buffer.
+const MESSAGE_BODY_LEN: usize = 32 + 1 + 32 + 32 + 8 + 1 + 8 + 8;
+
 /// `APPROVAL_DOMAIN || program id || cluster || Borsh(ClaimApproval)`. Every field is fixed-size,
 /// so the Borsh encoding is plain little-endian concatenation in field order.
 pub fn encode_message(program_id: &Pubkey, cluster: u8, a: &ClaimApproval) -> Vec<u8> {
-    let mut m = Vec::with_capacity(APPROVAL_DOMAIN.len() + 2 * 32 + 1 + 32 + 8 + 1 + 8 + 8);
+    let mut m = Vec::with_capacity(APPROVAL_DOMAIN.len() + MESSAGE_BODY_LEN);
     m.extend_from_slice(APPROVAL_DOMAIN);
     m.extend_from_slice(program_id.as_ref());
     m.push(cluster);
@@ -63,10 +67,19 @@ const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 14;
 const DATA_START: usize = SIGNATURE_OFFSETS_START + SIGNATURE_OFFSETS_SERIALIZED_SIZE;
 const PUBKEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
+const U16_LEN: usize = 2;
+// The one signature-offsets entry: seven u16 fields in this order.
+const SIGNATURE_OFFSET_AT: usize = SIGNATURE_OFFSETS_START;
+const SIGNATURE_IX_AT: usize = SIGNATURE_OFFSET_AT + U16_LEN;
+const PUBKEY_OFFSET_AT: usize = SIGNATURE_IX_AT + U16_LEN;
+const PUBKEY_IX_AT: usize = PUBKEY_OFFSET_AT + U16_LEN;
+const MESSAGE_OFFSET_AT: usize = PUBKEY_IX_AT + U16_LEN;
+const MESSAGE_SIZE_AT: usize = MESSAGE_OFFSET_AT + U16_LEN;
+const MESSAGE_IX_AT: usize = MESSAGE_SIZE_AT + U16_LEN;
 
 fn read_u16(data: &[u8], at: usize) -> Result<u16> {
     let end = at
-        .checked_add(2)
+        .checked_add(U16_LEN)
         .ok_or(PoolError::MalformedEd25519Instruction)?;
     let b = data
         .get(at..end)
@@ -99,13 +112,13 @@ pub fn check_ed25519_data(
     require!(data[0] == 1, PoolError::WrongSignatureCount);
     require!(data[1] == 0, PoolError::MalformedEd25519Instruction);
 
-    let signature_offset = read_u16(data, 2)?;
-    let signature_ix = read_u16(data, 4)?;
-    let pubkey_offset = read_u16(data, 6)?;
-    let pubkey_ix = read_u16(data, 8)?;
-    let message_offset = read_u16(data, 10)?;
-    let message_size = read_u16(data, 12)?;
-    let message_ix = read_u16(data, 14)?;
+    let signature_offset = read_u16(data, SIGNATURE_OFFSET_AT)?;
+    let signature_ix = read_u16(data, SIGNATURE_IX_AT)?;
+    let pubkey_offset = read_u16(data, PUBKEY_OFFSET_AT)?;
+    let pubkey_ix = read_u16(data, PUBKEY_IX_AT)?;
+    let message_offset = read_u16(data, MESSAGE_OFFSET_AT)?;
+    let message_size = read_u16(data, MESSAGE_SIZE_AT)?;
+    let message_ix = read_u16(data, MESSAGE_IX_AT)?;
 
     // Signature, key and message must all live inside this very instruction, so nothing verified
     // elsewhere in the transaction can be passed off as our approval.

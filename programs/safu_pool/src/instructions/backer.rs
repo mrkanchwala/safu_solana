@@ -144,7 +144,7 @@ fn drip_values(pool: &Pool, day: i64) -> Result<(u64, u64, u64)> {
             pool.drip_snap_util,
         ));
     }
-    let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
+    let capacity = pool.capacity().core()?;
     Ok((
         capacity.saturating_sub(pool.total_allocated),
         pool.total_backer_open,
@@ -199,7 +199,7 @@ fn limits(pool: &Pool, record: &BackerRecord, now: i64, snap: (u64, u64, u64)) -
         let remaining = record.withdraw_amount - record.withdraw_paid;
         drip::share(snap_free, remaining, snap_open).core()?
     };
-    let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
+    let capacity = pool.capacity().core()?;
     Ok(Limits {
         due: unlocked.saturating_sub(record.withdraw_paid),
         share,

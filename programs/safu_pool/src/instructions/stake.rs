@@ -105,7 +105,7 @@ fn settle_exit(
     );
     let remaining =
         pool_core::stake::check_withdraw(amount, record.amount, &pool.settings()).core()?;
-    let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
+    let capacity = pool.capacity().core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, amount).core()?;
 
     settle_points(pool, record, now)?;
@@ -124,7 +124,7 @@ fn settle_exit(
 
 /// After the payment: the capital that left must still have been free (see `settle_exit`).
 pub(crate) fn recheck_capital(pool: &Pool) -> Result<()> {
-    let capacity = pool_core::capacity(pool.total_staked, pool.total_backed).core()?;
+    let capacity = pool.capacity().core()?;
     pool_core::check_capital_free(pool.total_allocated, capacity, 0).core()
 }
 

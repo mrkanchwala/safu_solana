@@ -25,7 +25,7 @@ use anchor_lang::prelude::*;
 use pool_core::claim as rules;
 use pool_core::params::{PENALTY_LOCK_SECS, SUSPEND_MAX_SECS};
 use pool_core::settings::SettingKey;
-use pool_core::{add, capacity, drip};
+use pool_core::{add, drip};
 
 use super::now;
 use crate::approval::{self, ClaimApproval};
@@ -36,8 +36,7 @@ use crate::errors::{CoreResultExt, PoolError};
 use crate::events::*;
 use crate::leg::Money;
 use crate::state::{
-    Claim, ClaimStatus, OverrideRequest, Pool, QueueEntry, RevokedApproval, StakeRecord,
-    WatchEntry, ACCOUNT_VERSION,
+    Claim, ClaimStatus, OverrideRequest, Pool, QueueEntry, RevokedApproval, StakeRecord, WatchEntry,
 };
 // Glob: `#[derive(Accounts)]` on a struct holding `Cash` needs its generated client modules.
 use crate::vault::{self, *};
@@ -58,10 +57,6 @@ pub(crate) fn roll_day(pool: &mut Pool, now: i64) {
         pool.day_admitted = 0;
         pool.day_oracle_count = 0;
     }
-}
-
-fn pool_capacity(pool: &Pool) -> Result<u64> {
-    capacity(pool.total_staked, pool.total_backed).core()
 }
 
 /// Admission writes, shared by `submit_claim` and `try_release_queued_claim` so they cannot drift.
@@ -154,7 +149,7 @@ fn restart_collection_window(pool: &Pool, claim: &mut Claim, now: i64) {
 /// the inactivity window are the settings at this moment; the claim keeps them.
 fn start_clocks(pool: &Pool, claim: &mut Claim, now: i64) -> Result<()> {
     let s = pool.settings();
-    claim.capacity_snapshot = pool_capacity(pool)?;
+    claim.capacity_snapshot = pool.capacity().core()?;
     claim.cooldown_ends = secs_after(now, s.get(SettingKey::CooldownSecs))?;
     claim.vesting_ends = secs_after(claim.cooldown_ends, s.get(SettingKey::VestingSecs))?;
     claim.inactivity_window = s.get(SettingKey::InactivitySecs);
@@ -359,7 +354,7 @@ fn watch_claim<'info>(
 fn payout_snap(pool: &mut Pool, day: i64) -> Result<(u64, u64)> {
     if pool.payout_snap_day != day {
         pool.payout_snap_day = day;
-        pool.payout_snap_capacity = pool_capacity(pool)?;
+        pool.payout_snap_capacity = pool.capacity().core()?;
         pool.payout_snap_allocated = pool.total_allocated;
     }
     Ok((pool.payout_snap_capacity, pool.payout_snap_allocated))
@@ -474,28 +469,13 @@ pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<
         PoolError::ClaimAlreadyExists
     );
     claim.set_inner(Claim {
-        version: ACCOUNT_VERSION,
-        staker: a.staker,
-        tx_hash: a.tx_hash,
         hack_timestamp: a.hack_timestamp,
         entitlement: a.entitlement,
-        streamed: 0,
         stake: stake.amount,
-        cooldown_ends: 0,
-        vesting_ends: 0,
-        capacity_snapshot: 0,
         tier: a.tier,
         status: ClaimStatus::Reserved,
-        approve_deadline: 0,
-        last_collected: 0,
-        bump: ctx.bumps.claim,
-        approve_window: 0,
-        inactivity_window: 0,
         blocked_mark: pool.blocked_secs(now),
-        queue_seq: 0,
-        share_day: 0,
-        share_left: 0,
-        reserved: [0; 64],
+        ..Claim::new(a.staker, a.tx_hash, ctx.bumps.claim)
     });
 
     let pool_key = pool.key();
@@ -510,7 +490,7 @@ pub fn submit_claim(ctx: &mut Context<SubmitClaim>, a: ClaimApproval) -> Result<
     roll_day(pool, now);
     let fits = rules::admits(
         a.entitlement,
-        pool_capacity(pool)?,
+        pool.capacity().core()?,
         pool.total_allocated,
         pool.day_admitted,
         pool.settings().admit_rates(),
@@ -610,7 +590,7 @@ pub(crate) fn release_head(
     roll_day(pool, now);
     let fits = rules::admits(
         claim.entitlement,
-        pool_capacity(pool)?,
+        pool.capacity().core()?,
         pool.total_allocated,
         pool.day_admitted,
         pool.settings().admit_rates(),
@@ -1332,7 +1312,7 @@ fn execute_override(
     rules::check_entitlement(entitlement, stake.amount, tier, ratios).core()?;
 
     // An already-forfeited stake (re-execution of this same claim) is earmarked for it, not new capacity.
-    let mut effective = pool_capacity(pool)?;
+    let mut effective = pool.capacity().core()?;
     if stake.forfeited {
         effective = add(effective, stake.amount).core()?;
     }
@@ -1343,28 +1323,15 @@ fn execute_override(
     pool.total_allocated = add(pool.total_allocated, entitlement).core()?;
 
     *claim = Claim {
-        version: ACCOUNT_VERSION,
-        staker,
-        tx_hash,
         hack_timestamp: now,
         entitlement,
         streamed: carried_streamed,
         stake: stake.amount,
-        cooldown_ends: 0,
-        vesting_ends: 0,
-        capacity_snapshot: 0,
         tier,
         status: ClaimStatus::Active,
-        approve_deadline: 0,
-        last_collected: 0,
-        bump,
         approve_window: pool.settings().get(SettingKey::ApproveWindowSecs),
-        inactivity_window: 0,
-        blocked_mark: 0,
         queue_seq,
-        share_day: 0,
-        share_left: 0,
-        reserved: [0; 64],
+        ..Claim::new(staker, tx_hash, bump)
     };
     if stake.forfeited {
         start_clocks(pool, claim, now)?;
