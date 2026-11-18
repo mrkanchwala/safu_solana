@@ -2,8 +2,8 @@
 
 Prepared 2026-10-23 for the audit quote. The target is the USDC pool on branch `solana-usdc-pool` of
 this repository. `main` still holds the earlier SOL demo pool (Marinade staking), which is not the
-audit target. A frozen commit and tag follow once the devnet end-to-end run passes; until then the
-branch tip is the code to read.
+audit target. Frozen at tag `audit-freeze-2026-11-18` (`3056b56`): a clean-up of `audit-freeze-2026-10-26`
+with no behaviour change (every change is listed in the commit message).
 
 This is the Solana counterpart of the Stellar pool in `mrkanchwala/safu_multichain`: the same pool
 rules, the same three roles and the same settings, rebuilt in Anchor for Solana. Where Solana needs
@@ -13,14 +13,14 @@ a different shape, the reason is written in [PORT_MAP.md](PORT_MAP.md).
 
 | Part | Path | Lines (source, no tests/comments/blank) | What it does |
 |---|---|---|---|
-| Pool program | `programs/safu_pool/src/` | 6,339 | Stake, back, claims and the claim line, payout streams, settings, governance, the covered-wallet registry, the Kamino Lend USDC leg, yield and points, upkeep inside every user call, and stake or back from Ethereum and Stellar over Circle CCTP v2 |
-| Rule library | `crates/pool-core/src/` | 1,267 | Every pool rule as a pure function (bounds, tiers, admission, drip, yield and points maths, settings ranges, Kamino reserve reading, CCTP message and signature layout), called by the program and read by clients through the IDL |
-| **Total** | | **7,606** | |
+| Pool program | `programs/safu_pool/src/` | 6,344 | Stake, back, claims and the claim line, payout streams, settings, governance, the covered-wallet registry, the Kamino Lend USDC leg, yield and points, upkeep inside every user call, and stake or back from Ethereum and Stellar over Circle CCTP v2 |
+| Rule library | `crates/pool-core/src/` | 1,268 | Every pool rule as a pure function (bounds, tiers, admission, drip, yield and points maths, settings ranges, Kamino reserve reading, CCTP message and signature layout), called by the program and read by clients through the IDL |
+| **Total** | | **7,612** | |
 
 Line counts exclude `tests/`, `#[cfg(test)]` blocks, comments and blank lines. Measured the same way,
-the Stellar pool's five contracts come to 5,972 lines; its published scope says 5,612 because it was
-counted with a different tool. The program binary is 1,461,768 bytes (normal build, Linux).
-The yield venue slot (`venue.rs`, 2026-10-26) added 98 of these lines to the 7,475 first quoted; the compute guard fix (2026-10-26) 33 more.
+the Stellar pool's five contracts come to 5,952 lines; its published scope says 5,592 because it was
+counted with a different tool. The program binary is 1,465,456 bytes (normal build, after the 2026-11-18 clean-up).
+The yield venue slot (`venue.rs`, 2026-10-26) added 98 of these lines to the 7,475 first quoted; the compute guard fix (2026-10-26) 33 more; the 2026-11-18 clean-up 6 more.
 
 The covered-wallet registry and the cross-chain stake path are inside the pool program here. On
 Stellar they are separate contracts (`covered-registry`, `cctp-adapter`, `safu-account`).
